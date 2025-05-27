@@ -1,0 +1,28 @@
+{
+  "name": "ilist",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "dev": "wrangler dev",
+    "build": "vite build",
+    "deploy": "npm run build && wrangler deploy --minify",
+    "types": "wrangler types src/worker/env.d.ts",
+    "check": "tsc --noEmit && npm run build",
+    "hash-password": "node scripts/hash-password.mjs"
+  },
+  "dependencies": {
+    "react": "^19.1.1",
+    "react-dom": "^19.1.1",
+    "lucide-react": "^0.468.0"
+  },
+  "devDependencies": {
+    "@cloudflare/workers-types": "^4.20250214.0",
+    "@types/node": "^24.0.0",
+    "@types/react": "^19.1.10",
+    "@types/react-dom": "^19.1.7",
+    "typescript": "~5.8.3",
+    "vite": "^7.1.2",
+    "wrangler": "^4.20.0"
+  }
+}
