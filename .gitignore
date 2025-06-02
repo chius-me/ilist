@@ -6,3 +6,4 @@ dist/
 *.local
 src/worker/env.d.ts
 .superpowers/
+.worktrees/
