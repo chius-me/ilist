@@ -8,21 +8,30 @@
     "build": "vite build",
     "deploy": "npm run build && wrangler deploy --minify",
     "types": "wrangler types src/worker/env.d.ts",
-    "check": "tsc --noEmit && npm run build",
+    "test": "npm run test:worker && npm run test:ui",
+    "test:worker": "vitest run --config vitest.worker.config.ts",
+    "test:ui": "vitest run --config vitest.ui.config.ts",
+    "check": "tsc --noEmit && npm run build && npm run test",
     "hash-password": "node scripts/hash-password.mjs"
   },
   "dependencies": {
+    "lucide-react": "^0.468.0",
     "react": "^19.1.1",
-    "react-dom": "^19.1.1",
-    "lucide-react": "^0.468.0"
+    "react-dom": "^19.1.1"
   },
   "devDependencies": {
+    "@cloudflare/vitest-pool-workers": "^0.18.4",
     "@cloudflare/workers-types": "^4.20250214.0",
+    "@testing-library/jest-dom": "^6.9.1",
+    "@testing-library/react": "^16.3.2",
+    "@testing-library/user-event": "^14.6.1",
     "@types/node": "^24.0.0",
     "@types/react": "^19.1.10",
     "@types/react-dom": "^19.1.7",
+    "jsdom": "^29.1.1",
     "typescript": "~5.8.3",
     "vite": "^7.1.2",
+    "vitest": "^4.1.10",
     "wrangler": "^4.20.0"
   }
 }
