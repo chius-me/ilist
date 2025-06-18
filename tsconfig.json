@@ -15,7 +15,7 @@
     "isolatedModules": true,
     "noEmit": true,
     "jsx": "react-jsx",
-    "types": ["@cloudflare/workers-types"]
+    "types": ["@cloudflare/workers-types", "@cloudflare/vitest-pool-workers/types"]
   },
   "include": ["src", "vite.config.ts", "scripts", "vitest.worker.config.ts", "vitest.ui.config.ts", "tests"]
 }

@@ -18,5 +18,6 @@ export default defineConfig({
   ],
   test: {
     include: ['tests/worker/**/*.test.ts'],
+    setupFiles: ['./tests/worker/setup.ts'],
   },
 });
