@@ -15,6 +15,22 @@ CREATE TABLE IF NOT EXISTS entries (
   description TEXT NOT NULL DEFAULT '',
   created_at TEXT NOT NULL,
   updated_at TEXT NOT NULL,
+  CHECK (parent_id IS NOT NULL OR id = 'root'),
+  CHECK (
+    id <> 'root' OR (
+      parent_id IS NULL AND
+      name = '' AND
+      kind = 'folder' AND
+      storage_key IS NULL AND
+      size = 0 AND
+      content_type IS NULL AND
+      etag IS NULL AND
+      status = 'ready' AND
+      is_public = 1 AND
+      sort_order = 0 AND
+      description = ''
+    )
+  ),
   CHECK (
     (kind = 'file' AND storage_key IS NOT NULL) OR
     (kind = 'folder' AND storage_key IS NULL)
