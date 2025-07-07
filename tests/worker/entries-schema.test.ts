@@ -20,4 +20,8 @@ describe('entries schema', () => {
     await expect(db().prepare("UPDATE entries SET name = 'renamed' WHERE id = 'root'").run()).rejects.toThrow();
     await expect(db().prepare("UPDATE entries SET kind = 'file' WHERE id = 'root'").run()).rejects.toThrow();
   });
+
+  it('rejects deletion of the canonical root', async () => {
+    await expect(db().prepare("DELETE FROM entries WHERE id = 'root'").run()).rejects.toThrow();
+  });
 });

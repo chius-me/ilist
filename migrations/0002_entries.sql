@@ -45,6 +45,13 @@ WHERE storage_key IS NOT NULL;
 CREATE INDEX IF NOT EXISTS entries_parent_order
 ON entries(parent_id, sort_order, name);
 
+CREATE TRIGGER IF NOT EXISTS entries_prevent_root_delete
+BEFORE DELETE ON entries
+WHEN OLD.id = 'root'
+BEGIN
+  SELECT RAISE(ABORT, 'cannot delete canonical root');
+END;
+
 INSERT OR IGNORE INTO entries (
   id, parent_id, name, kind, storage_key, size, content_type, etag,
   status, is_public, sort_order, description, created_at, updated_at

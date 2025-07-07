@@ -6,7 +6,7 @@ import type { Env } from '../../src/worker/types';
 
 beforeEach(async () => {
   const db = (env as unknown as Env).DB;
-  for (const statement of `${initial}\n${entries}`.split(';')) {
+  for (const statement of `${initial}\n${entries}`.split(/;\s+(?=(?:PRAGMA|CREATE|INSERT))/)) {
     const sql = statement.trim();
     if (sql) await db.prepare(sql).run();
   }
