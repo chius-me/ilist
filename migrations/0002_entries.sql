@@ -52,6 +52,82 @@ BEGIN
   SELECT RAISE(ABORT, 'cannot delete canonical root');
 END;
 
+CREATE TRIGGER IF NOT EXISTS entries_prevent_root_id_change
+BEFORE UPDATE OF id ON entries
+WHEN OLD.id = 'root' AND NEW.id <> OLD.id
+BEGIN
+  SELECT RAISE(ABORT, 'cannot change canonical root id');
+END;
+
+CREATE TRIGGER IF NOT EXISTS entries_require_folder_parent_on_insert
+BEFORE INSERT ON entries
+WHEN NEW.parent_id IS NOT NULL
+  AND EXISTS (
+    SELECT 1
+    FROM entries AS parent
+    WHERE parent.id = NEW.parent_id AND parent.kind <> 'folder'
+  )
+BEGIN
+  SELECT RAISE(ABORT, 'parent entry must be a folder');
+END;
+
+CREATE TRIGGER IF NOT EXISTS entries_require_folder_parent_on_update
+BEFORE UPDATE OF parent_id ON entries
+WHEN NEW.parent_id IS NOT NULL
+  AND EXISTS (
+    SELECT 1
+    FROM entries AS parent
+    WHERE parent.id = NEW.parent_id AND parent.kind <> 'folder'
+  )
+BEGIN
+  SELECT RAISE(ABORT, 'parent entry must be a folder');
+END;
+
+CREATE TRIGGER IF NOT EXISTS entries_prevent_non_empty_folder_to_file
+BEFORE UPDATE OF kind ON entries
+WHEN OLD.kind = 'folder'
+  AND NEW.kind = 'file'
+  AND EXISTS (SELECT 1 FROM entries AS child WHERE child.parent_id = OLD.id)
+BEGIN
+  SELECT RAISE(ABORT, 'cannot convert non-empty folder to file');
+END;
+
+CREATE TRIGGER IF NOT EXISTS entries_prevent_self_parent_on_insert
+BEFORE INSERT ON entries
+WHEN NEW.parent_id = NEW.id
+BEGIN
+  SELECT RAISE(ABORT, 'entry cannot be its own parent');
+END;
+
+CREATE TRIGGER IF NOT EXISTS entries_prevent_self_parent_on_update
+BEFORE UPDATE OF parent_id ON entries
+WHEN OLD.id <> 'root' AND NEW.parent_id = NEW.id
+BEGIN
+  SELECT RAISE(ABORT, 'entry cannot be its own parent');
+END;
+
+CREATE TRIGGER IF NOT EXISTS entries_prevent_descendant_parent_cycle
+BEFORE UPDATE OF parent_id ON entries
+WHEN NEW.parent_id IS NOT NULL
+  AND NEW.parent_id <> NEW.id
+  AND EXISTS (
+    WITH RECURSIVE ancestors(id, parent_id) AS (
+      SELECT id, parent_id
+      FROM entries
+      WHERE id = NEW.parent_id
+      UNION ALL
+      SELECT entry.id, entry.parent_id
+      FROM entries AS entry
+      JOIN ancestors ON entry.id = ancestors.parent_id
+    )
+    SELECT 1
+    FROM ancestors
+    WHERE id = NEW.id
+  )
+BEGIN
+  SELECT RAISE(ABORT, 'entry cannot be moved beneath a descendant');
+END;
+
 INSERT OR IGNORE INTO entries (
   id, parent_id, name, kind, storage_key, size, content_type, etag,
   status, is_public, sort_order, description, created_at, updated_at
