@@ -1,4 +1,4 @@
-import type { DirectoryEntry, FileEntry, ObjectRow, TreeResponse } from './types';
+import type { DirectoryEntry, EntryRow, FileEntry, ObjectRow, TreeResponse } from './types';
 
 function normalizeSlash(value: string): string {
   return value.replace(/\\/g, '/').replace(/\/+/g, '/');
@@ -169,4 +169,55 @@ export async function deleteObjectIndex(db: D1Database, key: string): Promise<vo
 
 export function rowToFileEntry(row: ObjectRow): FileEntry {
   return toFileEntry(row);
+}
+
+export async function getEntryById(db: D1Database, id: string): Promise<EntryRow | null> {
+  return db.prepare('SELECT * FROM entries WHERE id = ?').bind(id).first<EntryRow>();
+}
+
+export async function getChildByName(db: D1Database, parentId: string, name: string): Promise<EntryRow | null> {
+  return db.prepare('SELECT * FROM entries WHERE parent_id = ? AND name = ?').bind(parentId, name).first<EntryRow>();
+}
+
+export async function listChildRows(db: D1Database, parentId: string): Promise<EntryRow[]> {
+  const result = await db
+    .prepare(`SELECT * FROM entries WHERE parent_id = ? AND status = 'ready' ORDER BY kind DESC, sort_order ASC, name ASC`)
+    .bind(parentId)
+    .all<EntryRow>();
+  return result.results ?? [];
+}
+
+export async function listAncestorRows(db: D1Database, id: string): Promise<EntryRow[]> {
+  const result = await db
+    .prepare(`
+      WITH RECURSIVE ancestors(id, depth) AS (
+        SELECT id, 0 FROM entries WHERE id = ?
+        UNION ALL
+        SELECT parent.id, child.depth + 1
+        FROM entries parent
+        JOIN entries current ON current.parent_id = parent.id
+        JOIN ancestors child ON current.id = child.id
+      )
+      SELECT entry.* FROM ancestors JOIN entries entry ON entry.id = ancestors.id ORDER BY ancestors.depth ASC
+    `)
+    .bind(id)
+    .all<EntryRow>();
+  return result.results ?? [];
+}
+
+export async function listDescendantRows(db: D1Database, id: string): Promise<EntryRow[]> {
+  const result = await db
+    .prepare(`
+      WITH RECURSIVE descendants(id, depth) AS (
+        SELECT id, 0 FROM entries WHERE id = ?
+        UNION ALL
+        SELECT child.id, parent.depth + 1
+        FROM entries child
+        JOIN descendants parent ON child.parent_id = parent.id
+      )
+      SELECT entry.* FROM descendants JOIN entries entry ON entry.id = descendants.id ORDER BY descendants.depth ASC
+    `)
+    .bind(id)
+    .all<EntryRow>();
+  return result.results ?? [];
 }
