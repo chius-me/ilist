@@ -12,6 +12,7 @@
     "test:worker": "vitest run --config vitest.worker.config.ts",
     "test:ui": "vitest run --config vitest.ui.config.ts",
     "check": "tsc --noEmit && npm run build && npm run test",
+    "migrate:objects": "node scripts/migrate-objects.mjs",
     "hash-password": "node scripts/hash-password.mjs"
   },
   "dependencies": {
