@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { buildLegacyEntries } from '../../scripts/lib/legacy-entries.mjs';
+import { assertExistingEntries, buildLegacyEntries, entriesToSql } from '../../scripts/lib/legacy-entries.mjs';
 
 describe('legacy object migration', () => {
   it('creates each folder once and preserves the physical key', () => {
@@ -34,5 +34,87 @@ describe('legacy object migration', () => {
       parent_path: '资料/项目',
     });
     expect(buildLegacyEntries(rows).map((entry) => entry.id)).toEqual(entries.map((entry) => entry.id));
+  });
+
+  it.each(['', '/', '///'])('rejects an empty legacy key %j', (key) => {
+    expect(() =>
+      buildLegacyEntries([
+        {
+          key,
+          name: 'ignored.txt',
+          size: 1,
+          content_type: 'text/plain',
+          etag: 'etag',
+          updated_at: '2026-07-10T00:00:00.000Z',
+          is_public: 1,
+          sort_order: 0,
+          description: '',
+        },
+      ]),
+    ).toThrow('invalid key');
+  });
+
+  it('rejects a deterministic ID with a different storage key', () => {
+    const [entry] = buildLegacyEntries([
+      {
+        key: 'legacy.txt',
+        name: 'legacy.txt',
+        size: 1,
+        content_type: 'text/plain',
+        etag: 'etag',
+        updated_at: '2026-07-10T00:00:00.000Z',
+        is_public: 1,
+        sort_order: 0,
+        description: '',
+      },
+    ]);
+
+    expect(() => assertExistingEntries([entry], [{ id: entry.id, parent_id: 'root', name: entry.name, storage_key: 'other.txt' }])).toThrow(
+      'storage key',
+    );
+  });
+
+  it('rejects an existing sibling or storage-key conflict that does not share the deterministic ID', () => {
+    const [entry] = buildLegacyEntries([
+      {
+        key: 'legacy.txt',
+        name: 'legacy.txt',
+        size: 1,
+        content_type: 'text/plain',
+        etag: 'etag',
+        updated_at: '2026-07-10T00:00:00.000Z',
+        is_public: 1,
+        sort_order: 0,
+        description: '',
+      },
+    ]);
+
+    expect(() => assertExistingEntries([entry], [{ id: 'other-id', parent_id: 'root', name: entry.name, storage_key: entry.storage_key }])).toThrow(
+      'collision',
+    );
+  });
+
+  it('splits a large description into D1-safe statements without truncation', () => {
+    const description = 'x'.repeat(180_000);
+    const [entry] = buildLegacyEntries([
+      {
+        key: 'large.txt',
+        name: 'large.txt',
+        size: 1,
+        content_type: 'text/plain',
+        etag: 'etag',
+        updated_at: '2026-07-10T00:00:00.000Z',
+        is_public: 1,
+        sort_order: 0,
+        description,
+      },
+    ]);
+    const sql = entriesToSql([entry], 'test-token');
+    const chunks = [...sql.matchAll(/description = description \|\| '([^']*)'/g)].map((match) => match[1]);
+
+    expect(sql).not.toContain('INSERT OR IGNORE');
+    expect(sql).toContain('BEGIN IMMEDIATE;');
+    expect(chunks.join('')).toBe(description);
+    expect(Math.max(...sql.split(';').map((statement) => Buffer.byteLength(statement, 'utf8')))).toBeLessThan(100_000);
   });
 });

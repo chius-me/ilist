@@ -1,5 +1,7 @@
 import type { DirectoryEntry, EntryRow, FileEntry, ObjectRow, TreeResponse } from './types';
 
+export const LEGACY_OBJECT_MIGRATION_LOCK = 'legacy_object_migration_lock';
+
 function normalizeSlash(value: string): string {
   return value.replace(/\\/g, '/').replace(/\/+/g, '/');
 }
@@ -96,6 +98,10 @@ export async function getObject(db: D1Database, key: string, publicOnly: boolean
     ? `SELECT * FROM objects WHERE key = ? AND is_public = 1`
     : `SELECT * FROM objects WHERE key = ?`;
   return await db.prepare(query).bind(key).first<ObjectRow>();
+}
+
+export async function isLegacyObjectMigrationLocked(db: D1Database): Promise<boolean> {
+  return Boolean(await db.prepare('SELECT 1 FROM settings WHERE key = ?').bind(LEGACY_OBJECT_MIGRATION_LOCK).first());
 }
 
 export async function upsertObject(
