@@ -9,12 +9,13 @@ import {
 import {
   deleteObjectIndex,
   getObject,
-  isLegacyObjectMigrationLocked,
   listTree,
   normalizePrefix,
   normalizeStoredKey,
   patchObject,
+  releaseLegacyObjectMutationReservation,
   rowToFileEntry,
+  reserveLegacyObjectMutation,
   upsertObject,
 } from './db';
 import { fail, HttpError, noContent, ok, readJson } from './http';
@@ -41,9 +42,15 @@ function methodNotAllowed(): Response {
   return fail(405, 'Method not allowed');
 }
 
-async function requireLegacyObjectMutationsUnlocked(env: Env): Promise<void> {
-  if (await isLegacyObjectMigrationLocked(env.DB)) {
+async function withLegacyObjectMutationReservation<T>(env: Env, operation: () => Promise<T>): Promise<T> {
+  const reservation = await reserveLegacyObjectMutation(env.DB);
+  if (!reservation) {
     throw new HttpError(503, 'Legacy object migration is in progress');
+  }
+  try {
+    return await operation();
+  } finally {
+    await releaseLegacyObjectMutationReservation(env.DB, reservation);
   }
 }
 
@@ -118,36 +125,39 @@ async function handleAdmin(request: Request, env: Env, url: URL): Promise<Respon
     const key = keyFromPath(url.pathname, '/api/admin/objects/');
 
     if (request.method === 'PUT') {
-      await requireLegacyObjectMutationsUnlocked(env);
-      const object = await putObject(env, key, request);
-      const contentType = request.headers.get('content-type') || object.httpMetadata?.contentType || null;
-      const row = await upsertObject(env.DB, {
-        key,
-        size: object.size,
-        etag: object.httpEtag || object.etag,
-        contentType,
+      return await withLegacyObjectMutationReservation(env, async () => {
+        const object = await putObject(env, key, request);
+        const contentType = request.headers.get('content-type') || object.httpMetadata?.contentType || null;
+        const row = await upsertObject(env.DB, {
+          key,
+          size: object.size,
+          etag: object.httpEtag || object.etag,
+          contentType,
+        });
+        return ok(rowToFileEntry(row));
       });
-      return ok(rowToFileEntry(row));
     }
 
     if (request.method === 'DELETE') {
-      await requireLegacyObjectMutationsUnlocked(env);
-      await env.R2_BUCKET.delete(key);
-      await deleteObjectIndex(env.DB, key);
-      return noContent();
+      return await withLegacyObjectMutationReservation(env, async () => {
+        await env.R2_BUCKET.delete(key);
+        await deleteObjectIndex(env.DB, key);
+        return noContent();
+      });
     }
 
     if (request.method === 'PATCH') {
-      await requireLegacyObjectMutationsUnlocked(env);
-      const body = await readJson<PatchObjectBody>(request);
-      const row = await patchObject(env.DB, key, {
-        name: typeof body.name === 'string' ? body.name : undefined,
-        description: typeof body.description === 'string' ? body.description : undefined,
-        isPublic: typeof body.isPublic === 'boolean' ? body.isPublic : undefined,
-        sortOrder: typeof body.sortOrder === 'number' ? body.sortOrder : undefined,
+      return await withLegacyObjectMutationReservation(env, async () => {
+        const body = await readJson<PatchObjectBody>(request);
+        const row = await patchObject(env.DB, key, {
+          name: typeof body.name === 'string' ? body.name : undefined,
+          description: typeof body.description === 'string' ? body.description : undefined,
+          isPublic: typeof body.isPublic === 'boolean' ? body.isPublic : undefined,
+          sortOrder: typeof body.sortOrder === 'number' ? body.sortOrder : undefined,
+        });
+        if (!row) throw new HttpError(404, 'Object not found');
+        return ok(rowToFileEntry(row));
       });
-      if (!row) throw new HttpError(404, 'Object not found');
-      return ok(rowToFileEntry(row));
     }
 
     return methodNotAllowed();

@@ -94,7 +94,7 @@ describe('legacy object migration', () => {
     );
   });
 
-  it('splits a large description into D1-safe statements without truncation', () => {
+  it('splits a large description into D1-safe Wrangler import statements without truncation', () => {
     const description = 'x'.repeat(180_000);
     const [entry] = buildLegacyEntries([
       {
@@ -113,7 +113,7 @@ describe('legacy object migration', () => {
     const chunks = [...sql.matchAll(/description = description \|\| '([^']*)'/g)].map((match) => match[1]);
 
     expect(sql).not.toContain('INSERT OR IGNORE');
-    expect(sql).toContain('BEGIN IMMEDIATE;');
+    expect(sql).not.toMatch(/\bBEGIN\b|\bCOMMIT\b/i);
     expect(chunks.join('')).toBe(description);
     expect(Math.max(...sql.split(';').map((statement) => Buffer.byteLength(statement, 'utf8')))).toBeLessThan(100_000);
   });

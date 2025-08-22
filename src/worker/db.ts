@@ -1,6 +1,12 @@
 import type { DirectoryEntry, EntryRow, FileEntry, ObjectRow, TreeResponse } from './types';
 
 export const LEGACY_OBJECT_MIGRATION_LOCK = 'legacy_object_migration_lock';
+export const LEGACY_OBJECT_MUTATION_RESERVATION_PREFIX = 'legacy_object_mutation_reservation_';
+
+export interface LegacyObjectMutationReservation {
+  key: string;
+  owner: string;
+}
 
 function normalizeSlash(value: string): string {
   return value.replace(/\\/g, '/').replace(/\/+/g, '/');
@@ -100,8 +106,102 @@ export async function getObject(db: D1Database, key: string, publicOnly: boolean
   return await db.prepare(query).bind(key).first<ObjectRow>();
 }
 
-export async function isLegacyObjectMigrationLocked(db: D1Database): Promise<boolean> {
-  return Boolean(await db.prepare('SELECT 1 FROM settings WHERE key = ?').bind(LEGACY_OBJECT_MIGRATION_LOCK).first());
+function leaseValue(owner: string, expiresAt: number): string {
+  return JSON.stringify({ owner, expires_at: expiresAt });
+}
+
+function liveLeaseCondition(column = 'value'): string {
+  return `CASE
+    WHEN json_valid(${column}) THEN COALESCE(CAST(json_extract(${column}, '$.expires_at') AS INTEGER), 0)
+    ELSE 0
+  END`;
+}
+
+export async function isLegacyObjectMigrationLocked(db: D1Database, now = Date.now()): Promise<boolean> {
+  return Boolean(
+    await db
+      .prepare(`SELECT 1 FROM settings WHERE key = ? AND ${liveLeaseCondition()} > ?`)
+      .bind(LEGACY_OBJECT_MIGRATION_LOCK, now)
+      .first(),
+  );
+}
+
+export async function reserveLegacyObjectMutation(
+  db: D1Database,
+  owner: string = crypto.randomUUID(),
+  now = Date.now(),
+): Promise<LegacyObjectMutationReservation | null> {
+  const reservation = { key: `${LEGACY_OBJECT_MUTATION_RESERVATION_PREFIX}${owner}`, owner };
+  const result = await db
+    .prepare(
+      `INSERT INTO settings (key, value)
+       SELECT ?, ?
+       WHERE NOT EXISTS (
+         SELECT 1 FROM settings
+         WHERE key = ? AND ${liveLeaseCondition()} > ?
+       )`,
+    )
+    .bind(reservation.key, owner, LEGACY_OBJECT_MIGRATION_LOCK, now)
+    .run();
+  return result.meta.changes === 1 ? reservation : null;
+}
+
+export async function releaseLegacyObjectMutationReservation(
+  db: D1Database,
+  reservation: LegacyObjectMutationReservation,
+): Promise<void> {
+  await db.prepare('DELETE FROM settings WHERE key = ? AND value = ?').bind(reservation.key, reservation.owner).run();
+}
+
+export async function countLegacyObjectMutationReservations(db: D1Database): Promise<number> {
+  const row = await db
+    .prepare('SELECT COUNT(*) AS count FROM settings WHERE key GLOB ?')
+    .bind(`${LEGACY_OBJECT_MUTATION_RESERVATION_PREFIX}*`)
+    .first<{ count: number }>();
+  return row?.count ?? 0;
+}
+
+export async function acquireLegacyObjectMigrationLease(
+  db: D1Database,
+  owner: string,
+  now = Date.now(),
+  leaseDurationMs = 300_000,
+): Promise<boolean> {
+  const result = await db
+    .prepare(
+      `INSERT INTO settings (key, value) VALUES (?, ?)
+       ON CONFLICT(key) DO UPDATE SET value = excluded.value
+       WHERE ${liveLeaseCondition('settings.value')} <= ?`,
+    )
+    .bind(LEGACY_OBJECT_MIGRATION_LOCK, leaseValue(owner, now + leaseDurationMs), now)
+    .run();
+  return result.meta.changes === 1;
+}
+
+export async function renewLegacyObjectMigrationLease(
+  db: D1Database,
+  owner: string,
+  now = Date.now(),
+  leaseDurationMs = 300_000,
+): Promise<boolean> {
+  const result = await db
+    .prepare(
+      `UPDATE settings SET value = ?
+       WHERE key = ?
+         AND json_valid(value)
+         AND json_extract(value, '$.owner') = ?
+         AND ${liveLeaseCondition()} > ?`,
+    )
+    .bind(leaseValue(owner, now + leaseDurationMs), LEGACY_OBJECT_MIGRATION_LOCK, owner, now)
+    .run();
+  return result.meta.changes === 1;
+}
+
+export async function releaseLegacyObjectMigrationLease(db: D1Database, owner: string): Promise<void> {
+  await db
+    .prepare("DELETE FROM settings WHERE key = ? AND json_valid(value) AND json_extract(value, '$.owner') = ?")
+    .bind(LEGACY_OBJECT_MIGRATION_LOCK, owner)
+    .run();
 }
 
 export async function upsertObject(
