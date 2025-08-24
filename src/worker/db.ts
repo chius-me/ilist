@@ -158,6 +158,25 @@ export async function releaseLegacyObjectMutationReservation(
     .run();
 }
 
+export async function renewLegacyObjectMutationReservation(
+  db: D1Database,
+  reservation: LegacyObjectMutationReservation,
+  now = Date.now(),
+  leaseDurationMs = LEGACY_OBJECT_MUTATION_LEASE_DURATION_MS,
+): Promise<boolean> {
+  const result = await db
+    .prepare(
+      `UPDATE settings SET value = ?
+       WHERE key = ?
+         AND json_valid(value)
+         AND json_extract(value, '$.owner') = ?
+         AND ${liveLeaseCondition()} > ?`,
+    )
+    .bind(leaseValue(reservation.owner, now + leaseDurationMs), reservation.key, reservation.owner, now)
+    .run();
+  return result.meta.changes === 1;
+}
+
 export async function countLegacyObjectMutationReservations(db: D1Database, now = Date.now()): Promise<number> {
   const row = await db
     .prepare(`SELECT COUNT(*) AS count FROM settings WHERE key GLOB ? AND ${liveLeaseCondition()} > ?`)
