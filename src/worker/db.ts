@@ -306,6 +306,10 @@ export async function getEntryById(db: D1Database, id: string): Promise<EntryRow
   return db.prepare('SELECT * FROM entries WHERE id = ?').bind(id).first<EntryRow>();
 }
 
+export async function findEntryByStorageKey(db: D1Database, storageKey: string): Promise<EntryRow | null> {
+  return db.prepare('SELECT * FROM entries WHERE storage_key = ?').bind(storageKey).first<EntryRow>();
+}
+
 export async function getChildByName(db: D1Database, parentId: string, name: string): Promise<EntryRow | null> {
   return db.prepare('SELECT * FROM entries WHERE parent_id = ? AND name = ?').bind(parentId, name).first<EntryRow>();
 }
@@ -363,6 +367,16 @@ export async function insertEntry(db: D1Database, row: EntryRow): Promise<void> 
       row.content_type, row.etag, row.status, row.is_public, row.sort_order,
       row.description, row.created_at, row.updated_at,
     )
+    .run();
+}
+
+export async function finalizeUploadedEntry(
+  db: D1Database,
+  id: string,
+  metadata: { size: number; contentType: string | null; etag: string | null },
+): Promise<void> {
+  await db.prepare(`UPDATE entries SET size = ?, content_type = ?, etag = ?, status = 'ready', updated_at = ? WHERE id = ?`)
+    .bind(metadata.size, metadata.contentType, metadata.etag, new Date().toISOString(), id)
     .run();
 }
 
