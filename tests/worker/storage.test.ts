@@ -27,7 +27,7 @@ describe('R2 file lifecycle', () => {
   it('serves a stable ID with Range and attachment headers', async () => {
     const upload = new Request('https://ilist.example/upload', { method: 'PUT', body: 'hello range' });
     const entry = await uploadFile(workerEnv, upload, {
-      id: 'file-abcdefgh', parentId: 'root', name: 'hello.txt',
+      id: 'file-abcdefgh', parentId: 'root', name: 'range.txt',
     });
     const row = (await getEntryById(workerEnv.DB, entry.id))!;
     const response = await streamEntryObject(workerEnv.R2_BUCKET, row, new Request('https://ilist.example/file', {
