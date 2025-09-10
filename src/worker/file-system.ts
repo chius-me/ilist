@@ -1,5 +1,6 @@
 import {
   deleteEntryRow,
+  deleteUploadingEntry,
   finalizeUploadedEntry,
   getChildByName,
   getEntryById,
@@ -14,23 +15,28 @@ import { HttpError } from './http';
 import type { BatchResult, Entry, EntryRow, Env } from './types';
 
 const ENTRY_NAME_UNIQUE_CONSTRAINT = 'UNIQUE constraint failed: entries.parent_id, entries.name';
+const ENTRY_ID_UNIQUE_CONSTRAINT = 'UNIQUE constraint failed: entries.id';
 
-function isEntryNameUniqueConstraint(error: unknown): boolean {
+function hasUniqueConstraint(error: unknown, constraint: string): boolean {
   const seen = new Set<object>();
   let current = error;
   while (current && typeof current === 'object' && !seen.has(current)) {
     seen.add(current);
     const value = current as { message?: unknown; cause?: unknown };
-    if (typeof value.message === 'string' && value.message.includes(ENTRY_NAME_UNIQUE_CONSTRAINT)) return true;
+    if (typeof value.message === 'string' && value.message.includes(constraint)) return true;
     current = value.cause;
   }
   return false;
 }
 
 function entryNameConflict(error: unknown, name: string): HttpError | null {
-  return isEntryNameUniqueConstraint(error)
+  return hasUniqueConstraint(error, ENTRY_NAME_UNIQUE_CONSTRAINT)
     ? new HttpError(409, 'ENTRY_NAME_CONFLICT', 'Current folder already contains that name', { name })
     : null;
+}
+
+function entryIdConflict(error: unknown): boolean {
+  return hasUniqueConstraint(error, ENTRY_ID_UNIQUE_CONSTRAINT);
 }
 
 function validateClientEntryId(id: string): string {
@@ -146,18 +152,16 @@ export async function uploadFile(
   const parent = await requireFolder(env.DB, input.parentId);
   const name = validateEntryName(input.name, parent.id === 'root');
   const existing = await getEntryById(env.DB, id);
-  if (existing && (
-    existing.status !== 'uploading'
-    || existing.parent_id !== parent.id
-    || existing.name !== name
-    || existing.storage_key !== storageKeyForEntry(id)
-  )) {
+  if (existing) {
+    if (existing.status === 'uploading') {
+      throw new HttpError(409, 'UPLOAD_IN_PROGRESS', 'An upload for this entry ID is already in progress');
+    }
     throw new HttpError(409, 'ENTRY_ID_CONFLICT', 'Upload ID already exists');
   }
 
-  await ensureNameAvailable(env.DB, parent.id, name, existing?.id);
+  await ensureNameAvailable(env.DB, parent.id, name);
   const now = new Date().toISOString();
-  const row: EntryRow = existing ?? {
+  const row: EntryRow = {
     id,
     parent_id: parent.id,
     name,
@@ -174,25 +178,39 @@ export async function uploadFile(
     updated_at: now,
   };
 
-  if (!existing) await insertEntry(env.DB, row);
+  try {
+    await insertEntry(env.DB, row);
+  } catch (error) {
+    if (entryIdConflict(error)) {
+      const concurrent = await getEntryById(env.DB, id);
+      if (concurrent?.status === 'uploading') {
+        throw new HttpError(409, 'UPLOAD_IN_PROGRESS', 'An upload for this entry ID is already in progress');
+      }
+      throw new HttpError(409, 'ENTRY_ID_CONFLICT', 'Upload ID already exists');
+    }
+    throw entryNameConflict(error, name) ?? error;
+  }
 
   try {
     const object = await env.R2_BUCKET.put(row.storage_key!, request.body, {
       httpMetadata: { contentType: request.headers.get('content-type') ?? 'application/octet-stream' },
     });
-    await finalizeUploadedEntry(env.DB, id, {
+    const finalized = await finalizeUploadedEntry(env.DB, id, {
       size: object.size,
       contentType: object.httpMetadata?.contentType ?? request.headers.get('content-type'),
       etag: object.httpEtag || object.etag,
     });
-    const ready = (await getEntryById(env.DB, id))!;
-    return entryToApi(ready, true, await isEffectivelyPublic(env.DB, id));
+    if (!finalized) throw new Error('Upload entry was not available for finalization');
   } catch (error) {
     await env.R2_BUCKET.delete(row.storage_key!).catch(() => undefined);
-    await deleteEntryRow(env.DB, id).catch(() => undefined);
+    await deleteUploadingEntry(env.DB, id).catch(() => undefined);
     if (error instanceof HttpError) throw error;
     throw new HttpError(502, 'STORAGE_OPERATION_FAILED', 'Upload failed');
   }
+
+  const ready = await getEntryById(env.DB, id);
+  if (!ready || ready.status !== 'ready') throw new HttpError(502, 'STORAGE_OPERATION_FAILED', 'Upload finalization failed');
+  return entryToApi(ready, true, await isEffectivelyPublic(env.DB, id));
 }
 
 export async function deleteEntryTrees(
