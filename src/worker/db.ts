@@ -500,10 +500,25 @@ export async function enqueueStorageRecoveryOperation(
   return result.meta.changes === 1;
 }
 
+export async function touchHeldStorageRecoveryOperation(
+  db: D1Database,
+  operationId: string,
+  attemptOwner: string,
+  now = Date.now(),
+): Promise<boolean> {
+  const result = await db.prepare(`UPDATE storage_recovery_operations
+    SET updated_at = ?
+    WHERE id = ? AND state = 'held' AND attempt_owner = ?`)
+    .bind(new Date(now).toISOString(), operationId, attemptOwner)
+    .run();
+  return result.meta.changes === 1;
+}
+
 export async function listStorageRecoveryOperations(
   db: D1Database,
   entryId?: string,
   limit = 100,
+  now = Date.now(),
 ): Promise<StorageRecoveryOperationRow[]> {
   const result = entryId
     ? await db.prepare(`SELECT * FROM storage_recovery_operations WHERE entry_id = ? ORDER BY created_at ASC LIMIT ?`)
@@ -513,7 +528,7 @@ export async function listStorageRecoveryOperations(
         OR (state = 'running' AND COALESCE(claim_expires_at, 0) <= ?)
         OR (state = 'held' AND updated_at <= ?)
       ORDER BY updated_at ASC LIMIT ?`)
-      .bind(Date.now(), new Date(Date.now() - 5 * 60_000).toISOString(), limit).all<StorageRecoveryOperationRow>();
+      .bind(now, new Date(now - 5 * 60_000).toISOString(), limit).all<StorageRecoveryOperationRow>();
   return result.results ?? [];
 }
 
@@ -536,8 +551,8 @@ export async function claimStorageRecoveryOperation(
   id: string,
   claimOwner: string,
   leaseDurationMs = 30_000,
+  now = Date.now(),
 ): Promise<StorageRecoveryOperationRow | null> {
-  const now = Date.now();
   const result = await db.prepare(`UPDATE storage_recovery_operations
     SET state = 'running', claim_owner = ?, claim_expires_at = ?, attempts = attempts + 1, updated_at = ?
     WHERE id = ? AND (
