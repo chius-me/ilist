@@ -3,7 +3,7 @@ import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import { findEntryByStorageKey, getEntryById } from '../../src/worker/db';
 import { createFolder, deleteEntryTrees, uploadFile } from '../../src/worker/file-system';
 import { streamEntryObject } from '../../src/worker/r2';
-import type { Env } from '../../src/worker/types';
+import type { Entry, Env } from '../../src/worker/types';
 
 const workerEnv = env as unknown as Env;
 
@@ -40,6 +40,63 @@ function bucketWith(overrides: Record<string, unknown>): R2Bucket {
       return typeof value === 'function' ? value.bind(target) : value;
     },
   }) as R2Bucket;
+}
+
+function pausedEntryInsert() {
+  let signalInsert!: () => void;
+  let releaseInsert!: () => void;
+  const insertReached = new Promise<void>((resolve) => { signalInsert = resolve; });
+  const release = new Promise<void>((resolve) => { releaseInsert = resolve; });
+  let paused = false;
+
+  const delayedStatement = (statement: D1PreparedStatement): D1PreparedStatement => new Proxy(statement, {
+    get(target, property) {
+      if (property === 'bind') return (...values: unknown[]) => delayedStatement(target.bind(...values));
+      if (property === 'run') {
+        return async <T>() => {
+          if (!paused) {
+            paused = true;
+            signalInsert();
+            await release;
+          }
+          return await target.run<T>();
+        };
+      }
+      const value = Reflect.get(target, property, target);
+      return typeof value === 'function' ? value.bind(target) : value;
+    },
+  }) as D1PreparedStatement;
+
+  const db = new Proxy(workerEnv.DB, {
+    get(target, property) {
+      if (property !== 'prepare') {
+        const value = Reflect.get(target, property, target);
+        return typeof value === 'function' ? value.bind(target) : value;
+      }
+      return (sql: string) => {
+        const statement = target.prepare(sql);
+        return sql.includes('INSERT INTO entries') ? delayedStatement(statement) : statement;
+      };
+    },
+  }) as D1Database;
+
+  return { db, insertReached, release: releaseInsert };
+}
+
+function deletionGate() {
+  let startDelete!: () => void;
+  let releaseDelete!: () => void;
+  const deleteStarted = new Promise<void>((resolve) => { startDelete = resolve; });
+  const release = new Promise<void>((resolve) => { releaseDelete = resolve; });
+  return {
+    deleteStarted,
+    release: releaseDelete,
+    deleteBlob: async (key: string) => {
+      startDelete();
+      await release;
+      await workerEnv.R2_BUCKET.delete(key);
+    },
+  };
 }
 
 beforeEach(() => {
@@ -97,6 +154,33 @@ describe('R2 file lifecycle', () => {
     expect(rangeHead.headers.get('content-range')).toBe('bytes 6-10/11');
     expect(rangeHead.headers.get('content-length')).toBe('5');
     await expect(rangeHead.text()).resolves.toBe('');
+  });
+
+  it('uses a range only when If-Range matches its ETag or date', async () => {
+    const entry = await upload('if-range', 'hello range');
+    const row = (await getEntryById(workerEnv.DB, entry.id))!;
+    const uploaded = (await workerEnv.R2_BUCKET.head(row.storage_key!))!.uploaded.toUTCString();
+    const response = async (method: string, ifRange: string) => await streamEntryObject(
+      workerEnv.R2_BUCKET,
+      row,
+      new Request('https://ilist.example/file', { method, headers: { range: 'bytes=0-4', 'if-range': ifRange } }),
+      { download: false, publicFile: true },
+    );
+
+    const matchingEtag = await response('GET', row.etag!);
+    const staleEtag = await response('HEAD', '"stale"');
+    const matchingDate = await response('HEAD', uploaded);
+    const staleDate = await response('GET', 'Wed, 01 Jan 2020 00:00:00 GMT');
+
+    expect(matchingEtag.status).toBe(206);
+    await expect(matchingEtag.text()).resolves.toBe('hello');
+    expect(staleEtag.status).toBe(200);
+    expect(staleEtag.headers.get('content-length')).toBe('11');
+    expect(staleEtag.headers.get('content-range')).toBeNull();
+    expect(matchingDate.status).toBe(206);
+    expect(matchingDate.headers.get('content-length')).toBe('5');
+    expect(staleDate.status).toBe(200);
+    await expect(staleDate.text()).resolves.toBe('hello range');
   });
 
   it('returns 304 only for GET or HEAD cache matches and 412 for failed preconditions', async () => {
@@ -189,6 +273,91 @@ describe('R2 file lifecycle', () => {
     await expect(owner).rejects.toMatchObject({ status: 502, code: 'STORAGE_OPERATION_FAILED' });
     expect(await getEntryById(workerEnv.DB, id)).toBeNull();
     expect(await workerEnv.R2_BUCKET.get(key)).toBeNull();
+  });
+
+  it('rejects a folder creation that read its parent before deletion claimed the tree', async () => {
+    const parent = await folder('create-race');
+    const existing = fileId('create-race-existing');
+    fixtureIds.push(existing);
+    fixtureKeys.push(`blobs/${existing}`);
+    await uploadFile(workerEnv, new Request('https://ilist.example/upload', { method: 'PUT', body: 'existing' }), {
+      id: existing, parentId: parent.id, name: `${fixture}-existing.txt`,
+    });
+    const delayed = pausedEntryInsert();
+    const gate = deletionGate();
+    const creation = createFolder(delayed.db, { parentId: parent.id, name: `${fixture}-late-folder` });
+
+    await delayed.insertReached;
+    const deletion = deleteEntryTrees(workerEnv, [parent.id], { deleteBlob: gate.deleteBlob });
+    await gate.deleteStarted;
+    delayed.release();
+    const creationResult: Entry | Error = await creation.then(
+      (entry) => entry,
+      (error: unknown) => error instanceof Error ? error : new Error(String(error)),
+    );
+    if (!(creationResult instanceof Error)) fixtureIds.push(creationResult.id);
+    gate.release();
+    const deletionResult = await deletion;
+
+    expect(creationResult).toMatchObject({ status: 404, code: 'ENTRY_NOT_FOUND' });
+    expect(deletionResult).toEqual({ succeeded: [parent.id], failed: [] });
+    expect(await getEntryById(workerEnv.DB, parent.id)).toBeNull();
+  });
+
+  it('rejects an upload that read its parent before deletion claimed the tree', async () => {
+    const parent = await folder('upload-race');
+    const existing = fileId('upload-race-existing');
+    const late = fileId('upload-race-late');
+    fixtureIds.push(existing, late);
+    fixtureKeys.push(`blobs/${existing}`, `blobs/${late}`);
+    await uploadFile(workerEnv, new Request('https://ilist.example/upload', { method: 'PUT', body: 'existing' }), {
+      id: existing, parentId: parent.id, name: `${fixture}-existing.txt`,
+    });
+    const delayed = pausedEntryInsert();
+    const gate = deletionGate();
+    const uploadAttempt = uploadFile({ ...workerEnv, DB: delayed.db }, new Request('https://ilist.example/upload', {
+      method: 'PUT', body: 'late',
+    }), { id: late, parentId: parent.id, name: `${fixture}-late.txt` });
+
+    await delayed.insertReached;
+    const deletion = deleteEntryTrees(workerEnv, [parent.id], { deleteBlob: gate.deleteBlob });
+    await gate.deleteStarted;
+    delayed.release();
+    const uploadResult: Entry | Error = await uploadAttempt.then(
+      (entry) => entry,
+      (error: unknown) => error instanceof Error ? error : new Error(String(error)),
+    );
+    if (!(uploadResult instanceof Error)) fixtureIds.push(uploadResult.id);
+    gate.release();
+    const deletionResult = await deletion;
+
+    expect(uploadResult).toMatchObject({ status: 404, code: 'ENTRY_NOT_FOUND' });
+    expect(deletionResult).toEqual({ succeeded: [parent.id], failed: [] });
+    expect(await getEntryById(workerEnv.DB, late)).toBeNull();
+    expect(await getEntryById(workerEnv.DB, parent.id)).toBeNull();
+  });
+
+  it('allows only the first concurrent deletion attempt to claim a tree', async () => {
+    const parent = await folder('delete-race');
+    const id = fileId('delete-race-file');
+    fixtureIds.push(id);
+    fixtureKeys.push(`blobs/${id}`);
+    await uploadFile(workerEnv, new Request('https://ilist.example/upload', { method: 'PUT', body: 'x' }), {
+      id, parentId: parent.id, name: `${fixture}-x.txt`,
+    });
+    const gate = deletionGate();
+    const first = deleteEntryTrees(workerEnv, [parent.id], { deleteBlob: gate.deleteBlob });
+
+    await gate.deleteStarted;
+    const second = await deleteEntryTrees(workerEnv, [parent.id]);
+    gate.release();
+
+    expect(second).toEqual({
+      succeeded: [],
+      failed: [{ id: parent.id, code: 'ENTRY_DELETE_IN_PROGRESS', message: 'Entry deletion is already in progress' }],
+    });
+    await expect(first).resolves.toEqual({ succeeded: [parent.id], failed: [] });
+    expect(await getEntryById(workerEnv.DB, parent.id)).toBeNull();
   });
 
   it('recursively deletes a folder and its blobs', async () => {

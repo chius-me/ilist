@@ -1,5 +1,6 @@
 import { beforeEach, describe, expect, it } from 'vitest';
 import { env } from 'cloudflare:test';
+import storageKeyImmutable from '../../migrations/0006_entries_storage_key_immutable.sql?raw';
 import type { Env } from '../../src/worker/types';
 
 const db = () => (env as unknown as Env).DB;
@@ -70,7 +71,7 @@ describe('entries schema', () => {
     await insertFolder('child', 'non-empty');
 
     await expect(
-      db().prepare("UPDATE entries SET kind = 'file', storage_key = 'blobs/non-empty' WHERE id = 'non-empty'").run(),
+      db().prepare("UPDATE entries SET kind = 'file' WHERE id = 'non-empty'").run(),
     ).rejects.toThrow('cannot convert non-empty folder to file');
   });
 
@@ -97,14 +98,12 @@ describe('entries schema', () => {
 
   it('permits normal folder and file operations', async () => {
     await insertFolder('source', 'root');
-    await insertFolder('child', 'source');
+    await insertFile('child', 'source');
     await insertFolder('destination', 'root');
     await insertFile('document', 'source');
 
     await db().prepare("UPDATE entries SET name = 'renamed-document' WHERE id = 'document'").run();
     await db().prepare("UPDATE entries SET parent_id = 'destination' WHERE id = 'source'").run();
-    await db().prepare("UPDATE entries SET kind = 'file', storage_key = 'blobs/child' WHERE id = 'child'").run();
-
     await expect(db().prepare("SELECT id, parent_id, name, kind FROM entries WHERE id IN ('source', 'child', 'document') ORDER BY id").all()).resolves.toMatchObject({
       results: [
         { id: 'child', parent_id: 'source', kind: 'file' },
@@ -112,6 +111,24 @@ describe('entries schema', () => {
         { id: 'source', parent_id: 'destination', kind: 'folder' },
       ],
     });
+  });
+
+  it('rejects changes to a file storage key', async () => {
+    await insertFile('immutable-file', 'root');
+
+    await expect(
+      db().prepare("UPDATE entries SET storage_key = 'blobs/replacement' WHERE id = 'immutable-file'").run(),
+    ).rejects.toThrow('entry storage key is immutable');
+  });
+
+  it('adds the immutable storage key trigger when upgrading an existing entries database', async () => {
+    await db().prepare('DROP TRIGGER entries_prevent_storage_key_change').run();
+    await db().prepare(storageKeyImmutable).run();
+    await insertFile('upgraded-file', 'root');
+
+    await expect(
+      db().prepare("UPDATE entries SET storage_key = 'blobs/replacement' WHERE id = 'upgraded-file'").run(),
+    ).rejects.toThrow('entry storage key is immutable');
   });
 
   it('rejects changing the canonical root id even when parent_id changes too', async () => {

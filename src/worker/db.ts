@@ -370,6 +370,25 @@ export async function insertEntry(db: D1Database, row: EntryRow): Promise<void> 
     .run();
 }
 
+export async function insertEntryUnderReadyParent(db: D1Database, row: EntryRow): Promise<boolean> {
+  if (!row.parent_id) throw new Error('Entry parent is required');
+  const result = await db.prepare(`INSERT INTO entries (
+    id, parent_id, name, kind, storage_key, size, content_type, etag,
+    status, is_public, sort_order, description, created_at, updated_at
+  ) SELECT ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?
+  WHERE EXISTS (
+    SELECT 1 FROM entries
+    WHERE id = ? AND kind = 'folder' AND status = 'ready'
+  )`)
+    .bind(
+      row.id, row.parent_id, row.name, row.kind, row.storage_key, row.size,
+      row.content_type, row.etag, row.status, row.is_public, row.sort_order,
+      row.description, row.created_at, row.updated_at, row.parent_id,
+    )
+    .run();
+  return result.meta.changes === 1;
+}
+
 export async function finalizeUploadedEntry(
   db: D1Database,
   id: string,
@@ -411,4 +430,35 @@ export async function deleteEntryRow(db: D1Database, id: string): Promise<void> 
 
 export async function deleteUploadingEntry(db: D1Database, id: string): Promise<void> {
   await db.prepare("DELETE FROM entries WHERE id = ? AND status = 'uploading'").bind(id).run();
+}
+
+export async function claimEntryTreeForDeletion(db: D1Database, id: string): Promise<boolean> {
+  const result = await db.prepare(`WITH RECURSIVE descendants(id) AS (
+    SELECT id FROM entries WHERE id = ?
+    UNION ALL
+    SELECT child.id FROM entries child JOIN descendants parent ON child.parent_id = parent.id
+  )
+  UPDATE entries
+  SET status = 'deleting', updated_at = ?
+  WHERE id IN (SELECT id FROM descendants)
+    AND NOT EXISTS (
+      SELECT 1 FROM entries
+      WHERE id IN (SELECT id FROM descendants) AND status <> 'ready'
+    )`)
+    .bind(id, new Date().toISOString())
+    .run();
+  return result.meta.changes > 0;
+}
+
+export async function restoreDeletingEntryTree(db: D1Database, id: string): Promise<void> {
+  await db.prepare(`WITH RECURSIVE descendants(id) AS (
+    SELECT id FROM entries WHERE id = ?
+    UNION ALL
+    SELECT child.id FROM entries child JOIN descendants parent ON child.parent_id = parent.id
+  )
+  UPDATE entries
+  SET status = 'ready', updated_at = ?
+  WHERE id IN (SELECT id FROM descendants) AND status = 'deleting'`)
+    .bind(id, new Date().toISOString())
+    .run();
 }
