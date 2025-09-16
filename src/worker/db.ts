@@ -1,5 +1,12 @@
-import { HttpError } from './http';
-import type { DirectoryEntry, EntryRow, EntryStatus, FileEntry, ObjectRow, TreeResponse } from './types';
+import type {
+  DirectoryEntry,
+  EntryRow,
+  FileEntry,
+  ObjectRow,
+  StorageRecoveryOperationKind,
+  StorageRecoveryOperationRow,
+  TreeResponse,
+} from './types';
 
 export const LEGACY_OBJECT_MIGRATION_LOCK = 'legacy_object_migration_lock';
 export const LEGACY_OBJECT_MUTATION_RESERVATION_PREFIX = 'legacy_object_mutation_reservation_';
@@ -360,11 +367,11 @@ export async function listDescendantRows(db: D1Database, id: string): Promise<En
 export async function insertEntry(db: D1Database, row: EntryRow): Promise<void> {
   await db.prepare(`INSERT INTO entries (
     id, parent_id, name, kind, storage_key, size, content_type, etag,
-    status, is_public, sort_order, description, created_at, updated_at
-  ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`)
+    status, lifecycle_owner, is_public, sort_order, description, created_at, updated_at
+  ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`)
     .bind(
       row.id, row.parent_id, row.name, row.kind, row.storage_key, row.size,
-      row.content_type, row.etag, row.status, row.is_public, row.sort_order,
+      row.content_type, row.etag, row.status, row.lifecycle_owner, row.is_public, row.sort_order,
       row.description, row.created_at, row.updated_at,
     )
     .run();
@@ -374,15 +381,15 @@ export async function insertEntryUnderReadyParent(db: D1Database, row: EntryRow)
   if (!row.parent_id) throw new Error('Entry parent is required');
   const result = await db.prepare(`INSERT INTO entries (
     id, parent_id, name, kind, storage_key, size, content_type, etag,
-    status, is_public, sort_order, description, created_at, updated_at
-  ) SELECT ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?
+    status, lifecycle_owner, is_public, sort_order, description, created_at, updated_at
+  ) SELECT ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?
   WHERE EXISTS (
     SELECT 1 FROM entries
     WHERE id = ? AND kind = 'folder' AND status = 'ready'
   )`)
     .bind(
       row.id, row.parent_id, row.name, row.kind, row.storage_key, row.size,
-      row.content_type, row.etag, row.status, row.is_public, row.sort_order,
+      row.content_type, row.etag, row.status, row.lifecycle_owner, row.is_public, row.sort_order,
       row.description, row.created_at, row.updated_at, row.parent_id,
     )
     .run();
@@ -392,73 +399,195 @@ export async function insertEntryUnderReadyParent(db: D1Database, row: EntryRow)
 export async function finalizeUploadedEntry(
   db: D1Database,
   id: string,
+  owner: string,
   metadata: { size: number; contentType: string | null; etag: string | null },
 ): Promise<boolean> {
-  const result = await db.prepare(`UPDATE entries SET size = ?, content_type = ?, etag = ?, status = 'ready', updated_at = ? WHERE id = ? AND status = 'uploading'`)
-    .bind(metadata.size, metadata.contentType, metadata.etag, new Date().toISOString(), id)
+  const result = await db.prepare(`UPDATE entries
+    SET size = ?, content_type = ?, etag = ?, status = 'ready', lifecycle_owner = NULL, updated_at = ?
+    WHERE id = ? AND status = 'uploading' AND lifecycle_owner = ?`)
+    .bind(metadata.size, metadata.contentType, metadata.etag, new Date().toISOString(), id, owner)
     .run();
   return result.meta.changes === 1;
 }
 
-export async function updateEntryFields(
+export async function updateReadyEntryFields(
   db: D1Database,
   id: string,
-  fields: { parentId?: string; name?: string; description?: string; sortOrder?: number; isPublic?: boolean; status?: EntryStatus },
-): Promise<void> {
+  fields: { name?: string; description?: string; sortOrder?: number; isPublic?: boolean },
+): Promise<boolean> {
   const assignments: string[] = [];
   const values: unknown[] = [];
   const add = (column: string, value: unknown) => {
     assignments.push(`${column} = ?`);
     values.push(value);
   };
-
-  if (fields.parentId !== undefined) add('parent_id', fields.parentId);
   if (fields.name !== undefined) add('name', fields.name);
   if (fields.description !== undefined) add('description', fields.description);
   if (fields.sortOrder !== undefined) add('sort_order', fields.sortOrder);
   if (fields.isPublic !== undefined) add('is_public', fields.isPublic ? 1 : 0);
-  if (fields.status !== undefined) add('status', fields.status);
   add('updated_at', new Date().toISOString());
-
-  const result = await db.prepare(`UPDATE entries SET ${assignments.join(', ')} WHERE id = ?`).bind(...values, id).run();
-  if (result.meta.changes === 0) throw new HttpError(404, 'ENTRY_NOT_FOUND', 'Entry not found');
+  const result = await db.prepare(`UPDATE entries SET ${assignments.join(', ')} WHERE id = ? AND status = 'ready'`)
+    .bind(...values, id)
+    .run();
+  return result.meta.changes === 1;
 }
 
-export async function deleteEntryRow(db: D1Database, id: string): Promise<void> {
-  await db.prepare('DELETE FROM entries WHERE id = ?').bind(id).run();
+export async function moveReadyEntry(db: D1Database, id: string, destinationId: string): Promise<boolean> {
+  const result = await db.prepare(`UPDATE entries
+    SET parent_id = ?, updated_at = ?
+    WHERE id = ? AND status = 'ready'
+      AND EXISTS (SELECT 1 FROM entries WHERE id = ? AND kind = 'folder' AND status = 'ready')`)
+    .bind(destinationId, new Date().toISOString(), id, destinationId)
+    .run();
+  return result.meta.changes === 1;
 }
 
-export async function deleteUploadingEntry(db: D1Database, id: string): Promise<void> {
-  await db.prepare("DELETE FROM entries WHERE id = ? AND status = 'uploading'").bind(id).run();
+export async function deleteUploadingEntry(db: D1Database, id: string, owner: string): Promise<boolean> {
+  const result = await db.prepare("DELETE FROM entries WHERE id = ? AND status = 'uploading' AND lifecycle_owner = ?")
+    .bind(id, owner)
+    .run();
+  return result.meta.changes === 1;
 }
 
-export async function claimEntryTreeForDeletion(db: D1Database, id: string): Promise<boolean> {
+export async function claimEntryTreeForDeletion(db: D1Database, id: string, owner: string): Promise<boolean> {
   const result = await db.prepare(`WITH RECURSIVE descendants(id) AS (
     SELECT id FROM entries WHERE id = ?
     UNION ALL
     SELECT child.id FROM entries child JOIN descendants parent ON child.parent_id = parent.id
   )
   UPDATE entries
-  SET status = 'deleting', updated_at = ?
+  SET status = 'deleting', lifecycle_owner = ?, updated_at = ?
   WHERE id IN (SELECT id FROM descendants)
     AND NOT EXISTS (
       SELECT 1 FROM entries
       WHERE id IN (SELECT id FROM descendants) AND status <> 'ready'
     )`)
-    .bind(id, new Date().toISOString())
+    .bind(id, owner, new Date().toISOString())
     .run();
   return result.meta.changes > 0;
 }
 
-export async function restoreDeletingEntryTree(db: D1Database, id: string): Promise<void> {
-  await db.prepare(`WITH RECURSIVE descendants(id) AS (
-    SELECT id FROM entries WHERE id = ?
-    UNION ALL
-    SELECT child.id FROM entries child JOIN descendants parent ON child.parent_id = parent.id
-  )
-  UPDATE entries
-  SET status = 'ready', updated_at = ?
-  WHERE id IN (SELECT id FROM descendants) AND status = 'deleting'`)
-    .bind(id, new Date().toISOString())
+export async function deleteDeletingEntry(db: D1Database, id: string, owner: string): Promise<boolean> {
+  const result = await db.prepare("DELETE FROM entries WHERE id = ? AND status = 'deleting' AND lifecycle_owner = ?")
+    .bind(id, owner)
     .run();
+  return result.meta.changes === 1;
+}
+
+export async function enqueueStorageRecoveryOperation(
+  db: D1Database,
+  input: {
+    id: string;
+    entryId: string;
+    operationKind: StorageRecoveryOperationKind;
+    storageKey: string | null;
+    attemptOwner: string;
+    phase: string;
+    payload?: unknown;
+    state: 'held' | 'pending' | 'retry';
+  },
+): Promise<boolean> {
+  const now = new Date().toISOString();
+  const result = await db.prepare(`INSERT OR IGNORE INTO storage_recovery_operations (
+    id, entry_id, operation_kind, storage_key, attempt_owner, phase, payload, state,
+    claim_owner, claim_expires_at, attempts, last_error, created_at, updated_at
+  ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, NULL, NULL, 0, NULL, ?, ?)`)
+    .bind(
+      input.id, input.entryId, input.operationKind, input.storageKey, input.attemptOwner,
+      input.phase, JSON.stringify(input.payload ?? {}), input.state, now, now,
+    )
+    .run();
+  return result.meta.changes === 1;
+}
+
+export async function listStorageRecoveryOperations(
+  db: D1Database,
+  entryId?: string,
+  limit = 100,
+): Promise<StorageRecoveryOperationRow[]> {
+  const result = entryId
+    ? await db.prepare(`SELECT * FROM storage_recovery_operations WHERE entry_id = ? ORDER BY created_at ASC LIMIT ?`)
+      .bind(entryId, limit).all<StorageRecoveryOperationRow>()
+    : await db.prepare(`SELECT * FROM storage_recovery_operations
+      WHERE state IN ('pending', 'retry')
+        OR (state = 'running' AND COALESCE(claim_expires_at, 0) <= ?)
+        OR (state = 'held' AND updated_at <= ?)
+      ORDER BY updated_at ASC LIMIT ?`)
+      .bind(Date.now(), new Date(Date.now() - 5 * 60_000).toISOString(), limit).all<StorageRecoveryOperationRow>();
+  return result.results ?? [];
+}
+
+export async function activateStorageRecoveryOperation(
+  db: D1Database,
+  id: string,
+  phase: string,
+  payload: unknown = {},
+): Promise<boolean> {
+  const result = await db.prepare(`UPDATE storage_recovery_operations
+    SET phase = ?, payload = ?, state = 'pending', updated_at = ?
+    WHERE id = ? AND state = 'held'`)
+    .bind(phase, JSON.stringify(payload), new Date().toISOString(), id)
+    .run();
+  return result.meta.changes === 1;
+}
+
+export async function claimStorageRecoveryOperation(
+  db: D1Database,
+  id: string,
+  claimOwner: string,
+  leaseDurationMs = 30_000,
+): Promise<StorageRecoveryOperationRow | null> {
+  const now = Date.now();
+  const result = await db.prepare(`UPDATE storage_recovery_operations
+    SET state = 'running', claim_owner = ?, claim_expires_at = ?, attempts = attempts + 1, updated_at = ?
+    WHERE id = ? AND (
+      state IN ('pending', 'retry')
+        OR (state = 'running' AND COALESCE(claim_expires_at, 0) <= ?)
+        OR (state = 'held' AND updated_at <= ?)
+    )`)
+    .bind(claimOwner, now + leaseDurationMs, new Date().toISOString(), id, now, new Date(now - 5 * 60_000).toISOString())
+    .run();
+  if (result.meta.changes !== 1) return null;
+  return db.prepare(`SELECT * FROM storage_recovery_operations WHERE id = ? AND state = 'running' AND claim_owner = ?`)
+    .bind(id, claimOwner)
+    .first<StorageRecoveryOperationRow>();
+}
+
+export async function updateClaimedStorageRecoveryOperation(
+  db: D1Database,
+  id: string,
+  claimOwner: string,
+  phase: string,
+  payload: unknown,
+): Promise<boolean> {
+  const result = await db.prepare(`UPDATE storage_recovery_operations
+    SET phase = ?, payload = ?, updated_at = ?
+    WHERE id = ? AND state = 'running' AND claim_owner = ?`)
+    .bind(phase, JSON.stringify(payload), new Date().toISOString(), id, claimOwner)
+    .run();
+  return result.meta.changes === 1;
+}
+
+export async function completeStorageRecoveryOperation(db: D1Database, id: string, claimOwner: string): Promise<boolean> {
+  const result = await db.prepare(`UPDATE storage_recovery_operations
+    SET state = 'completed', claim_owner = NULL, claim_expires_at = NULL, last_error = NULL, updated_at = ?
+    WHERE id = ? AND state = 'running' AND claim_owner = ?`)
+    .bind(new Date().toISOString(), id, claimOwner)
+    .run();
+  return result.meta.changes === 1;
+}
+
+export async function retryStorageRecoveryOperation(
+  db: D1Database,
+  id: string,
+  claimOwner: string,
+  error: unknown,
+): Promise<boolean> {
+  const message = error instanceof Error ? error.message : String(error);
+  const result = await db.prepare(`UPDATE storage_recovery_operations
+    SET state = 'retry', claim_owner = NULL, claim_expires_at = NULL, last_error = ?, updated_at = ?
+    WHERE id = ? AND state = 'running' AND claim_owner = ?`)
+    .bind(message.slice(0, 1000), new Date().toISOString(), id, claimOwner)
+    .run();
+  return result.meta.changes === 1;
 }

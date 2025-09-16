@@ -8,14 +8,20 @@ const db = () => (env as unknown as Env).DB;
 async function seed(): Promise<void> {
   const now = '2026-07-10T00:00:00.000Z';
   await db().batch([
-    db().prepare(`INSERT INTO entries VALUES (?, ?, ?, 'folder', NULL, 0, NULL, NULL, 'ready', 1, 0, '', ?, ?)`).bind(
+    db().prepare(`INSERT INTO entries (
+      id, parent_id, name, kind, storage_key, size, content_type, etag, status, is_public, sort_order, description, created_at, updated_at
+    ) VALUES (?, ?, ?, 'folder', NULL, 0, NULL, NULL, 'ready', 1, 0, '', ?, ?)`).bind(
       'r2', 'root', 'R2', now, now,
     ),
-    db().prepare(`INSERT INTO entries VALUES (?, ?, ?, 'folder', NULL, 0, NULL, NULL, 'ready', 1, 0, '', ?, ?)`).bind(
+    db().prepare(`INSERT INTO entries (
+      id, parent_id, name, kind, storage_key, size, content_type, etag, status, is_public, sort_order, description, created_at, updated_at
+    ) VALUES (?, ?, ?, 'folder', NULL, 0, NULL, NULL, 'ready', 1, 0, '', ?, ?)`).bind(
       'private', 'r2', 'Private', now, now,
     ),
     db().prepare(`UPDATE entries SET is_public = 0 WHERE id = 'private'`),
-    db().prepare(`INSERT INTO entries VALUES (?, ?, ?, 'file', ?, 12, 'text/plain', 'etag', 'ready', 1, 0, '', ?, ?)`).bind(
+    db().prepare(`INSERT INTO entries (
+      id, parent_id, name, kind, storage_key, size, content_type, etag, status, is_public, sort_order, description, created_at, updated_at
+    ) VALUES (?, ?, ?, 'file', ?, 12, 'text/plain', 'etag', 'ready', 1, 0, '', ?, ?)`).bind(
       'readme', 'r2', 'README.txt', 'blobs/readme', now, now,
     ),
   ]);
