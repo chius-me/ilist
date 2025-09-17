@@ -49,6 +49,10 @@ export function requireSameOrigin(request: Request): void {
   }
 }
 
+export function requireSameOriginWhenPresent(request: Request): void {
+  if (request.headers.has('origin')) requireSameOrigin(request);
+}
+
 export async function readJson<T>(request: Request): Promise<T> {
   try {
     return (await request.json()) as T;
