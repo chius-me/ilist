@@ -36,6 +36,6 @@ export function encodeVirtualPath(segments: string[]): string {
   return segments.length ? `/${segments.map(encodeURIComponent).join('/')}` : '/';
 }
 
-export function storageKeyForEntry(id: string): string {
-  return `blobs/${id}`;
+export function storageKeyForEntry(id: string, attemptOwner?: string): string {
+  return attemptOwner ? `blobs/${id}/${attemptOwner}` : `blobs/${id}`;
 }

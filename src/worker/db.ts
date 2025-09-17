@@ -467,6 +467,18 @@ export async function claimEntryTreeForDeletion(db: D1Database, id: string, owne
   return result.meta.changes > 0;
 }
 
+export async function countDescendantRows(db: D1Database, id: string): Promise<number> {
+  const row = await db.prepare(`WITH RECURSIVE descendants(id) AS (
+    SELECT id FROM entries WHERE id = ?
+    UNION ALL
+    SELECT child.id FROM entries child JOIN descendants parent ON child.parent_id = parent.id
+  )
+  SELECT COUNT(*) AS count FROM descendants`)
+    .bind(id)
+    .first<{ count: number }>();
+  return row?.count ?? 0;
+}
+
 export async function deleteDeletingEntry(db: D1Database, id: string, owner: string): Promise<boolean> {
   const result = await db.prepare("DELETE FROM entries WHERE id = ? AND status = 'deleting' AND lifecycle_owner = ?")
     .bind(id, owner)
@@ -566,6 +578,21 @@ export async function claimStorageRecoveryOperation(
   return db.prepare(`SELECT * FROM storage_recovery_operations WHERE id = ? AND state = 'running' AND claim_owner = ?`)
     .bind(id, claimOwner)
     .first<StorageRecoveryOperationRow>();
+}
+
+export async function renewStorageRecoveryOperation(
+  db: D1Database,
+  id: string,
+  claimOwner: string,
+  leaseDurationMs = 30_000,
+  now = Date.now(),
+): Promise<boolean> {
+  const result = await db.prepare(`UPDATE storage_recovery_operations
+    SET claim_expires_at = ?, updated_at = ?
+    WHERE id = ? AND state = 'running' AND claim_owner = ? AND COALESCE(claim_expires_at, 0) > ?`)
+    .bind(now + leaseDurationMs, new Date(now).toISOString(), id, claimOwner, now)
+    .run();
+  return result.meta.changes === 1;
 }
 
 export async function updateClaimedStorageRecoveryOperation(
