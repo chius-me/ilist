@@ -61,6 +61,7 @@ describe('ExplorerApp', () => {
       const url = String(input);
       if (url.includes('/api/admin/me')) return new Response(JSON.stringify(guestError), { status: 401 });
       if (url.includes('/api/fs/list')) return new Response(JSON.stringify(root), { status: 200 });
+      if (url.includes('/api/fs/entries/readme-file')) return new Response(JSON.stringify({ ok: true, data: root.data.items[1] }), { status: 200 });
       throw new Error(`Unexpected fetch: ${url}`);
     }));
   });

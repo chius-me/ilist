@@ -355,6 +355,27 @@ button:focus-visible, a:focus-visible, input:focus-visible, select:focus-visible
 .loginDialog input { height: 38px; border: 1px solid var(--line-strong); border-radius: var(--radius); background: #fff; padding: 0 9px; color: var(--text); }
 .formError { margin: -3px 0 0; color: var(--danger); font-size: 13px; }
 
+.previewBackdrop { position: fixed; inset: 0; z-index: 30; display: grid; place-items: center; background: rgba(21, 32, 30, 0.42); padding: 20px; }
+.previewOverlay { display: grid; grid-template-rows: auto minmax(0, 1fr); width: min(100%, 1040px); height: min(100%, 760px); overflow: hidden; border: 1px solid var(--line-strong); border-radius: var(--radius); background: var(--surface); box-shadow: 0 18px 48px rgba(26, 39, 34, 0.25); }
+.previewHeader { display: flex; align-items: center; min-width: 0; min-height: 54px; gap: 12px; border-bottom: 1px solid var(--line); padding: 8px 10px 8px 16px; }
+.previewHeader h2 { flex: 1 1 auto; min-width: 0; margin: 0; overflow: hidden; font-size: 16px; text-overflow: ellipsis; white-space: nowrap; }
+.previewHeaderActions { display: flex; flex: 0 0 auto; gap: 6px; }
+.previewBody { display: grid; min-height: 0; background: var(--surface-muted); }
+.previewImage, .previewVideo { display: block; width: 100%; height: 100%; min-height: 0; object-fit: contain; background: #172021; }
+.previewAudio { align-self: center; justify-self: center; width: min(440px, calc(100% - 32px)); }
+.previewPdf { width: 100%; height: 100%; border: 0; background: #fff; }
+.previewText { min-width: 0; margin: 0; overflow: auto; padding: 20px; color: var(--text); font-family: "SFMono-Regular", Consolas, "Liberation Mono", monospace; font-size: 13px; line-height: 1.5; tab-size: 2; white-space: pre-wrap; overflow-wrap: anywhere; }
+.previewStatus, .previewFallback { display: grid; align-self: center; justify-self: center; justify-items: center; gap: 10px; max-width: 440px; padding: 24px; color: var(--muted); text-align: center; }
+.previewStatus { grid-auto-flow: column; align-items: center; }
+.previewStatus svg { animation: spin 0.9s linear infinite; }
+.previewError { color: var(--danger); }
+.previewError svg { animation: none; }
+.previewFallback strong { color: var(--text); font-size: 15px; }
+.previewFallback dl { display: grid; width: 100%; gap: 6px; margin: 4px 0 0; font-size: 13px; text-align: left; }
+.previewFallback dl div { display: flex; justify-content: space-between; gap: 16px; border-top: 1px solid var(--line); padding-top: 6px; }
+.previewFallback dt { color: var(--muted); }
+.previewFallback dd { min-width: 0; margin: 0; overflow-wrap: anywhere; color: var(--text); }
+
 @media (max-width: 700px) {
   .explorerShell, .headerInner { width: min(100% - 24px, 1080px); }
   .explorerShell { padding-top: 14px; }
@@ -365,6 +386,8 @@ button:focus-visible, a:focus-visible, input:focus-visible, select:focus-visible
   .entryType, .entryDate { display: none; }
   .entryActions { width: 38px; margin-right: 4px; }
   .fileGrid { grid-template-columns: repeat(auto-fill, minmax(140px, 1fr)); gap: 8px; padding: 10px; }
+  .previewBackdrop { padding: 0; }
+  .previewOverlay { width: 100%; height: 100%; border: 0; border-radius: 0; }
 }
 
 @media (max-width: 420px) {
