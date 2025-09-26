@@ -1,6 +1,6 @@
 import { AlertCircle, Folder, LoaderCircle, RefreshCw } from 'lucide-react';
 import { useEffect, useMemo, useRef, useState } from 'react';
-import { childPath, getEntry } from '../api/entries';
+import { childPath, createFolder, deleteEntries, getEntry, moveEntries, patchEntry, setVisibility } from '../api/entries';
 import { useDirectory } from '../hooks/useDirectory';
 import { useExplorerLocation } from '../hooks/useExplorerLocation';
 import { useSelection } from '../hooks/useSelection';
@@ -11,7 +11,13 @@ import { EmptyState } from '../features/explorer/EmptyState';
 import { FileGrid } from '../features/explorer/FileGrid';
 import { FileList } from '../features/explorer/FileList';
 import { ExplorerToolbar, type ExplorerSort, type ExplorerView } from '../features/explorer/ExplorerToolbar';
+import { EntryActionMenu, type EntryAction } from '../features/explorer/EntryActionMenu';
+import { SelectionToolbar } from '../features/explorer/SelectionToolbar';
 import { LoginDialog } from '../features/explorer/LoginDialog';
+import { DeleteDialog } from '../features/operations/DeleteDialog';
+import { FolderPickerDialog } from '../features/operations/FolderPickerDialog';
+import { PropertiesDialog } from '../features/operations/PropertiesDialog';
+import { RenameDialog } from '../features/operations/RenameDialog';
 import { PreviewOverlay } from '../features/preview/PreviewOverlay';
 
 const VIEW_MODE_KEY = 'ilist.explorer.view';
@@ -64,6 +70,10 @@ export function ExplorerApp() {
   const [previewEntry, setPreviewEntry] = useState<Entry | null>(null);
   const [previewLoading, setPreviewLoading] = useState(false);
   const [previewError, setPreviewError] = useState<Error | null>(null);
+  const [menuEntry, setMenuEntry] = useState<Entry | null>(null);
+  const [dialog, setDialog] = useState<{ type: 'rename' | 'create' | 'move' | 'delete' | 'properties'; entries: Entry[] } | null>(null);
+  const [operationPending, setOperationPending] = useState(false);
+  const [operationNotice, setOperationNotice] = useState<string | null>(null);
 
   useEffect(() => {
     if (path !== '/admin') lastNonAdminPath.current = path;
@@ -95,6 +105,7 @@ export function ExplorerApp() {
   useEffect(() => {
     selection.clear();
     setQuery('');
+    setMenuEntry(null);
   }, [explorerPath, selection.clear]);
 
   const entries = useMemo(() => {
@@ -109,8 +120,29 @@ export function ExplorerApp() {
     onOpen: (entry: Entry) => openPath(childPath(explorerPath, entry.name)),
     onPreview: (entry: Entry) => openPreview(entry.id),
     onToggle: (entry: Entry) => selection.toggle(entry.id),
-    onMenu: (_entry: Entry) => undefined,
+    onMenu: (entry: Entry) => setMenuEntry(entry),
   };
+
+  const selectedEntries = entries.filter((entry) => selection.selectedIds.has(entry.id));
+  async function runBatch(operation: () => Promise<{ succeeded: string[]; failed: { id: string }[] }>) {
+    setOperationPending(true); setOperationNotice(null);
+    try {
+      const result = await operation();
+      if (result.failed.length) {
+        selection.replace(result.failed.map((failure) => failure.id));
+        setOperationNotice(`${result.succeeded.length} completed, ${result.failed.length} failed`);
+      } else {
+        selection.clear();
+        setOperationNotice(`${result.succeeded.length} completed`);
+      }
+      directory.refresh();
+    } catch (error) { setOperationNotice(error instanceof Error ? error.message : 'Operation failed.'); throw error; } finally { setOperationPending(false); }
+  }
+
+  function openEntryAction(action: EntryAction, entry: Entry) {
+    if (action === 'rename' || action === 'properties' || action === 'move' || action === 'delete') setDialog({ type: action, entries: [entry] });
+    if (action === 'publish' || action === 'hide') void runBatch(() => setVisibility([entry.id], action === 'publish'));
+  }
 
   async function submitLogin(username: string, password: string) {
     setLoginBusy(true);
@@ -141,7 +173,7 @@ export function ExplorerApp() {
       </header>
       <main className="explorerShell" id="file-explorer">
         {directory.data ? <Breadcrumbs items={directory.data.breadcrumbs} onOpen={openPath} /> : <div className="breadcrumbPlaceholder" aria-hidden="true" />}
-        <ExplorerToolbar
+        {admin && selection.selectedIds.size > 0 ? <SelectionToolbar count={selection.selectedIds.size} pending={operationPending} onMove={() => setDialog({ type: 'move', entries: selectedEntries })} onPublish={() => void runBatch(() => setVisibility(selectedEntries.map((entry) => entry.id), true))} onHide={() => void runBatch(() => setVisibility(selectedEntries.map((entry) => entry.id), false))} onDelete={() => setDialog({ type: 'delete', entries: selectedEntries })} onClear={selection.clear} /> : <ExplorerToolbar
           query={query}
           sort={sort}
           view={view}
@@ -152,8 +184,8 @@ export function ExplorerApp() {
           onView={setView}
           onLogin={() => openPath('/admin')}
           onUpload={() => undefined}
-          onCreateFolder={() => undefined}
-        />
+          onCreateFolder={() => setDialog({ type: 'create', entries: [] })}
+        />}
         <section className="explorerContent" aria-label={previewId ? `Files with preview ${previewId} selected` : 'Files'}>
           {directory.error && directory.data ? (
             <div className="retryBanner" role="alert">
@@ -162,6 +194,7 @@ export function ExplorerApp() {
               <button type="button" onClick={directory.refresh}><RefreshCw aria-hidden="true" size={15} />Retry</button>
             </div>
           ) : null}
+          {operationNotice ? <div className="operationNotice" role="status">{operationNotice}</div> : null}
           {directory.loading && !directory.data ? <LoadingRows /> : null}
           {directory.error && !directory.data ? (
             <div className="errorState" role="alert">
@@ -177,6 +210,12 @@ export function ExplorerApp() {
         </section>
       </main>
       <LoginDialog open={path === '/admin' && session.status !== 'admin'} busy={loginBusy} error={loginError} onClose={closeLogin} onSubmit={submitLogin} />
+      {menuEntry ? <EntryActionMenu entry={menuEntry} onOpen={handlers.onOpen} onPreview={handlers.onPreview} onAction={openEntryAction} onClose={() => setMenuEntry(null)} /> : null}
+      {dialog?.type === 'rename' ? <RenameDialog open title={`Rename ${dialog.entries[0].name}`} initialName={dialog.entries[0].name} onClose={() => setDialog(null)} onSubmit={async (name) => { await patchEntry(dialog.entries[0].id, { name }); directory.refresh(); }} /> : null}
+      {dialog?.type === 'create' && directory.data ? <RenameDialog open title="Create folder" submitLabel="Create" onClose={() => setDialog(null)} onSubmit={async (name) => { await createFolder(directory.data!.current.id, name); directory.refresh(); }} /> : null}
+      {dialog?.type === 'move' ? <FolderPickerDialog entries={dialog.entries} onClose={() => setDialog(null)} onSubmit={(destinationId) => runBatch(() => moveEntries(dialog.entries.map((entry) => entry.id), destinationId))} /> : null}
+      {dialog?.type === 'delete' ? <DeleteDialog entries={dialog.entries} onClose={() => setDialog(null)} onSubmit={() => runBatch(() => deleteEntries(dialog.entries.map((entry) => entry.id)))} /> : null}
+      {dialog?.type === 'properties' ? <PropertiesDialog entry={dialog.entries[0]} onClose={() => setDialog(null)} onSubmit={async (patch) => { await patchEntry(dialog.entries[0].id, patch); directory.refresh(); }} /> : null}
       {previewId ? <PreviewOverlay entry={previewEntry} loading={previewLoading} error={previewError} onClose={closePreview} /> : null}
     </>
   );

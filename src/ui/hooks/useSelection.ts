@@ -20,5 +20,9 @@ export function useSelection() {
     setSelectedIds(new Set());
   }, []);
 
-  return { selectedIds, toggle, selectAll, clear };
+  const replace = useCallback((ids: Iterable<string>) => {
+    setSelectedIds(new Set(ids));
+  }, []);
+
+  return { selectedIds, toggle, selectAll, clear, replace };
 }
