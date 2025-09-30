@@ -1,5 +1,5 @@
 import { ArrowDownAZ, Grid2X2, List, LogIn, Plus, Search, Upload } from 'lucide-react';
-import type { ChangeEvent } from 'react';
+import { useRef, type ChangeEvent } from 'react';
 import type { SessionStatus } from '../../hooks/useSession';
 
 export type ExplorerView = 'list' | 'grid';
@@ -16,7 +16,7 @@ interface ExplorerToolbarProps {
   onSort: (sort: ExplorerSort) => void;
   onView: (view: ExplorerView) => void;
   onLogin: () => void;
-  onUpload: () => void;
+  onUpload: (files: File[]) => void;
   onCreateFolder: () => void;
 }
 
@@ -34,6 +34,7 @@ export function ExplorerToolbar({
   onCreateFolder,
 }: ExplorerToolbarProps) {
   const admin = sessionStatus === 'admin';
+  const uploadInput = useRef<HTMLInputElement>(null);
 
   function updateSort(event: ChangeEvent<HTMLSelectElement>) {
     onSort({ ...sort, field: event.target.value as ExplorerSortField });
@@ -88,7 +89,11 @@ export function ExplorerToolbar({
         </div>
         {admin ? (
           <>
-            <button className="iconButton" type="button" title="Upload is coming soon" aria-label="Upload files" disabled onClick={onUpload}>
+            <input ref={uploadInput} className="srOnly" type="file" multiple tabIndex={-1} onChange={(event) => {
+              onUpload(Array.from(event.target.files ?? []));
+              event.target.value = '';
+            }} />
+            <button className="iconButton" type="button" title="Upload files" aria-label="Upload files" onClick={() => uploadInput.current?.click()}>
               <Upload aria-hidden="true" size={17} />
             </button>
             <button className="iconButton" type="button" title="Create folder" aria-label="Create folder" onClick={onCreateFolder}>
