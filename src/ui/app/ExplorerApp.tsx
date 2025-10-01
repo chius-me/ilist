@@ -11,7 +11,8 @@ import { EmptyState } from '../features/explorer/EmptyState';
 import { FileGrid } from '../features/explorer/FileGrid';
 import { FileList } from '../features/explorer/FileList';
 import { ExplorerToolbar, type ExplorerSort, type ExplorerView } from '../features/explorer/ExplorerToolbar';
-import { EntryActionMenu, type EntryAction } from '../features/explorer/EntryActionMenu';
+import { entryActions, EntryActionMenu, type EntryActionId } from '../features/explorer/EntryActionMenu';
+import { MobileActionSheet } from '../features/explorer/MobileActionSheet';
 import { SelectionToolbar } from '../features/explorer/SelectionToolbar';
 import { LoginDialog } from '../features/explorer/LoginDialog';
 import { DeleteDialog } from '../features/operations/DeleteDialog';
@@ -23,6 +24,19 @@ import { UploadPanel } from '../features/uploads/UploadPanel';
 import { useUploadQueue } from '../features/uploads/useUploadQueue';
 
 const VIEW_MODE_KEY = 'ilist.explorer.view';
+const MOBILE_ACTIONS_QUERY = '(max-width: 760px)';
+
+function useMobileActions() {
+  const [mobile, setMobile] = useState(() => window.matchMedia(MOBILE_ACTIONS_QUERY).matches);
+  useEffect(() => {
+    const media = window.matchMedia(MOBILE_ACTIONS_QUERY);
+    const update = () => setMobile(media.matches);
+    update();
+    media.addEventListener('change', update);
+    return () => media.removeEventListener('change', update);
+  }, []);
+  return mobile;
+}
 
 function storedViewMode(): ExplorerView {
   try {
@@ -78,6 +92,7 @@ export function ExplorerApp() {
   const [operationNotice, setOperationNotice] = useState<string | null>(null);
   const [dragOver, setDragOver] = useState(false);
   const dragDepth = useRef(0);
+  const mobileActions = useMobileActions();
 
   useEffect(() => {
     if (path !== '/admin') lastNonAdminPath.current = path;
@@ -183,10 +198,12 @@ export function ExplorerApp() {
     } catch (error) { setOperationNotice(error instanceof Error ? error.message : 'Operation failed.'); throw error; } finally { setOperationPending(false); }
   }
 
-  function openEntryAction(action: EntryAction, entry: Entry) {
+  function openEntryAction(action: EntryActionId, entry: Entry) {
     if (action === 'rename' || action === 'properties' || action === 'move' || action === 'delete') setDialog({ type: action, entries: [entry] });
     if (action === 'publish' || action === 'hide') void runBatch(() => setVisibility([entry.id], action === 'publish'));
   }
+
+  const currentEntryActions = menuEntry ? entryActions(menuEntry, { onOpen: handlers.onOpen, onPreview: handlers.onPreview, onAction: openEntryAction }) : [];
 
   async function submitLogin(username: string, password: string) {
     setLoginBusy(true);
@@ -208,7 +225,7 @@ export function ExplorerApp() {
 
   return (
     <>
-      <a className="skipLink" href="#file-explorer">Skip to files</a>
+      <a className="skipLink" href="#file-list">Skip to files</a>
       <header className="siteHeader">
         <div className="headerInner">
           <button className="siteName" type="button" onClick={() => openPath('/')} aria-label="Open ilist root"><Folder aria-hidden="true" size={19} />ilist</button>
@@ -230,7 +247,7 @@ export function ExplorerApp() {
           onUpload={enqueueFiles}
           onCreateFolder={() => setDialog({ type: 'create', entries: [] })}
         />}
-        <section className={`explorerContent${dragOver ? ' isDragOver' : ''}`} aria-label={previewId ? `Files with preview ${previewId} selected` : 'Files'} onDragEnter={onDragEnter} onDragOver={onDragOver} onDragLeave={onDragLeave} onDrop={onDrop}>
+        <section className={`explorerContent${dragOver ? ' isDragOver' : ''}`} id="file-list" tabIndex={-1} aria-label={previewId ? `Files with preview ${previewId} selected` : 'Files'} onDragEnter={onDragEnter} onDragOver={onDragOver} onDragLeave={onDragLeave} onDrop={onDrop}>
           {directory.error && directory.data ? (
             <div className="retryBanner" role="alert">
               <AlertCircle aria-hidden="true" size={18} />
@@ -238,7 +255,7 @@ export function ExplorerApp() {
               <button type="button" onClick={directory.refresh}><RefreshCw aria-hidden="true" size={15} />Retry</button>
             </div>
           ) : null}
-          {operationNotice ? <div className="operationNotice" role="status">{operationNotice}</div> : null}
+          {operationNotice ? <div className="operationNotice" role="status" aria-live="polite">{operationNotice}</div> : null}
           {directory.loading && !directory.data ? <LoadingRows /> : null}
           {directory.error && !directory.data ? (
             <div className="errorState" role="alert">
@@ -255,7 +272,8 @@ export function ExplorerApp() {
       </main>
       <UploadPanel tasks={uploads.tasks} onCancel={uploads.cancel} onRetry={uploads.retry} onRemove={uploads.remove} onClearCompleted={uploads.clearCompleted} />
       <LoginDialog open={path === '/admin' && session.status !== 'admin'} busy={loginBusy} error={loginError} onClose={closeLogin} onSubmit={submitLogin} />
-      {menuEntry ? <EntryActionMenu entry={menuEntry} onOpen={handlers.onOpen} onPreview={handlers.onPreview} onAction={openEntryAction} onClose={() => setMenuEntry(null)} /> : null}
+      {menuEntry && !mobileActions ? <EntryActionMenu entry={menuEntry} actions={currentEntryActions} onClose={() => setMenuEntry(null)} /> : null}
+      {menuEntry && mobileActions ? <MobileActionSheet open title={`Actions for ${menuEntry.name}`} actions={currentEntryActions} onClose={() => setMenuEntry(null)} /> : null}
       {dialog?.type === 'rename' ? <RenameDialog open title={`Rename ${dialog.entries[0].name}`} initialName={dialog.entries[0].name} onClose={() => setDialog(null)} onSubmit={async (name) => { await patchEntry(dialog.entries[0].id, { name }); directory.refresh(); }} /> : null}
       {dialog?.type === 'create' && directory.data ? <RenameDialog open title="Create folder" submitLabel="Create" onClose={() => setDialog(null)} onSubmit={async (name) => { await createFolder(directory.data!.current.id, name); directory.refresh(); }} /> : null}
       {dialog?.type === 'move' ? <FolderPickerDialog entries={dialog.entries} onClose={() => setDialog(null)} onSubmit={(destinationId) => runBatch(() => moveEntries(dialog.entries.map((entry) => entry.id), destinationId))} /> : null}

@@ -26,12 +26,12 @@ html { background: var(--bg); }
 
 body {
   min-width: 320px;
-  min-height: 100vh;
+  min-height: 100dvh;
   margin: 0;
   background: var(--bg);
 }
 
-button, input, select { font: inherit; }
+button, input, select, textarea { font: inherit; }
 button, a { color: inherit; }
 button { cursor: pointer; }
 button:disabled { cursor: not-allowed; opacity: 0.48; }
@@ -40,7 +40,7 @@ button, a, input, select {
   transition: border-color var(--transition), background var(--transition), color var(--transition), box-shadow var(--transition), transform var(--transition);
 }
 
-button:focus-visible, a:focus-visible, input:focus-visible, select:focus-visible {
+button:focus-visible, a:focus-visible, input:focus-visible, select:focus-visible, textarea:focus-visible {
   outline: 3px solid rgba(15, 107, 95, 0.34);
   outline-offset: 2px;
 }
@@ -356,10 +356,20 @@ button:focus-visible, a:focus-visible, input:focus-visible, select:focus-visible
 .selectionActions { display: flex; align-items: center; justify-content: flex-end; gap: 6px; }
 .operationNotice { border-bottom: 1px solid #bed8d0; background: var(--accent-soft); color: var(--accent-strong); padding: 8px 12px; font-size: 13px; }
 
-.actionMenu { position: fixed; z-index: 25; right: max(16px, calc((100vw - 1080px) / 2)); top: 112px; display: grid; min-width: 190px; border: 1px solid var(--line-strong); border-radius: var(--radius); background: #fff; box-shadow: 0 12px 30px rgba(26, 39, 34, 0.18); padding: 4px; }
+.actionMenu { position: fixed; z-index: 25; right: max(16px, calc((100vw - 1080px) / 2)); top: 112px; display: grid; min-width: 190px; max-height: calc(100dvh - 128px); overflow-y: auto; border: 1px solid var(--line-strong); border-radius: var(--radius); background: #fff; box-shadow: 0 12px 30px rgba(26, 39, 34, 0.18); padding: 4px; }
 .actionMenu button, .actionMenu a { display: flex; align-items: center; min-height: 34px; gap: 8px; border: 0; border-radius: 4px; background: transparent; padding: 6px 8px; color: var(--text); font-size: 13px; text-align: left; text-decoration: none; }
 .actionMenu button:hover, .actionMenu a:hover { background: #eff5f2; }
 .actionMenu .destructive { margin-top: 4px; border-top: 1px solid var(--line); color: var(--danger); }
+
+.mobileActionBackdrop { position: fixed; inset: 0; z-index: 25; display: flex; align-items: end; background: rgba(21, 32, 30, 0.32); }
+.mobileActionSheet { display: grid; width: 100%; max-height: min(80dvh, 560px); overflow-y: auto; border-radius: 8px 8px 0 0; background: var(--surface); box-shadow: 0 -12px 30px rgba(26, 39, 34, 0.2); padding: 8px 12px max(12px, env(safe-area-inset-bottom)); }
+.mobileActionSheetHandle { justify-self: center; width: 36px; height: 4px; border-radius: 2px; background: var(--line-strong); margin: 2px 0 8px; }
+.mobileActionSheet h2 { margin: 0 4px 8px; overflow: hidden; font-size: 15px; text-overflow: ellipsis; white-space: nowrap; }
+.mobileActionList { display: grid; gap: 2px; }
+.mobileAction, .mobileActionCancel { display: flex; align-items: center; width: 100%; min-height: 44px; gap: 10px; border: 0; border-radius: 4px; background: transparent; padding: 10px; color: var(--text); font-size: 14px; font-weight: 650; text-align: left; text-decoration: none; }
+.mobileAction:hover, .mobileActionCancel:hover { background: #eff5f2; }
+.mobileAction.destructive { color: var(--danger); }
+.mobileActionCancel { justify-content: center; margin-top: 8px; border-top: 1px solid var(--line); text-align: center; }
 
 .operationDialog { width: min(100%, 440px); border: 1px solid var(--line-strong); border-radius: var(--radius); background: #fff; box-shadow: 0 18px 48px rgba(26, 39, 34, 0.2); }
 .operationDialog form, .dialogBody { display: grid; gap: 14px; padding: 16px; }
@@ -378,7 +388,7 @@ button:focus-visible, a:focus-visible, input:focus-visible, select:focus-visible
 .folderPicker button:hover:not(:disabled) { background: #f0f6f3; }
 .folderPicker span { padding: 12px; color: var(--muted); font-size: 13px; }
 
-.dialogBackdrop { position: fixed; inset: 0; z-index: 20; display: grid; place-items: center; background: rgba(21, 32, 30, 0.32); padding: 16px; }
+.dialogBackdrop { position: fixed; inset: 0; z-index: 20; display: grid; place-items: center; overflow-y: auto; background: rgba(21, 32, 30, 0.32); padding: max(16px, env(safe-area-inset-top)) 16px max(16px, env(safe-area-inset-bottom)); }
 .loginDialog { width: min(100%, 360px); border: 1px solid var(--line-strong); border-radius: var(--radius); background: #fff; box-shadow: 0 18px 48px rgba(26, 39, 34, 0.2); }
 .dialogHeader { display: flex; align-items: center; justify-content: space-between; min-height: 52px; border-bottom: 1px solid var(--line); padding: 8px 10px 8px 16px; }
 .dialogHeader h2 { margin: 0; font-size: 16px; }
@@ -388,7 +398,7 @@ button:focus-visible, a:focus-visible, input:focus-visible, select:focus-visible
 .formError { margin: -3px 0 0; color: var(--danger); font-size: 13px; }
 
 .previewBackdrop { position: fixed; inset: 0; z-index: 30; display: grid; place-items: center; background: rgba(21, 32, 30, 0.42); padding: 20px; }
-.previewOverlay { display: grid; grid-template-rows: auto minmax(0, 1fr); width: min(100%, 1040px); height: min(100%, 760px); overflow: hidden; border: 1px solid var(--line-strong); border-radius: var(--radius); background: var(--surface); box-shadow: 0 18px 48px rgba(26, 39, 34, 0.25); }
+.previewOverlay { display: grid; grid-template-rows: auto minmax(0, 1fr); width: min(100%, 1040px); height: min(calc(100dvh - 40px), 760px); overflow: hidden; border: 1px solid var(--line-strong); border-radius: var(--radius); background: var(--surface); box-shadow: 0 18px 48px rgba(26, 39, 34, 0.25); }
 .previewHeader { display: flex; align-items: center; min-width: 0; min-height: 54px; gap: 12px; border-bottom: 1px solid var(--line); padding: 8px 10px 8px 16px; }
 .previewHeader h2 { flex: 1 1 auto; min-width: 0; margin: 0; overflow: hidden; font-size: 16px; text-overflow: ellipsis; white-space: nowrap; }
 .previewHeaderActions { display: flex; flex: 0 0 auto; gap: 6px; }
@@ -411,7 +421,7 @@ button:focus-visible, a:focus-visible, input:focus-visible, select:focus-visible
 .uploadPanel { position: fixed; z-index: 15; right: max(16px, calc((100vw - 1080px) / 2)); bottom: 16px; width: min(380px, calc(100vw - 32px)); overflow: hidden; border: 1px solid var(--line-strong); border-radius: var(--radius); background: #fff; box-shadow: 0 12px 30px rgba(26, 39, 34, 0.2); }
 .uploadPanelHeader { display: flex; align-items: center; min-height: 44px; border-bottom: 1px solid var(--line); background: #f5f8f6; padding: 5px 6px 5px 12px; }
 .uploadPanelToggle { display: inline-flex; flex: 1 1 auto; align-items: center; justify-content: space-between; min-width: 0; gap: 8px; border: 0; background: transparent; color: var(--text); padding: 5px 2px; font-size: 13px; font-weight: 700; text-align: left; }
-.uploadTasks { max-height: min(360px, calc(100vh - 120px)); margin: 0; overflow-y: auto; padding: 0; list-style: none; }
+.uploadTasks { max-height: min(360px, calc(100dvh - 120px)); margin: 0; overflow-y: auto; padding: 0; list-style: none; }
 .uploadTask { display: flex; align-items: center; min-height: 66px; gap: 8px; border-bottom: 1px solid #e7ece9; padding: 8px 8px 8px 12px; }
 .uploadTask:last-child { border-bottom: 0; }
 .uploadTaskDetails { display: grid; flex: 1 1 auto; min-width: 0; gap: 3px; }
@@ -422,7 +432,7 @@ button:focus-visible, a:focus-visible, input:focus-visible, select:focus-visible
 .uploadProgress { height: 4px; overflow: hidden; border-radius: 2px; background: #dce7e2; }
 .uploadProgress span { display: block; height: 100%; background: var(--accent); transition: width 120ms linear; }
 
-@media (max-width: 700px) {
+@media (max-width: 760px) {
   .explorerShell, .headerInner { width: min(100% - 24px, 1080px); }
   .explorerShell { padding-top: 14px; }
   .explorerToolbar { align-items: stretch; flex-wrap: wrap; }
@@ -430,25 +440,35 @@ button:focus-visible, a:focus-visible, input:focus-visible, select:focus-visible
   .toolbarActions { width: 100%; justify-content: flex-start; }
   .selectionToolbar { align-items: flex-start; flex-direction: column; }
   .selectionActions { width: 100%; justify-content: flex-start; flex-wrap: wrap; }
-  .actionMenu { right: 12px; top: auto; bottom: 12px; width: min(100% - 24px, 360px); }
-  .entryPrimary { grid-template-columns: 32px minmax(0, 1fr) 60px; }
+  .explorerShell, .headerInner { width: calc(100% - 24px); }
+  .entryPrimary { grid-template-columns: 32px minmax(0, 1fr) 60px; gap: 8px; padding: 7px 8px; }
   .entryType, .entryDate { display: none; }
-  .entryActions { width: 38px; margin-right: 4px; }
-  .fileGrid { grid-template-columns: repeat(auto-fill, minmax(140px, 1fr)); gap: 8px; padding: 10px; }
+  .entrySize { grid-column: 2; font-size: 11px; }
+  .entryActions { width: 44px; margin-right: 2px; }
+  .entryActions .iconButton { width: 40px; height: 40px; flex-basis: 40px; }
+  .entrySelect { width: 40px; min-height: 52px; opacity: 1; }
+  .fileGrid { grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 8px; padding: 10px; }
   .previewBackdrop { padding: 0; }
-  .previewOverlay { width: 100%; height: 100%; border: 0; border-radius: 0; }
+  .previewOverlay { width: 100%; height: 100dvh; border: 0; border-radius: 0; }
   .uploadPanel { right: 0; bottom: 0; width: 100%; border-right: 0; border-bottom: 0; border-left: 0; border-radius: var(--radius) var(--radius) 0 0; }
   .uploadTasks { max-height: min(52vh, 400px); }
+  .operationDialog, .loginDialog { align-self: end; width: 100%; max-height: calc(100dvh - 16px); overflow-y: auto; border-radius: 8px 8px 0 0; }
+  .dialogBackdrop { align-items: end; padding: 16px 0 0; }
 }
 
-@media (max-width: 420px) {
+@media (max-width: 480px) {
   .sessionIndicator { display: none; }
   .toolbarActions { gap: 5px; }
   .selectionActions .button { flex: 1 1 auto; }
   .sortControl { flex: 1 1 auto; }
   .sortControl select { width: 100%; }
-  .entryPrimary { grid-template-columns: 32px minmax(0, 1fr); gap: 8px; padding-left: 8px; padding-right: 6px; }
-  .entrySize { display: none; }
-  .entryActions { display: none; }
-  .entryRow:has(.entrySelect) { grid-template-columns: 34px minmax(0, 1fr); }
+  .entryPrimary { grid-template-columns: 32px minmax(0, 1fr); }
+  .entrySize { display: block; }
+  .entryActions { display: flex; }
+  .entryRow:has(.entrySelect) { grid-template-columns: 40px minmax(0, 1fr) 44px; }
+  .fileGrid { grid-template-columns: minmax(0, 1fr); }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  *, *::before, *::after { animation-duration: 0.01ms !important; animation-iteration-count: 1 !important; scroll-behavior: auto !important; transition-duration: 0.01ms !important; }
 }

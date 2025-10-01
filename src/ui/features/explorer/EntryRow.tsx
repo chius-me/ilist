@@ -54,7 +54,7 @@ export function EntryRow({
       <button className="entryPrimary" type="button" onClick={activate}>
         <span className={`entryIcon ${isFolder ? 'folder' : 'file'}`}><EntryIcon entry={entry} /></span>
         <span className="entryName">
-          <strong>{entry.name}</strong>
+          <strong title={entry.name}>{entry.name}</strong>
           {entry.description ? <small>{entry.description}</small> : null}
         </span>
         <span className="entryType">{isFolder ? 'Folder' : entry.contentType || 'File'}</span>
