@@ -108,7 +108,7 @@ export async function currentUser(env: Env, request: Request): Promise<AdminUser
 
 export async function requireAdmin(env: Env, request: Request): Promise<AdminUser> {
   const user = await currentUser(env, request);
-  if (!user) throw new HttpError(401, 'Authentication required');
+  if (!user) throw new HttpError(401, 'AUTH_REQUIRED', 'Authentication required');
   return user;
 }
 
