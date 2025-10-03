@@ -14,4 +14,4 @@ CREATE TABLE IF NOT EXISTS mounts (
 );
 
 CREATE UNIQUE INDEX IF NOT EXISTS mounts_mount_path_unique ON mounts(mount_path);
-CREATE UNIQUE INDEX IF NOT EXISTS mounts_name_normalized_unique ON mounts(LOWER(name));
+CREATE UNIQUE INDEX IF NOT EXISTS mounts_name_normalized_unique ON mounts(LOWER(TRIM(name)));

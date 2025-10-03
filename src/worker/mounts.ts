@@ -44,6 +44,9 @@ export function normalizeMountPath(input: string): string {
   if (!segment || segment.includes('/')) {
     throw new HttpError(400, 'INVALID_MOUNT_PATH', 'Mount path must contain a single segment');
   }
+  if (segment === '.' || segment === '..') {
+    throw new HttpError(400, 'INVALID_MOUNT_PATH', 'Mount path cannot be a dot segment');
+  }
   if (CONTROL_CHARACTERS.test(segment)) {
     throw new HttpError(400, 'INVALID_MOUNT_PATH', 'Mount path cannot contain control characters');
   }

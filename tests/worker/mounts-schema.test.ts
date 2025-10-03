@@ -42,5 +42,6 @@ describe('mounts schema', () => {
     await insert('one', 'Photos', '/photos');
     await expect(insert('two', 'Other', '/photos')).rejects.toThrow();
     await expect(insert('three', 'photos', '/other')).rejects.toThrow();
+    await expect(insert('four', ' Photos ', '/trimmed')).rejects.toThrow();
   });
 });
