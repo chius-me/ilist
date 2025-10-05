@@ -4,6 +4,7 @@ export interface Env {
   ASSETS: Fetcher;
   ADMIN_USERNAME?: string;
   ADMIN_PASSWORD_HASH: string;
+  CREDENTIAL_MASTER_KEY: string;
   SESSION_SECRET: string;
   SESSION_TTL_SECONDS?: string;
 }
