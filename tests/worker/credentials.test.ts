@@ -1,6 +1,5 @@
 import { beforeEach, describe, expect, it } from 'vitest';
 import { env } from 'cloudflare:test';
-import credentialsSchema from '../../migrations/0009_storage_credentials.sql?raw';
 import { createMount } from '../../src/worker/mounts';
 import type { Env } from '../../src/worker/types';
 
@@ -17,13 +16,26 @@ async function createTestMount(): Promise<string> {
   return mount.id;
 }
 
-beforeEach(async () => {
-  await workerEnv().DB.prepare(credentialsSchema).run();
-  await workerEnv().DB.prepare('DELETE FROM storage_credentials').run();
-  await workerEnv().DB.prepare('DELETE FROM mounts').run();
+describe('standard worker setup', () => {
+  it('applies the storage credentials migration', async () => {
+    const result = await workerEnv().DB.prepare('PRAGMA table_info(storage_credentials)').all<{ name: string }>();
+
+    expect(result.results.map((column) => column.name)).toEqual([
+      'mount_id',
+      'ciphertext',
+      'key_version',
+      'created_at',
+      'updated_at',
+    ]);
+  });
 });
 
 describe('storage credentials', () => {
+  beforeEach(async () => {
+    await workerEnv().DB.prepare('DELETE FROM storage_credentials').run();
+    await workerEnv().DB.prepare('DELETE FROM mounts').run();
+  });
+
   it('round trips credentials without storing plaintext', async () => {
     const { getCredentials, putCredentials } = await import('../../src/worker/credentials');
     const mountId = await createTestMount();
