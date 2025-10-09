@@ -1,7 +1,24 @@
-import { deleteCredentials, getCredentials, putCredentials, type StorageCredentials } from './credentials';
+import {
+  deleteCredentials,
+  getCredentials,
+  prepareDeleteCredentials,
+  preparePutCredentials,
+  putCredentials,
+  type StorageCredentials,
+} from './credentials';
 import { createDriver } from './drivers/registry';
 import { fail, HttpError, noContent, ok, readJson } from './http';
-import { createMount, deleteMount, getMount, listMounts, updateMount, type CreateMountInput, type UpdateMountInput } from './mounts';
+import {
+  createMount,
+  deleteMount,
+  getMount,
+  listMounts,
+  prepareMountDelete,
+  prepareMountUpdate,
+  rethrowMountWriteError,
+  type CreateMountInput,
+  type UpdateMountInput,
+} from './mounts';
 import type { Env, Mount, MountDriverType } from './types';
 
 interface MountRequestBody {
@@ -90,7 +107,10 @@ function validateS3Endpoint(endpoint: string): void {
     invalidRequest('INVALID_MOUNT_CONFIG', 'S3 endpoint is invalid');
   }
 
-  const localHost = url.hostname === 'localhost' || url.hostname === '127.0.0.1' || url.hostname === '::1';
+  const localHost = url.hostname === 'localhost'
+    || url.hostname === '127.0.0.1'
+    || url.hostname === '::1'
+    || url.hostname === '[::1]';
   if ((url.protocol !== 'https:' && !(url.protocol === 'http:' && localHost)) || url.username || url.password || url.search || url.hash) {
     invalidRequest('INVALID_MOUNT_CONFIG', 'S3 endpoint must use HTTPS');
   }
@@ -260,8 +280,10 @@ export async function handleMountRoutes(request: Request, env: Env, url: URL): P
   if (id === null) return null;
   if (request.method === 'DELETE') {
     const mount = await requireMount(env, id);
-    await deleteCredentials(env, mount.id);
-    await deleteMount(env.DB, mount.id);
+    await env.DB.batch([
+      prepareDeleteCredentials(env.DB, mount.id),
+      prepareMountDelete(env.DB, mount.id),
+    ]);
     return noContent();
   }
   if (request.method !== 'PATCH') return methodNotAllowed();
@@ -276,9 +298,19 @@ export async function handleMountRoutes(request: Request, env: Env, url: URL): P
     await getCredentials(env, current.id),
     selectedDriver !== current.driverType,
   );
-  const mount = await updateMount(env.DB, current.id, input);
+  const update = await prepareMountUpdate(env.DB, current.id, input);
+  if (!update) throw new HttpError(404, 'MOUNT_NOT_FOUND', 'Mount not found');
+  const credentialStatement = credentials === null
+    ? prepareDeleteCredentials(env.DB, update.id)
+    : credentials
+      ? await preparePutCredentials(env, update.id, credentials)
+      : null;
+  try {
+    await env.DB.batch([update.statement, ...(credentialStatement ? [credentialStatement] : [])]);
+  } catch (error) {
+    await rethrowMountWriteError(env.DB, error, update);
+  }
+  const mount = await getMount(env.DB, update.id);
   if (!mount) throw new HttpError(404, 'MOUNT_NOT_FOUND', 'Mount not found');
-  if (credentials === null) await deleteCredentials(env, mount.id);
-  if (credentials) await putCredentials(env, mount.id, credentials);
   return ok(mountToApi(mount));
 }
