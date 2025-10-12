@@ -23,10 +23,11 @@ import {
   reserveLegacyObjectMutation,
   upsertObject,
 } from './db';
-import { entryToApi, isEffectivelyPublic, listDirectory } from './entries';
+import { entryToApi, isEffectivelyPublic } from './entries';
 import {
   createFolder,
   deleteEntryTrees,
+  listVirtualDirectory,
   moveEntries,
   patchEntry,
   reconcileStorageRecovery,
@@ -218,7 +219,7 @@ async function handleFilesystem(request: Request, env: Env, url: URL): Promise<R
   const admin = Boolean(await currentUser(env, request));
 
   if (url.pathname === '/api/fs/list') {
-    return ok(await listDirectory(env.DB, url.searchParams.get('path') ?? '/', admin));
+    return ok(await listVirtualDirectory(env.DB, url.searchParams.get('path') ?? '/', admin));
   }
 
   const match = /^\/api\/fs\/entries\/(.+)$/.exec(url.pathname);

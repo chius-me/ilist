@@ -128,6 +128,19 @@ export interface DirectoryResponse {
   items: Entry[];
 }
 
+export interface MountEntry extends Entry {
+  mountId: string;
+  mountPath: string;
+  driverType: MountDriverType;
+  provider: string;
+}
+
+export interface VirtualDirectoryResponse {
+  current: Entry | MountEntry;
+  breadcrumbs: Breadcrumb[];
+  items: Array<Entry | MountEntry>;
+}
+
 export interface BatchFailure {
   id: string;
   code: string;
