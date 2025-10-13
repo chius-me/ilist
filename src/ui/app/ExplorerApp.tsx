@@ -1,11 +1,11 @@
 import { AlertCircle, Folder, LoaderCircle, RefreshCw } from 'lucide-react';
 import { useEffect, useMemo, useRef, useState, type DragEvent } from 'react';
-import { childPath, createFolder, deleteEntries, getEntry, moveEntries, patchEntry, setVisibility } from '../api/entries';
+import { createFolder, deleteEntries, entryPath, getEntry, moveEntries, patchEntry, setVisibility } from '../api/entries';
 import { useDirectory } from '../hooks/useDirectory';
 import { useExplorerLocation } from '../hooks/useExplorerLocation';
 import { useSelection } from '../hooks/useSelection';
 import { useSession } from '../hooks/useSession';
-import type { Entry } from '../types/entries';
+import { isEntryMutable, type Entry } from '../types/entries';
 import { Breadcrumbs } from '../features/explorer/Breadcrumbs';
 import { EmptyState } from '../features/explorer/EmptyState';
 import { FileGrid } from '../features/explorer/FileGrid';
@@ -135,28 +135,30 @@ export function ExplorerApp() {
   }, [directory.data, query, sort]);
 
   const admin = session.status === 'admin';
+  const canUpload = admin && directory.data?.current.capabilities.upload === true;
+  const canCreateFolder = admin && directory.data?.current.capabilities.createFolder === true;
   const uploads = useUploadQueue({
-    canUpload: admin,
+    canUpload,
     existingNames: directory.data?.items.map((entry) => entry.name) ?? [],
     onCompleted: (parentId) => {
       if (directory.data?.current.id === parentId) directory.refresh();
     },
   });
   const handlers = {
-    onOpen: (entry: Entry) => openPath(childPath(explorerPath, entry.name)),
+    onOpen: (entry: Entry) => openPath(entryPath(explorerPath, entry)),
     onPreview: (entry: Entry) => openPreview(entry.id),
-    onToggle: (entry: Entry) => selection.toggle(entry.id),
+    onToggle: (entry: Entry) => { if (isEntryMutable(entry)) selection.toggle(entry.id); },
     onMenu: (entry: Entry) => setMenuEntry(entry),
   };
 
-  const selectedEntries = entries.filter((entry) => selection.selectedIds.has(entry.id));
+  const selectedEntries = entries.filter((entry) => selection.selectedIds.has(entry.id) && isEntryMutable(entry));
 
   function enqueueFiles(files: File[]) {
-    if (directory.data) uploads.enqueue(directory.data.current.id, files);
+    if (directory.data && canUpload) uploads.enqueue(directory.data.current.id, files);
   }
 
   function acceptsFiles(event: DragEvent<HTMLElement>): boolean {
-    return admin && Array.from(event.dataTransfer.types).includes('Files');
+    return canUpload && Array.from(event.dataTransfer.types).includes('Files');
   }
 
   function onDragEnter(event: DragEvent<HTMLElement>) {
@@ -234,12 +236,14 @@ export function ExplorerApp() {
       </header>
       <main className="explorerShell" id="file-explorer">
         {directory.data ? <Breadcrumbs items={directory.data.breadcrumbs} onOpen={openPath} /> : <div className="breadcrumbPlaceholder" aria-hidden="true" />}
-        {admin && selection.selectedIds.size > 0 ? <SelectionToolbar count={selection.selectedIds.size} pending={operationPending} onMove={() => setDialog({ type: 'move', entries: selectedEntries })} onPublish={() => void runBatch(() => setVisibility(selectedEntries.map((entry) => entry.id), true))} onHide={() => void runBatch(() => setVisibility(selectedEntries.map((entry) => entry.id), false))} onDelete={() => setDialog({ type: 'delete', entries: selectedEntries })} onClear={selection.clear} /> : <ExplorerToolbar
+        {admin && selectedEntries.length > 0 ? <SelectionToolbar count={selectedEntries.length} pending={operationPending} onMove={() => setDialog({ type: 'move', entries: selectedEntries })} onPublish={() => void runBatch(() => setVisibility(selectedEntries.map((entry) => entry.id), true))} onHide={() => void runBatch(() => setVisibility(selectedEntries.map((entry) => entry.id), false))} onDelete={() => setDialog({ type: 'delete', entries: selectedEntries })} onClear={selection.clear} /> : <ExplorerToolbar
           query={query}
           sort={sort}
           view={view}
           sessionStatus={session.status}
-          selectionCount={selection.selectedIds.size}
+          selectionCount={selectedEntries.length}
+          canUpload={canUpload}
+          canCreateFolder={canCreateFolder}
           onQuery={setQuery}
           onSort={setSort}
           onView={setView}
@@ -275,7 +279,7 @@ export function ExplorerApp() {
       {menuEntry && !mobileActions ? <EntryActionMenu entry={menuEntry} actions={currentEntryActions} onClose={() => setMenuEntry(null)} /> : null}
       {menuEntry && mobileActions ? <MobileActionSheet open title={`Actions for ${menuEntry.name}`} actions={currentEntryActions} onClose={() => setMenuEntry(null)} /> : null}
       {dialog?.type === 'rename' ? <RenameDialog open title={`Rename ${dialog.entries[0].name}`} initialName={dialog.entries[0].name} onClose={() => setDialog(null)} onSubmit={async (name) => { await patchEntry(dialog.entries[0].id, { name }); directory.refresh(); }} /> : null}
-      {dialog?.type === 'create' && directory.data ? <RenameDialog open title="Create folder" submitLabel="Create" onClose={() => setDialog(null)} onSubmit={async (name) => { await createFolder(directory.data!.current.id, name); directory.refresh(); }} /> : null}
+      {dialog?.type === 'create' && directory.data && canCreateFolder ? <RenameDialog open title="Create folder" submitLabel="Create" onClose={() => setDialog(null)} onSubmit={async (name) => { await createFolder(directory.data!.current.id, name); directory.refresh(); }} /> : null}
       {dialog?.type === 'move' ? <FolderPickerDialog entries={dialog.entries} onClose={() => setDialog(null)} onSubmit={(destinationId) => runBatch(() => moveEntries(dialog.entries.map((entry) => entry.id), destinationId))} /> : null}
       {dialog?.type === 'delete' ? <DeleteDialog entries={dialog.entries} onClose={() => setDialog(null)} onSubmit={() => runBatch(() => deleteEntries(dialog.entries.map((entry) => entry.id)))} /> : null}
       {dialog?.type === 'properties' ? <PropertiesDialog entry={dialog.entries[0]} onClose={() => setDialog(null)} onSubmit={async (patch) => { await patchEntry(dialog.entries[0].id, patch); directory.refresh(); }} /> : null}

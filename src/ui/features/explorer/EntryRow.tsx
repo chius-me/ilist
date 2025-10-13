@@ -1,5 +1,5 @@
 import { Download, File, FileText, Folder, Image, MoreHorizontal } from 'lucide-react';
-import type { Entry } from '../../types/entries';
+import { isEntryMutable, type Entry } from '../../types/entries';
 
 export interface EntryHandlers {
   onOpen: (entry: Entry) => void;
@@ -41,11 +41,12 @@ export function EntryRow({
   onMenu,
 }: EntryHandlers & { entry: Entry; selected: boolean; admin: boolean }) {
   const isFolder = entry.kind === 'folder';
+  const selectable = admin && isEntryMutable(entry);
   const activate = () => (isFolder ? onOpen(entry) : onPreview(entry));
 
   return (
     <li className={`entryRow ${selected ? 'isSelected' : ''}`} onContextMenu={(event) => { if (admin) { event.preventDefault(); onMenu(entry); } }}>
-      {admin ? (
+      {selectable ? (
         <label className="entrySelect">
           <span className="srOnly">Select {entry.name}</span>
           <input type="checkbox" checked={selected} onChange={() => onToggle(entry)} />

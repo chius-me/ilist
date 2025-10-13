@@ -1,6 +1,5 @@
 import { env } from 'cloudflare:test';
 import { describe, expect, it, vi } from 'vitest';
-import nativeR2CompatibilityMount from '../../migrations/0010_native_r2_compat_mount.sql?raw';
 import { driverRegistry } from '../../src/worker/drivers/registry';
 import {
   createFolder,
@@ -15,34 +14,9 @@ import type { Env } from '../../src/worker/types';
 
 const db = () => (env as unknown as Env).DB;
 
-async function applyNativeR2CompatibilityMount(): Promise<void> {
-  await db().prepare(nativeR2CompatibilityMount).run();
-}
-
 describe('virtual mount file system', () => {
-  it('creates exactly one deterministic native R2 compatibility mount', async () => {
-    await db().prepare('DELETE FROM mounts').run();
-
-    await applyNativeR2CompatibilityMount();
-    await applyNativeR2CompatibilityMount();
-
-    const result = await db().prepare("SELECT * FROM mounts WHERE driver_type = 'native-r2'").all();
-    expect(result.results).toHaveLength(1);
-    expect(result.results[0]).toMatchObject({
-      id: 'native-r2',
-      name: 'R2',
-      mount_path: '/R2',
-      driver_type: 'native-r2',
-      provider: 'cloudflare-r2',
-      enabled: 1,
-      is_public: 1,
-      root_item_id: 'root',
-    });
-  });
-
   it('lists only visible enabled mounts without contacting their providers', async () => {
-    await db().prepare('DELETE FROM mounts').run();
-    await applyNativeR2CompatibilityMount();
+    await db().prepare("DELETE FROM mounts WHERE id <> 'native-r2'").run();
     await createMount(db(), {
       name: 'Private Archive',
       mountPath: '/private-archive',
@@ -73,6 +47,7 @@ describe('virtual mount file system', () => {
 
     try {
       const guest = await listVirtualDirectory(db(), '/', false);
+      expect(guest.current).toMatchObject({ id: 'virtual-root', mountPath: null });
       expect(guest.items.map((item) => item.name)).toEqual(['R2', 'Unavailable Public']);
 
       const admin = await listVirtualDirectory(db(), '/', true);
@@ -94,8 +69,7 @@ describe('virtual mount file system', () => {
   });
 
   it('keeps the existing entry tree reachable beneath the native R2 mount', async () => {
-    await db().prepare('DELETE FROM mounts').run();
-    await applyNativeR2CompatibilityMount();
+    await db().prepare("DELETE FROM mounts WHERE id <> 'native-r2'").run();
     const publicFolder = await createFolder(db(), { parentId: 'root', name: 'Public' });
     const privateFolder = await createFolder(db(), { parentId: 'root', name: 'Private' });
     await setEntriesVisibility(db(), [privateFolder.id], false);
@@ -108,12 +82,12 @@ describe('virtual mount file system', () => {
     ]);
 
     const nested = await listVirtualDirectory(db(), '/R2/Public', false);
-    expect(nested.current.id).toBe(publicFolder.id);
+    expect(nested.current).toMatchObject({ id: publicFolder.id, mountPath: '/R2' });
     expect(nested.breadcrumbs.map((item) => item.path)).toEqual(['/', '/R2', '/R2/Public']);
   });
 
   it('does not reveal a private mount through a direct guest path', async () => {
-    await db().prepare('DELETE FROM mounts').run();
+    await db().prepare("DELETE FROM mounts WHERE id <> 'native-r2'").run();
     await createMount(db(), {
       name: 'Private Archive',
       mountPath: '/private-archive',

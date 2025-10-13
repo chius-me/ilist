@@ -49,6 +49,8 @@ const READ_ONLY_FOLDER_CAPABILITIES: EntryCapabilities = {
   open: true,
   preview: false,
   download: false,
+  upload: false,
+  createFolder: false,
   rename: false,
   move: false,
   delete: false,
@@ -68,6 +70,7 @@ function virtualRootEntry(): Entry {
     effectivePublic: true,
     sortOrder: 0,
     description: '',
+    mountPath: null,
     capabilities: READ_ONLY_FOLDER_CAPABILITIES,
   };
 }

@@ -1,19 +1,20 @@
 import { fireEvent, render, screen, waitFor } from '@testing-library/react';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { App } from '../../src/ui/App';
+import { FolderPickerDialog } from '../../src/ui/features/operations/FolderPickerDialog';
 
 const entry = (id: string, name: string, kind: 'file' | 'folder') => ({
   id, parentId: 'root', name, kind, size: kind === 'file' ? 2400 : 0,
   contentType: kind === 'file' ? 'application/pdf' : null,
   updatedAt: '2026-07-10T00:00:00Z', isPublic: true, effectivePublic: true,
-  sortOrder: 0, description: '',
-  capabilities: { open: kind === 'folder', preview: kind === 'file', download: kind === 'file', rename: true, move: true, delete: true, changeVisibility: true },
+  sortOrder: 0, description: '', mountPath: null,
+  capabilities: { open: kind === 'folder', preview: kind === 'file', download: kind === 'file', upload: kind === 'folder', createFolder: kind === 'folder', rename: true, move: true, delete: true, changeVisibility: true },
 });
 
 const root = {
   ok: true,
   data: {
-    current: { ...entry('root', '', 'folder'), parentId: null, capabilities: { open: true, preview: false, download: false, rename: false, move: false, delete: false, changeVisibility: false } },
+    current: { ...entry('root', '', 'folder'), parentId: null, capabilities: { open: true, preview: false, download: false, upload: true, createFolder: true, rename: false, move: false, delete: false, changeVisibility: false } },
     breadcrumbs: [{ id: 'root', name: 'ilist', path: '/' }],
     items: [entry('report', 'report.pdf', 'file'), entry('archive', 'Archive', 'folder')],
   },
@@ -49,5 +50,100 @@ describe('explorer operations', () => {
     fireEvent.click(screen.getByRole('menuitem', { name: 'Delete' }));
     expect(screen.getByRole('dialog', { name: 'Delete report.pdf' })).toBeVisible();
     expect(confirmSpy).not.toHaveBeenCalled();
+  });
+
+  it('keeps the virtual root read-only for administrators', async () => {
+    const virtualRoot = {
+      ...root,
+      data: {
+        current: {
+          ...root.data.current,
+          id: 'virtual-root',
+          mountPath: null,
+          capabilities: {
+            open: true,
+            preview: false,
+            download: false,
+            rename: false,
+            move: false,
+            delete: false,
+            changeVisibility: false,
+            upload: false,
+            createFolder: false,
+          },
+        },
+        breadcrumbs: [{ id: 'virtual-root', name: 'ilist', path: '/' }],
+        items: [{
+          ...entry('archive-mount', 'Cold Storage', 'folder'),
+          mountPath: '/archive',
+          capabilities: {
+            open: true,
+            preview: false,
+            download: false,
+            rename: false,
+            move: false,
+            delete: false,
+            changeVisibility: false,
+            upload: false,
+            createFolder: false,
+          },
+        }],
+      },
+    };
+    vi.stubGlobal('fetch', vi.fn(async (input: RequestInfo | URL) => {
+      const url = String(input);
+      if (url.includes('/api/admin/me')) return new Response(JSON.stringify({ ok: true, data: { username: 'admin' } }));
+      if (url.includes('/api/fs/list')) return new Response(JSON.stringify(virtualRoot));
+      throw new Error(`Unexpected fetch: ${url}`);
+    }));
+
+    render(<App />);
+    expect(await screen.findByText('Cold Storage')).toBeVisible();
+    expect(screen.queryByRole('button', { name: 'Upload files' })).not.toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: 'Create folder' })).not.toBeInTheDocument();
+    expect(screen.queryByRole('checkbox', { name: 'Select Cold Storage' })).not.toBeInTheDocument();
+    expect(screen.queryByRole('region', { name: 'Selected file actions' })).not.toBeInTheDocument();
+
+    fireEvent.click(screen.getByRole('button', { name: 'Grid view' }));
+    expect(screen.queryByRole('checkbox', { name: 'Select Cold Storage' })).not.toBeInTheDocument();
+  });
+
+  it('uses mount paths in the folder picker and names for mounted children', async () => {
+    const selected = entry('report', 'report.pdf', 'file');
+    const mountRoot = {
+      ...root,
+      data: {
+        ...root.data,
+        items: [{ ...entry('archive-mount', 'Cold Storage', 'folder'), mountPath: '/archive' }],
+      },
+    };
+    const archive = {
+      ...root,
+      data: {
+        ...root.data,
+        current: { ...root.data.current, id: 'archive-root', mountPath: '/archive' },
+        items: [{ ...entry('reports', 'Reports', 'folder'), mountPath: '/archive' }],
+      },
+    };
+    const fetchMock = vi.fn(async (input: RequestInfo | URL) => {
+      const url = String(input);
+      if (url.includes('path=%2Farchive%2FReports')) return new Response(JSON.stringify(archive));
+      if (url.includes('path=%2Farchive')) return new Response(JSON.stringify(archive));
+      if (url.includes('/api/fs/list')) return new Response(JSON.stringify(mountRoot));
+      throw new Error(`Unexpected fetch: ${url}`);
+    });
+    vi.stubGlobal('fetch', fetchMock);
+
+    render(<FolderPickerDialog entries={[selected]} onClose={() => undefined} onSubmit={async () => undefined} />);
+    fireEvent.click(await screen.findByRole('button', { name: /Cold Storage/ }));
+    await waitFor(() => expect(fetchMock).toHaveBeenCalledWith(
+      '/api/fs/list?path=%2Farchive',
+      expect.objectContaining({ credentials: 'same-origin' }),
+    ));
+    fireEvent.click(await screen.findByRole('button', { name: /Reports/ }));
+    await waitFor(() => expect(fetchMock).toHaveBeenCalledWith(
+      '/api/fs/list?path=%2Farchive%2FReports',
+      expect.objectContaining({ credentials: 'same-origin' }),
+    ));
   });
 });

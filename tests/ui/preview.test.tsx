@@ -5,8 +5,8 @@ import { previewKind } from '../../src/ui/features/preview/preview-kind';
 
 const base = {
   id: 'file-image1', parentId: 'root', name: 'photo.png', kind: 'file' as const, size: 10, contentType: 'image/png',
-  updatedAt: '', isPublic: true, effectivePublic: true, sortOrder: 0, description: '',
-  capabilities: { open: false, preview: true, download: true, rename: false, move: false, delete: false, changeVisibility: false },
+  updatedAt: '', isPublic: true, effectivePublic: true, sortOrder: 0, description: '', mountPath: null,
+  capabilities: { open: false, preview: true, download: true, upload: false, createFolder: false, rename: false, move: false, delete: false, changeVisibility: false },
 };
 
 describe('preview', () => {
