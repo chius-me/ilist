@@ -146,4 +146,78 @@ describe('explorer operations', () => {
       expect.objectContaining({ credentials: 'same-origin' }),
     ));
   });
+
+  it('disables the virtual root as a move destination and enables a writable mount', async () => {
+    const selected = entry('report', 'report.pdf', 'file');
+    const readOnlyCapabilities = {
+      open: true,
+      preview: false,
+      download: false,
+      rename: false,
+      move: false,
+      delete: false,
+      changeVisibility: false,
+      upload: false,
+      createFolder: false,
+    };
+    const virtualRoot = {
+      ...root,
+      data: {
+        current: {
+          ...root.data.current,
+          id: 'virtual-root',
+          mountPath: null,
+          capabilities: readOnlyCapabilities,
+        },
+        breadcrumbs: [{ id: 'virtual-root', name: 'ilist', path: '/' }],
+        items: [{
+          ...entry('archive-mount', 'Cold Storage', 'folder'),
+          mountPath: '/archive',
+          capabilities: readOnlyCapabilities,
+        }],
+      },
+    };
+    const archive = {
+      ...root,
+      data: {
+        current: {
+          ...root.data.current,
+          id: 'archive-root',
+          mountPath: '/archive',
+          capabilities: {
+            ...readOnlyCapabilities,
+            upload: true,
+            createFolder: true,
+          },
+        },
+        breadcrumbs: [
+          { id: 'virtual-root', name: 'ilist', path: '/' },
+          { id: 'archive-root', name: 'Cold Storage', path: '/archive' },
+        ],
+        items: [],
+      },
+    };
+    const fetchMock = vi.fn(async (input: RequestInfo | URL) => {
+      const url = String(input);
+      if (url.includes('path=%2Farchive')) return new Response(JSON.stringify(archive));
+      if (url.includes('/api/fs/list')) return new Response(JSON.stringify(virtualRoot));
+      throw new Error(`Unexpected fetch: ${url}`);
+    });
+    const onClose = vi.fn();
+    const onSubmit = vi.fn(async () => undefined);
+    vi.stubGlobal('fetch', fetchMock);
+
+    render(<FolderPickerDialog entries={[selected]} onClose={onClose} onSubmit={onSubmit} />);
+    const moveHere = await screen.findByRole('button', { name: 'Move here' });
+    expect(moveHere).toBeDisabled();
+    fireEvent.click(moveHere);
+    expect(onSubmit).not.toHaveBeenCalled();
+    expect(onClose).not.toHaveBeenCalled();
+
+    fireEvent.click(screen.getByRole('button', { name: /Cold Storage/ }));
+    await waitFor(() => expect(moveHere).toBeEnabled());
+    fireEvent.click(moveHere);
+    await waitFor(() => expect(onSubmit).toHaveBeenCalledWith('archive-root'));
+    expect(onClose).toHaveBeenCalledOnce();
+  });
 });
