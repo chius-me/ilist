@@ -16,6 +16,7 @@
     "hash-password": "node scripts/hash-password.mjs"
   },
   "dependencies": {
+    "fast-xml-parser": "^5.10.0",
     "lucide-react": "^0.468.0",
     "react": "^19.1.1",
     "react-dom": "^19.1.1"
