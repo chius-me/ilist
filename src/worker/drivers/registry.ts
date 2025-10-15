@@ -1,9 +1,34 @@
 import { getCredentials } from '../credentials';
 import { HttpError } from '../http';
 import type { Env, Mount } from '../types';
+import { S3Client } from './s3/client';
+import { S3Driver } from './s3/driver';
 import type { DriverRegistry, StorageDriver } from './types';
 
-export const driverRegistry: DriverRegistry = {};
+export const driverRegistry: DriverRegistry = {
+  s3: (_env, mount, credentials) => {
+    const config = mount.config as Record<string, unknown>;
+    if (
+      typeof config?.endpoint !== 'string'
+      || typeof config.region !== 'string'
+      || typeof config.bucket !== 'string'
+      || (config.addressingMode !== 'path' && config.addressingMode !== 'virtual-hosted')
+      || !credentials
+      || typeof credentials.accessKeyId !== 'string'
+      || typeof credentials.secretAccessKey !== 'string'
+    ) {
+      throw new HttpError(500, 'INVALID_MOUNT_CONFIGURATION', 'S3 mount configuration is incomplete');
+    }
+    const client = new S3Client({
+      endpoint: config.endpoint,
+      region: config.region,
+      bucket: config.bucket,
+      addressingStyle: config.addressingMode === 'virtual-hosted' ? 'virtual' : 'path',
+      credentials: { accessKeyId: credentials.accessKeyId, secretAccessKey: credentials.secretAccessKey },
+    });
+    return new S3Driver(mount, client);
+  },
+};
 
 export async function createDriver(env: Env, mount: Mount, registry: DriverRegistry = driverRegistry): Promise<StorageDriver> {
   if (!mount.enabled) {
