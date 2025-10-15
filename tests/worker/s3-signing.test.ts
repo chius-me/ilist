@@ -96,4 +96,16 @@ describe('S3 Signature Version 4', () => {
 
     expect(canonicalRequest.split('\n')[2]).toBe('%C3%A9=3&Upper=2&lower=1&same=A&same=z');
   });
+
+  it('distinguishes raw plus bytes from spaces while canonicalizing duplicate query values', () => {
+    const request = new Request(
+      'https://s3.example.test/object?value=raw+plus&value=encoded%2Bplus&value=space%20value&dup=b&dup=a&empty=',
+    );
+
+    const { canonicalRequest } = canonicalizeS3Request(request, 'UNSIGNED-PAYLOAD');
+
+    expect(canonicalRequest.split('\n')[2]).toBe(
+      'dup=a&dup=b&empty=&value=encoded%2Bplus&value=raw%2Bplus&value=space%20value',
+    );
+  });
 });

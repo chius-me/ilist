@@ -1,10 +1,10 @@
 import {
   encodeS3Component,
   encodeS3Path,
-  signS3Request,
+  signS3Headers,
   type S3SigningCredentials,
 } from './signing';
-import { parseListObjectsV2Xml, parseS3ErrorXml, type ParsedS3Error, type S3ListObjectsResult } from './xml';
+import { parseCopyObjectResponseXml, parseListObjectsV2Xml, parseS3ErrorXml, type S3ListObjectsResult } from './xml';
 
 export type S3AddressingStyle = 'path' | 'virtual';
 
@@ -106,12 +106,17 @@ export class S3Client {
       throw new RangeError('S3 maxKeys must be an integer from 0 to 1000');
     }
 
-    const url = this.requestUrl();
-    url.searchParams.set('list-type', '2');
-    if (options.prefix !== undefined) url.searchParams.set('prefix', options.prefix);
-    if (options.delimiter !== undefined) url.searchParams.set('delimiter', options.delimiter);
-    if (options.continuationToken !== undefined) url.searchParams.set('continuation-token', options.continuationToken);
-    if (options.maxKeys !== undefined) url.searchParams.set('max-keys', String(options.maxKeys));
+    const query: Array<[string, string]> = [
+      ['list-type', '2'],
+      ['encoding-type', 'url'],
+    ];
+    if (options.prefix !== undefined) query.push(['prefix', options.prefix]);
+    if (options.delimiter !== undefined) query.push(['delimiter', options.delimiter]);
+    if (options.continuationToken !== undefined) query.push(['continuation-token', options.continuationToken]);
+    if (options.maxKeys !== undefined) query.push(['max-keys', String(options.maxKeys)]);
+    const url = `${this.requestUrl()}?${query
+      .map(([name, value]) => `${encodeS3Component(name)}=${encodeS3Component(value)}`)
+      .join('&')}`;
 
     const response = await this.send('GET', url);
     return parseListObjectsV2Xml(await response.text());
@@ -138,50 +143,44 @@ export class S3Client {
     headers.set('x-amz-copy-source', `/${encodeS3Component(this.bucket)}/${encodeS3Path(sourceKey)}`);
     const response = await this.send('PUT', this.requestUrl(destinationKey), { headers });
 
-    let parsedError: ParsedS3Error;
-    try {
-      parsedError = parseS3ErrorXml(await response.clone().text());
-    } catch {
-      return response;
+    const parsed = parseCopyObjectResponseXml(await response.clone().text());
+    if (parsed.kind === 'error') {
+      const { error } = parsed;
+      throw new S3Error(response.status, error.code, error.message, error.resource, error.requestId);
     }
-    throw new S3Error(response.status, parsedError.code, parsedError.message, parsedError.resource, parsedError.requestId);
+    return response;
   }
 
   deleteObject(key: string, options: S3RequestOptions = {}): Promise<Response> {
     return this.send('DELETE', this.requestUrl(key), { headers: options.headers });
   }
 
-  private requestUrl(key?: string): URL {
+  private requestUrl(key?: string): string {
     const url = new URL(this.endpoint.toString());
     const basePath = url.pathname === '/' ? '' : url.pathname.replace(/\/+$/, '');
     const keyPath = key === undefined ? '' : `/${encodeS3Path(key)}`;
 
     if (this.addressingStyle === 'virtual') {
       url.hostname = `${this.bucket}.${url.hostname}`;
-      url.pathname = `${basePath}${keyPath}` || '/';
-    } else {
-      url.pathname = `${basePath}/${encodeS3Component(this.bucket)}${keyPath}`;
+      return `${url.origin}${`${basePath}${keyPath}` || '/'}`;
     }
-    return url;
+    return `${url.origin}${basePath}/${encodeS3Component(this.bucket)}${keyPath}`;
   }
 
   private async send(
     method: string,
-    url: URL,
+    url: string,
     init: { headers?: HeadersInit; body?: BodyInit | null } = {},
   ): Promise<Response> {
-    const request = new Request(url, {
+    const headers = await signS3Headers({
+      url,
       method,
       headers: init.headers,
-      body: init.body,
-    });
-    const signed = await signS3Request({
-      request,
       region: this.region,
       credentials: this.credentials,
       now: this.now(),
     });
-    const response = await this.fetcher(signed);
+    const response = await this.fetcher(url, { method, headers, body: init.body });
     if (!response.ok) throw await S3Error.fromResponse(response);
     return response;
   }

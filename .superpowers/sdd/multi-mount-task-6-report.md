@@ -77,3 +77,65 @@ Observed result: passed with exit code 0. TypeScript and the production build pa
 
 - Worker tests emit existing non-failing warnings that process-environment secrets are absent even though deterministic Vitest Worker bindings provide them. UI tests emit the existing Node experimental localStorage warning. All verification commands pass.
 - No live S3-compatible endpoint was contacted; provider calls are covered with deterministic fetch fakes as required by the approved design. Production smoke testing remains a rollout activity.
+
+## Fix Review Takeover (2026-07-13)
+
+### Status
+
+Took over the uncommitted partial review patch in `client.ts`, `signing.ts`, `xml.ts`, and the S3 tests without discarding it. Completed all six review findings and added strict rejection for blank required fields in both successful and embedded-error CopyObject XML.
+
+### RED Evidence
+
+The inherited partial patch initially passed its focused suite with 18 tests. To verify that the inherited regression tests detect the reviewed behavior, only the three production-file changes were temporarily reversed against `d2fa81e` while retaining the inherited tests, then restored before continuing:
+
+```sh
+npm run test:worker -- tests/worker/s3-signing.test.ts tests/worker/s3-client.test.ts
+```
+
+Observed result against the pre-fix production code: failed with exit code 1; 2 test files failed, with 11 failed and 7 passed tests. Failures covered normalized `.`/`..` keys in both addressing modes, missing `encoding-type=url`, absent one-time decoding and namespace support, trimmed opaque values, permissive CopyObject success parsing, namespace-prefixed embedded errors, and raw `+` being canonicalized as a space.
+
+An additional strict CopyObject validation cycle was captured after restoring the inherited patch:
+
+```sh
+npm run test:worker -- tests/worker/s3-client.test.ts
+```
+
+Observed RED result: failed with exit code 1; 1 of 15 tests failed because a blank embedded `<Error>` produced an empty-message `S3Error` instead of rejecting malformed XML. After requiring non-empty trimmed `Code`, `Message`, `ETag`, and `LastModified` scalars, the focused suite passed.
+
+### Fixes
+
+- Preserved period-only object-key segments as `%2E` and `%2E%2E`, built request targets as raw strings, and signed/sent those strings without an intermediate `URL` or `Request` normalization step.
+- Required every HTTP 200 CopyObject body to parse as either a complete `CopyObjectResult` or a structured `Error`; empty, malformed, unknown, truncated, and blank-required-field bodies now fail closed.
+- Disabled global XML value trimming so object keys, common prefixes, and opaque continuation tokens retain exact leading, trailing, and embedded spaces; numeric/control/error fields are trimmed only where their schema requires it.
+- Added `encoding-type=url` to every ListObjectsV2 request and URL-decoded only documented key fields once, leaving continuation tokens opaque.
+- Canonicalized queries from the raw query string so literal `+`, `%2B`, and `%20` remain distinguishable before AWS encoding and encoded-name/value sorting.
+- Enabled namespace-prefix removal in the structured XML parser and covered prefixed list, copy-result, and error documents.
+
+### Verification
+
+```sh
+npm run test:worker -- tests/worker/s3-signing.test.ts tests/worker/s3-client.test.ts
+npm run check
+npm audit
+git diff --check
+```
+
+Observed results before commit:
+
+- Focused S3 run: exit code 0; 2 files and 20 tests passed.
+- Full check: exit code 0; TypeScript and production build passed, 16 Worker files with 135 tests passed, and 7 UI files with 26 tests passed.
+- Dependency audit: exit code 0; 0 vulnerabilities.
+- Diff check: exit code 0; no whitespace errors.
+
+### Self-Review
+
+- The outgoing request URL and SigV4 canonical request are derived from the same unnormalized string, including period-only key segments and raw query bytes.
+- List result decoding is gated by the response `EncodingType` marker and applies only to `Key` and `CommonPrefixes/Prefix`, which are the documented fields exposed by the current result interface. `NextContinuationToken` is never trimmed or decoded.
+- CopyObject validates a cloned body so successful callers still receive the original unconsumed response, while an embedded error becomes a structured `S3Error` with no raw XML or `HostId` exposure.
+- Namespace handling remains structured through `fast-xml-parser`; no XML regular-expression parsing was introduced.
+- The final diff is limited to the three S3 implementation files, two S3 test files, and this Task 6 report.
+
+### Concerns
+
+- Verification retains the existing non-failing missing process-secret warnings in Worker tests and Node experimental localStorage warnings in UI tests.
+- No live S3-compatible endpoint was contacted; deterministic fetch fakes cover the reviewed wire behavior, and provider smoke testing remains a rollout activity.
