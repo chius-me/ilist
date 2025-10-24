@@ -36,6 +36,7 @@ import {
 } from './file-system';
 import { fail, HttpError, noContent, ok, readJson, requireSameOrigin, requireSameOriginWhenPresent } from './http';
 import { handleMountRoutes } from './mount-routes';
+import { handleOAuthRoutes } from './oauth-routes';
 import { keyFromPath, putObject, streamEntryObject } from './r2';
 import type { Env } from './types';
 
@@ -276,6 +277,9 @@ async function handleAdmin(request: Request, env: Env, url: URL, options: RouteR
     if (request.method !== 'GET') return methodNotAllowed();
     return ok(user);
   }
+
+  const oauthResponse = await handleOAuthRoutes(request, env, url);
+  if (oauthResponse) return oauthResponse;
 
   const mountResponse = await handleMountRoutes(request, env, url);
   if (mountResponse) return mountResponse;
