@@ -156,12 +156,12 @@ describe('mount administration API', () => {
   it('tests the selected mount through its registered driver', async () => {
     const mountId = await createS3Mount();
     const list = vi.fn().mockResolvedValue({ items: [], nextCursor: null });
-    driverRegistry.s3 = vi.fn().mockResolvedValue({ list } as unknown as StorageDriver);
+    driverRegistry.s3 = vi.fn().mockResolvedValue({ rootId: 'driver-root', list } as unknown as StorageDriver);
 
     const response = await adminFetch(`/api/admin/mounts/${mountId}/test`, { method: 'POST' });
 
     expect(response.status).toBe(200);
-    expect(list).toHaveBeenCalledWith('root');
+    expect(list).toHaveBeenCalledWith('driver-root');
   });
 
   it('disconnects credentials and deletes only local mount records', async () => {

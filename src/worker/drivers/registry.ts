@@ -3,6 +3,8 @@ import { HttpError } from '../http';
 import type { Env, Mount } from '../types';
 import { S3Client } from './s3/client';
 import { S3Driver } from './s3/driver';
+import { OneDriveClient } from './onedrive/client';
+import { OneDriveDriver } from './onedrive/driver';
 import type { DriverRegistry, StorageDriver } from './types';
 
 export const driverRegistry: DriverRegistry = {
@@ -28,6 +30,7 @@ export const driverRegistry: DriverRegistry = {
     });
     return new S3Driver(mount, client);
   },
+  onedrive: (env, mount) => new OneDriveDriver(mount, new OneDriveClient(env, mount.id)),
 };
 
 export async function createDriver(env: Env, mount: Mount, registry: DriverRegistry = driverRegistry): Promise<StorageDriver> {

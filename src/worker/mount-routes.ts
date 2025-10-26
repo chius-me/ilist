@@ -272,7 +272,7 @@ export async function handleMountRoutes(request: Request, env: Env, url: URL): P
     if (request.method !== 'POST') return methodNotAllowed();
     const mount = await requireMount(env, testId);
     const driver = await createDriver(env, mount);
-    await driver.list(mount.rootItemId ?? '');
+    await driver.list(driver.rootId);
     return ok({});
   }
 
