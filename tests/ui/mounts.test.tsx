@@ -2,6 +2,7 @@ import { fireEvent, render, screen, waitFor } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { App } from '../../src/ui/App';
+import { MountManager } from '../../src/ui/features/mounts/MountManager';
 
 const admin = { ok: true, data: { username: 'admin' } };
 const emptyRoot = { ok: true, data: { current: { id: 'virtual-root', parentId: null, name: '', kind: 'folder', size: 0, contentType: null, updatedAt: '', isPublic: true, effectivePublic: true, sortOrder: 0, description: '', mountPath: null, capabilities: { open: true, preview: false, download: false, upload: false, createFolder: false, rename: false, move: false, delete: false, changeVisibility: false } }, breadcrumbs: [], items: [] } };
@@ -9,7 +10,11 @@ const savedMount = {
   id: 'mount-1', name: 'Archive', mountPath: '/archive', driverType: 's3', provider: 'cloudflare-r2',
   enabled: true, isPublic: true, sortOrder: 0, rootItemId: null,
   config: { endpoint: 'https://account.r2.cloudflarestorage.com', region: 'auto', bucket: 'files', rootPrefix: '', addressingMode: 'path' },
-  createdAt: '2026-07-15T00:00:00Z', updatedAt: '2026-07-15T00:00:00Z',
+  connected: true, createdAt: '2026-07-15T00:00:00Z', updatedAt: '2026-07-15T00:00:00Z',
+};
+const oneDriveMount = {
+  ...savedMount, id: 'onedrive-1', name: 'Personal drive', mountPath: '/personal', driverType: 'onedrive',
+  provider: 'microsoft-onedrive-personal', connected: false, config: {},
 };
 
 describe('MountManager', () => {
@@ -94,5 +99,54 @@ describe('MountManager', () => {
     const edit = requests.find((request) => request.method === 'PATCH' && (request.body as { name?: string }).name);
     expect(edit?.body).toMatchObject({ name: 'Cold archive' });
     expect(JSON.stringify(edit?.body)).not.toContain('secretAccessKey');
+  });
+
+  it('creates a named OneDrive mount before starting OAuth', async () => {
+    const navigate = vi.fn();
+    let submitted: Record<string, unknown> | null = null;
+    vi.stubGlobal('fetch', vi.fn(async (_input: RequestInfo | URL, init?: RequestInit) => {
+      if (!init?.method) return Response.json({ ok: true, data: [] });
+      submitted = JSON.parse(String(init.body));
+      return Response.json({ ok: true, data: oneDriveMount });
+    }));
+
+    render(<MountManager onBack={vi.fn()} navigate={navigate} />);
+    await userEvent.click(await screen.findByRole('button', { name: 'Add storage' }));
+    await userEvent.selectOptions(screen.getByLabelText('Storage type'), 'onedrive');
+    await userEvent.type(screen.getByLabelText('Display name'), 'Personal drive');
+    await userEvent.type(screen.getByLabelText('Mount path'), '/personal');
+    await userEvent.click(screen.getByRole('button', { name: 'Create and connect' }));
+
+    await waitFor(() => expect(navigate).toHaveBeenCalledWith('/api/admin/oauth/onedrive/start?mountId=onedrive-1'));
+    expect(submitted).toMatchObject({
+      name: 'Personal drive', mountPath: '/personal', driverType: 'onedrive', provider: 'microsoft-onedrive-personal', config: {},
+    });
+  });
+
+  it('shows connection state and confirms disconnecting OneDrive', async () => {
+    const connected = { ...oneDriveMount, connected: true };
+    const requests: string[] = [];
+    vi.stubGlobal('fetch', vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
+      const url = String(input);
+      if (!init?.method) return Response.json({ ok: true, data: [connected] });
+      requests.push(`${init.method} ${url}`);
+      return Response.json({ ok: true, data: { ...connected, connected: false } });
+    }));
+
+    render(<MountManager onBack={vi.fn()} navigate={vi.fn()} />);
+    expect(await screen.findByText('Connected')).toBeVisible();
+    expect(screen.getByRole('button', { name: 'Reconnect Personal drive' })).toBeVisible();
+    await userEvent.click(screen.getByRole('button', { name: 'Disconnect Personal drive' }));
+    expect(screen.getByRole('dialog', { name: 'Disconnect OneDrive' })).toBeVisible();
+    await userEvent.click(screen.getByRole('button', { name: 'Disconnect account' }));
+    await waitFor(() => expect(requests).toContain('POST /api/admin/mounts/onedrive-1/disconnect'));
+  });
+
+  it('shows a concise OneDrive callback failure status', async () => {
+    history.replaceState(null, '', '/admin/storages?onedrive=error');
+    vi.stubGlobal('fetch', vi.fn(async () => Response.json({ ok: true, data: [oneDriveMount] })));
+
+    render(<MountManager onBack={vi.fn()} navigate={vi.fn()} />);
+    expect(await screen.findByText('OneDrive connection failed')).toBeVisible();
   });
 });

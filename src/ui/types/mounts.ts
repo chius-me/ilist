@@ -21,16 +21,28 @@ export interface Mount {
   config: Record<string, unknown>;
   createdAt: string;
   updatedAt: string;
+  connected: boolean;
 }
 
-export interface MountInput {
+interface BaseMountInput {
   name: string;
   mountPath: string;
-  driverType: 's3';
   provider: string;
   enabled: boolean;
   isPublic: boolean;
   sortOrder: number;
+}
+
+export interface S3MountInput extends BaseMountInput {
+  driverType: 's3';
   config: S3MountConfig;
   credentials?: { accessKeyId?: string; secretAccessKey?: string };
 }
+
+export interface OneDriveMountInput extends BaseMountInput {
+  driverType: 'onedrive';
+  provider: 'microsoft-onedrive-personal';
+  config: Record<string, never>;
+}
+
+export type MountInput = S3MountInput | OneDriveMountInput;

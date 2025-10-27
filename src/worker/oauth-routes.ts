@@ -30,10 +30,13 @@ export async function handleOAuthRoutes(request: Request, env: Env, url: URL): P
   if (url.pathname === '/api/admin/oauth/onedrive/callback') {
     if (request.method !== 'GET') throw new HttpError(405, 'Method not allowed');
     assertConfiguredOrigin(request, env);
-    const code = url.searchParams.get('code') ?? '';
     const state = url.searchParams.get('state') ?? '';
-    if (!code) throw new HttpError(400, 'OAUTH_CODE_MISSING', 'OAuth authorization code is missing');
     const pending = await consumeOneDriveOAuthState(env, state);
+    if (url.searchParams.has('error')) {
+      return Response.redirect(`${publicOrigin(env)}/admin/storages?onedrive=error`, 302);
+    }
+    const code = url.searchParams.get('code') ?? '';
+    if (!code) throw new HttpError(400, 'OAUTH_CODE_MISSING', 'OAuth authorization code is missing');
     const mount = await getMount(env.DB, pending.mountId);
     if (!mount || mount.driverType !== 'onedrive') throw new HttpError(404, 'MOUNT_NOT_FOUND', 'OneDrive mount not found');
     const token = await requestOneDriveTokens(env, {
