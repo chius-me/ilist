@@ -2,9 +2,18 @@ import { HttpError } from '../../http';
 import type { StorageItem } from '../types';
 import type { GraphDriveItem } from './client';
 
+export function hasSupportedGraphItemType(item: GraphDriveItem): boolean {
+  return Boolean(item.folder || item.package || item.root || item.specialFolder || item.file);
+}
+
 export function graphItemKind(item: GraphDriveItem): 'file' | 'folder' {
-  if (item.folder || item.package) return 'folder';
+  if (item.folder || item.package || item.root || item.specialFolder) return 'folder';
   if (item.file) return 'file';
+  console.error('OneDrive item has no supported type facet', {
+    id: item.id,
+    name: item.name,
+    fields: Object.keys(item).filter((key) => key !== '@microsoft.graph.downloadUrl').sort(),
+  });
   throw new HttpError(502, 'ONEDRIVE_UPSTREAM_INVALID', 'OneDrive item type is invalid');
 }
 
