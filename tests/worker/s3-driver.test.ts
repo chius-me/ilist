@@ -84,6 +84,19 @@ describe('S3Driver', () => {
     expect(result).toEqual({ kind: 'stream', response: upstream });
   });
 
+  it('uses object metadata instead of downloading the body for HEAD requests', async () => {
+    const api = client({ headObject: vi.fn(async () => response({ 'content-length': '7' })) });
+    const driver = new S3Driver(mount, api);
+    const item = driver.itemId('tenant/root/file.txt', 'file');
+
+    const result = await driver.getDownload(item, new Request('https://ilist.test/file', { method: 'HEAD' }));
+
+    expect(api.headObject).toHaveBeenCalledWith('tenant/root/file.txt');
+    expect(api.getObject).not.toHaveBeenCalled();
+    expect(result.kind).toBe('stream');
+    if (result.kind === 'stream') expect(result.response.headers.get('content-length')).toBe('7');
+  });
+
   it('renames a file by copying before deleting the source', async () => {
     const order: string[] = [];
     const api = client({

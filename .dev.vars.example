@@ -1,2 +1,6 @@
 ADMIN_PASSWORD_HASH=pbkdf2:210000:replace_with_salt_hex:replace_with_hash_hex
+CREDENTIAL_MASTER_KEY=replace-with-32-byte-base64-key
 SESSION_SECRET=replace-with-at-least-32-random-characters
+MICROSOFT_CLIENT_ID=replace-with-application-client-id
+MICROSOFT_CLIENT_SECRET=replace-with-application-client-secret
+PUBLIC_ORIGIN=https://ilist.example.com

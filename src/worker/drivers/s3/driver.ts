@@ -145,6 +145,10 @@ export class S3Driver implements StorageDriver {
   async getDownload(itemId: string, request: Request): Promise<DownloadResult> {
     const identity = this.decodeItemId(itemId);
     if (identity.kind !== 'file') throw new HttpError(400, 'INVALID_STORAGE_OPERATION', 'Folders cannot be downloaded');
+    if (request.method === 'HEAD') {
+      const upstream = await this.client.headObject(identity.key);
+      return { kind: 'stream', response: new Response(null, { status: upstream.status, headers: upstream.headers }) };
+    }
     const range = request.headers.get('range') ?? undefined;
     return { kind: 'stream', response: await this.client.getObject(identity.key, range ? { range } : {}) };
   }

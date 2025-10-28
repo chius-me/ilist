@@ -13,6 +13,7 @@ import { createMount } from '../../src/worker/mounts';
 import type { Env } from '../../src/worker/types';
 
 const db = () => (env as unknown as Env).DB;
+const workerEnv = () => env as unknown as Env;
 
 describe('virtual mount file system', () => {
   it('lists only visible enabled mounts without contacting their providers', async () => {
@@ -46,11 +47,11 @@ describe('virtual mount file system', () => {
     driverRegistry.s3 = failingFactory;
 
     try {
-      const guest = await listVirtualDirectory(db(), '/', false);
+      const guest = await listVirtualDirectory(workerEnv(), '/', false);
       expect(guest.current).toMatchObject({ id: 'virtual-root', mountPath: null });
       expect(guest.items.map((item) => item.name)).toEqual(['R2', 'Unavailable Public']);
 
-      const admin = await listVirtualDirectory(db(), '/', true);
+      const admin = await listVirtualDirectory(workerEnv(), '/', true);
       expect(admin.items.map((item) => item.name)).toEqual(['R2', 'Private Archive', 'Unavailable Public']);
       expect(admin.items[0]).toMatchObject({
         id: 'native-r2',
@@ -74,14 +75,14 @@ describe('virtual mount file system', () => {
     const privateFolder = await createFolder(db(), { parentId: 'root', name: 'Private' });
     await setEntriesVisibility(db(), [privateFolder.id], false);
 
-    const guest = await listVirtualDirectory(db(), '/R2', false);
+    const guest = await listVirtualDirectory(workerEnv(), '/R2', false);
     expect(guest.items.map((item) => item.name)).toEqual(['Public']);
     expect(guest.breadcrumbs).toEqual([
       { id: 'virtual-root', name: 'ilist', path: '/' },
       { id: 'native-r2', name: 'R2', path: '/R2' },
     ]);
 
-    const nested = await listVirtualDirectory(db(), '/R2/Public', false);
+    const nested = await listVirtualDirectory(workerEnv(), '/R2/Public', false);
     expect(nested.current).toMatchObject({ id: publicFolder.id, mountPath: '/R2' });
     expect(nested.breadcrumbs.map((item) => item.path)).toEqual(['/', '/R2', '/R2/Public']);
   });
@@ -96,7 +97,7 @@ describe('virtual mount file system', () => {
       isPublic: false,
     });
 
-    await expect(listVirtualDirectory(db(), '/private-archive', false)).rejects.toMatchObject({
+    await expect(listVirtualDirectory(workerEnv(), '/private-archive', false)).rejects.toMatchObject({
       status: 404,
       code: 'MOUNT_NOT_FOUND',
     });
