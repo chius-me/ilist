@@ -4,7 +4,7 @@ ilist is a lightweight, self-hosted file index and manager built for Cloudflare 
 
 The application runs as a native Cloudflare Worker without a server framework. React assets are served through Workers Assets, metadata and sessions are stored in D1, and the bundled R2 binding remains available as a built-in compatibility mount.
 
-> **Release status:** `v0.1.1` is the current usable release. It is intended for a single administrator and public read-only browsing. Review the limitations and back up D1 before upgrading.
+> **Release status:** `v0.1.2` is the current usable release. It is intended for a single administrator and public read-only browsing. Review the limitations and back up D1 before upgrading.
 
 ## Features
 
