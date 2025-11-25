@@ -14,6 +14,8 @@ Self-hosted file index and manager for Cloudflare Workers.
 
 </div>
 
+> [v0.1.2](https://github.com/chius-me/ilist/releases/tag/v0.1.2) targets one administrator with public read-only browsing. Review [Limitations](#limitations) and back up D1 before upgrading.
+
 ## Features
 
 - Virtual root with multiple independently named storage mounts
@@ -31,10 +33,10 @@ Self-hosted file index and manager for Cloudflare Workers.
 
 | Storage | Browse | Download | Upload | Manage | Notes |
 | --- | ---: | ---: | ---: | ---: | --- |
-| OneDrive Personal | Yes | Yes | Yes | Yes | Personal Microsoft accounts only |
-| Cloudflare R2 binding | Yes | Yes | Yes | Yes | Built-in `R2` compatibility mount |
-| Cloudflare R2 through S3 | Yes | Yes | Yes | Yes | Use the R2 S3 endpoint and scoped credentials |
-| Other S3-compatible storage | Yes | Yes | Yes | Yes | Compatibility depends on the provider's S3 implementation |
+| OneDrive Personal | ✓ | ✓ | ✓ | ✓ | Personal Microsoft accounts only |
+| Cloudflare R2 binding | ✓ | ✓ | ✓ | ✓ | Built-in `R2` compatibility mount |
+| Cloudflare R2 through S3 | ✓ | ✓ | ✓ | ✓ | Use the R2 S3 endpoint and scoped credentials |
+| Other S3-compatible storage | ✓ | ✓ | ✓ | ✓ | Compatibility depends on the provider's S3 implementation |
 
 OneDrive Personal Vault is not exposed. Microsoft Graph returns the locked vault without a usable file or folder facet, so ilist skips it instead of failing the parent directory.
 
@@ -58,7 +60,7 @@ The Worker acts as the control plane and streams or redirects file data where po
 
 ## Quick Start
 
-1. **Prerequisites.** Install Node.js 20 or newer and npm 10 or newer. Have a Cloudflare account with Workers, D1, and R2 enabled, Wrangler authenticated with `npx wrangler login`, and a Microsoft Entra application if you will use OneDrive Personal.
+1. **Prerequisites.** Install Node.js 22.12 or newer and npm 10 or newer. Have a Cloudflare account with Workers, D1, and R2 enabled, Wrangler authenticated with `npx wrangler login`, and a Microsoft Entra application if you will use OneDrive Personal.
 2. **Clone and install.**
 
    ```bash
@@ -83,9 +85,9 @@ The Worker acts as the control plane and streams or redirects file data where po
 5. **Generate the administrator password hash and random keys.**
 
    ```bash
-   npm run hash-password -- "choose-a-strong-password"
-   openssl rand -base64 32
-   openssl rand -hex 32
+   npm run hash-password -- "choose-a-strong-password" # ADMIN_PASSWORD_HASH
+   openssl rand -base64 32                              # CREDENTIAL_MASTER_KEY
+   openssl rand -hex 32                                 # SESSION_SECRET
    ```
 
 6. **Store all six required Worker secrets.** Use the generated values and the Microsoft application values with `npx wrangler secret put`:
@@ -175,7 +177,7 @@ Fill in test-only values before starting Wrangler. It normally serves the applic
 - No cross-mount copy or move
 - No offline download, archive extraction, media transcoding, or background task system
 - Provider listings are fetched live; distributed directory caching is not implemented
-- Recursive deletion is bounded and reports per-entry failures when its safety limit is exceeded
+- Built-in R2 recursive deletion is bounded and reports per-entry failures; S3-compatible and OneDrive folder deletion follow provider-specific behavior
 
 ## Legacy R2 Upgrade
 
