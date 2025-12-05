@@ -1,4 +1,4 @@
-import { AlertCircle, Folder, LoaderCircle, RefreshCw, Settings } from 'lucide-react';
+import { AlertCircle, LoaderCircle, RefreshCw } from 'lucide-react';
 import { useEffect, useMemo, useRef, useState, type DragEvent } from 'react';
 import { createFolder, deleteEntries, entryPath, getEntry, moveEntries, patchEntry, setVisibility } from '../api/entries';
 import { useDirectory } from '../hooks/useDirectory';
@@ -23,6 +23,7 @@ import { PreviewOverlay } from '../features/preview/PreviewOverlay';
 import { UploadPanel } from '../features/uploads/UploadPanel';
 import { useUploadQueue } from '../features/uploads/useUploadQueue';
 import { MountManager } from '../features/mounts/MountManager';
+import { AppShell } from './AppShell';
 
 const VIEW_MODE_KEY = 'ilist.explorer.view';
 const MOBILE_ACTIONS_QUERY = '(max-width: 760px)';
@@ -229,14 +230,15 @@ export function ExplorerApp() {
   }
 
   return (
-    <>
-      <a className="skipLink" href={storageRoute ? '#storage-manager' : '#file-list'}>Skip to content</a>
-      <header className="siteHeader">
-        <div className="headerInner">
-          <button className="siteName" type="button" onClick={() => openPath('/')} aria-label="Open ilist root"><Folder aria-hidden="true" size={19} />ilist</button>
-          <div className="headerSession">{admin ? <button className="iconButton" type="button" title="Storage settings" aria-label="Storage settings" onClick={() => openPath('/admin/storages')}><Settings size={17} /></button> : null}<span className="sessionIndicator">{admin ? session.user?.username || 'Admin' : 'Shared files'}</span></div>
-        </div>
-      </header>
+    <AppShell
+      admin={admin}
+      username={session.user?.username}
+      contentId={storageRoute && admin ? 'storage-manager' : 'file-list'}
+      onHome={() => openPath('/')}
+      onStorage={() => openPath('/admin/storages')}
+      onSignIn={() => openPath('/admin')}
+      onSignOut={session.signOut}
+    >
       {storageRoute && admin ? <MountManager onBack={() => openPath(lastNonAdminPath.current)} /> : <main className="explorerShell" id="file-explorer">
         {directory.data ? <Breadcrumbs items={directory.data.breadcrumbs} onOpen={openPath} /> : <div className="breadcrumbPlaceholder" aria-hidden="true" />}
         {admin && selectedEntries.length > 0 ? <SelectionToolbar count={selectedEntries.length} pending={operationPending} onMove={() => setDialog({ type: 'move', entries: selectedEntries })} onPublish={() => void runBatch(() => setVisibility(selectedEntries.map((entry) => entry.id), true))} onHide={() => void runBatch(() => setVisibility(selectedEntries.map((entry) => entry.id), false))} onDelete={() => setDialog({ type: 'delete', entries: selectedEntries })} onClear={selection.clear} /> : <ExplorerToolbar
@@ -250,7 +252,6 @@ export function ExplorerApp() {
           onQuery={setQuery}
           onSort={setSort}
           onView={setView}
-          onLogin={() => openPath('/admin')}
           onUpload={enqueueFiles}
           onCreateFolder={() => setDialog({ type: 'create', entries: [] })}
         />}
@@ -287,6 +288,6 @@ export function ExplorerApp() {
       {dialog?.type === 'delete' ? <DeleteDialog entries={dialog.entries} onClose={() => setDialog(null)} onSubmit={() => runBatch(() => deleteEntries(dialog.entries.map((entry) => entry.id)))} /> : null}
       {dialog?.type === 'properties' ? <PropertiesDialog entry={dialog.entries[0]} onClose={() => setDialog(null)} onSubmit={async (patch) => { await patchEntry(dialog.entries[0].id, patch); directory.refresh(); }} /> : null}
       {previewId ? <PreviewOverlay entry={previewEntry} loading={previewLoading} error={previewError} onClose={closePreview} /> : null}
-    </>
+    </AppShell>
   );
 }

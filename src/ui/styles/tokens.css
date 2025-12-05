@@ -1,0 +1,60 @@
+:root {
+  color-scheme: light;
+  --color-page: #f2f2f1;
+  --color-surface: #ffffff;
+  --color-surface-raised: #ffffff;
+  --color-surface-muted: #faf9f7;
+  --color-hover: #f7f3f0;
+  --color-selected: #fff0e9;
+  --color-text: #282726;
+  --color-muted: #746f6a;
+  --color-border: #e4e0dc;
+  --color-border-strong: #cbc5bf;
+  --color-primary: #d96037;
+  --color-primary-hover: #bd4d29;
+  --color-primary-text: #ffffff;
+  --color-danger: #b53a43;
+  --color-success: #2d7a54;
+  --focus-ring: 0 0 0 3px rgb(217 96 55 / 28%);
+  --shadow-raised: 0 12px 30px rgb(64 47 39 / 12%);
+  --radius-control: 5px;
+  --radius-panel: 7px;
+  --control-size: 36px;
+  --layer-header: 10;
+  --layer-menu: 30;
+  --layer-overlay: 40;
+  --layer-toast: 50;
+  --transition: 140ms ease;
+
+  /* Temporary aliases keep feature styles stable until their scoped redesigns. */
+  --bg: var(--color-page);
+  --surface: var(--color-surface);
+  --surface-muted: var(--color-surface-muted);
+  --line: var(--color-border);
+  --line-strong: var(--color-border-strong);
+  --text: var(--color-text);
+  --muted: var(--color-muted);
+  --accent: var(--color-primary);
+  --accent-strong: var(--color-primary-hover);
+  --accent-soft: var(--color-selected);
+  --danger: var(--color-danger);
+  --danger-soft: color-mix(in srgb, var(--color-danger) 10%, var(--color-surface));
+  --radius: var(--radius-control);
+}
+
+[data-theme='dark'] {
+  color-scheme: dark;
+  --color-page: #171716;
+  --color-surface: #201f1e;
+  --color-surface-raised: #292725;
+  --color-surface-muted: #242321;
+  --color-hover: #302d2a;
+  --color-selected: #41291f;
+  --color-text: #f1efec;
+  --color-muted: #b0aaa3;
+  --color-border: #3b3834;
+  --color-border-strong: #55504a;
+  --color-primary: #ef7b50;
+  --color-primary-hover: #ff9168;
+  --shadow-raised: 0 14px 34px rgb(0 0 0 / 32%);
+}
