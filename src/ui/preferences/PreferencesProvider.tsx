@@ -7,6 +7,7 @@ import {
 
 interface PreferencesContextValue {
   preferences: UiPreferences;
+  resolvedTheme: 'light' | 'dark';
   updatePreferences: (patch: Partial<Omit<UiPreferences, 'version'>>) => void;
 }
 
@@ -17,6 +18,9 @@ export function PreferencesProvider({ children }: PropsWithChildren) {
   const [systemDark, setSystemDark] = useState(
     () => window.matchMedia('(prefers-color-scheme: dark)').matches,
   );
+  const resolvedTheme = preferences.theme === 'system'
+    ? (systemDark ? 'dark' : 'light')
+    : preferences.theme;
 
   useEffect(() => {
     const media = window.matchMedia('(prefers-color-scheme: dark)');
@@ -27,20 +31,17 @@ export function PreferencesProvider({ children }: PropsWithChildren) {
   }, []);
 
   useEffect(() => {
-    const resolvedTheme = preferences.theme === 'system'
-      ? (systemDark ? 'dark' : 'light')
-      : preferences.theme;
     document.documentElement.lang = preferences.locale;
     document.documentElement.dataset.theme = resolvedTheme;
     writePreferences(preferences);
-  }, [preferences, systemDark]);
+  }, [preferences, resolvedTheme]);
 
   const updatePreferences = (patch: Partial<Omit<UiPreferences, 'version'>>) => {
     setPreferences((current) => ({ ...current, ...patch, version: 1 }));
   };
 
   return (
-    <PreferencesContext.Provider value={{ preferences, updatePreferences }}>
+    <PreferencesContext.Provider value={{ preferences, resolvedTheme, updatePreferences }}>
       {children}
     </PreferencesContext.Provider>
   );

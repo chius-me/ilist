@@ -1,5 +1,6 @@
 import type { PropsWithChildren } from 'react';
 import { AppHeader } from '../components/AppHeader';
+import { useI18n } from '../i18n/I18nProvider';
 
 export interface AppShellProps extends PropsWithChildren {
   admin: boolean;
@@ -21,9 +22,11 @@ export function AppShell({
   onSignOut,
   children,
 }: AppShellProps) {
+  const { t } = useI18n();
+
   return (
     <div className="appShell">
-      <a className="skipLink" href={`#${contentId}`}>Skip to content</a>
+      <a className="skipLink" href={`#${contentId}`}>{t('shell.skipToContent')}</a>
       <AppHeader
         admin={admin}
         username={username}

@@ -15,6 +15,19 @@
   --color-primary-text: #ffffff;
   --color-danger: #b53a43;
   --color-success: #2d7a54;
+  --color-danger-surface: #fff0f2;
+  --color-danger-hover: #ffe0e5;
+  --color-danger-border: #ecc5cb;
+  --color-danger-text: #81202d;
+  --color-folder-icon: #a16600;
+  --color-folder-icon-surface: #fff4d8;
+  --color-file-icon: #285d7f;
+  --color-file-icon-surface: #e7f1f7;
+  --color-skeleton: #e8e5e2;
+  --color-progress-track: #e4e0dc;
+  --color-media-canvas: #171716;
+  --color-scrim: rgb(23 23 22 / 38%);
+  --color-scrim-strong: rgb(23 23 22 / 52%);
   --focus-ring: 0 0 0 3px rgb(217 96 55 / 28%);
   --shadow-raised: 0 12px 30px rgb(64 47 39 / 12%);
   --radius-control: 5px;
@@ -38,7 +51,7 @@
   --accent-strong: var(--color-primary-hover);
   --accent-soft: var(--color-selected);
   --danger: var(--color-danger);
-  --danger-soft: color-mix(in srgb, var(--color-danger) 10%, var(--color-surface));
+  --danger-soft: var(--color-danger-surface);
   --radius: var(--radius-control);
 }
 
@@ -56,5 +69,18 @@
   --color-border-strong: #55504a;
   --color-primary: #ef7b50;
   --color-primary-hover: #ff9168;
+  --color-danger-surface: #3a2224;
+  --color-danger-hover: #4a292c;
+  --color-danger-border: #754045;
+  --color-danger-text: #ffb3b8;
+  --color-folder-icon: #f5c15b;
+  --color-folder-icon-surface: #3b3220;
+  --color-file-icon: #80b6da;
+  --color-file-icon-surface: #23313a;
+  --color-skeleton: #34312e;
+  --color-progress-track: #3b3834;
+  --color-media-canvas: #0f0f0e;
+  --color-scrim: rgb(0 0 0 / 54%);
+  --color-scrim-strong: rgb(0 0 0 / 68%);
   --shadow-raised: 0 14px 34px rgb(0 0 0 / 32%);
 }
