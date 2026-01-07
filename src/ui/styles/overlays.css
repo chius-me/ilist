@@ -1,0 +1,129 @@
+.overlayScrim {
+  position: fixed;
+  inset: 0;
+  z-index: var(--layer-overlay);
+  display: grid;
+  place-items: center;
+  overflow-y: auto;
+  background: var(--color-scrim);
+  padding: max(16px, env(safe-area-inset-top)) 16px max(16px, env(safe-area-inset-bottom));
+}
+
+.overlayScrimStrong { background: var(--color-scrim-strong); }
+
+.overlaySurface {
+  overflow: hidden;
+  border: 1px solid var(--color-border-strong);
+  border-radius: var(--radius-panel);
+  background: var(--color-surface-raised);
+  box-shadow: var(--shadow-raised);
+}
+
+.overlayHeader {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  min-height: 52px;
+  gap: 12px;
+  border-bottom: 1px solid var(--color-border);
+  padding: 8px 10px 8px 16px;
+}
+
+.overlayHeader h2 {
+  min-width: 0;
+  margin: 0;
+  overflow: hidden;
+  font-size: 16px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.overlayBody { padding: 16px; }
+
+.overlayFooter {
+  display: flex;
+  justify-content: flex-end;
+  gap: 8px;
+  border-top: 1px solid var(--color-border);
+  padding: 12px 16px;
+}
+
+.dialogBackdrop { z-index: var(--layer-overlay); }
+.operationDialog, .loginDialog { background: var(--color-surface-raised); }
+
+.previewBackdrop { z-index: var(--layer-overlay); }
+.previewOverlay { border-radius: var(--radius-panel); background: var(--color-surface-raised); }
+.previewHeader { min-height: 54px; }
+.previewBody { padding: 0; background: var(--color-surface-muted); }
+.previewStatus { grid-auto-flow: row; }
+.previewError a { color: var(--color-primary); font-weight: 650; }
+
+.toastRegion {
+  position: fixed;
+  z-index: var(--layer-toast);
+  top: calc(64px + env(safe-area-inset-top));
+  right: max(16px, calc((100vw - 1080px) / 2));
+  display: grid;
+  width: min(380px, calc(100vw - 32px));
+  gap: 8px;
+  pointer-events: none;
+}
+
+.toast {
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr) auto;
+  align-items: center;
+  min-height: 48px;
+  gap: 10px;
+  border: 1px solid var(--color-border-strong);
+  border-left: 3px solid var(--color-primary);
+  border-radius: var(--radius-panel);
+  background: var(--color-surface-raised);
+  padding: 8px 8px 8px 12px;
+  color: var(--color-text);
+  box-shadow: var(--shadow-raised);
+  pointer-events: auto;
+}
+
+.toast-success { border-left-color: var(--color-success); }
+.toast-success > svg { color: var(--color-success); }
+.toast-error { border-color: var(--color-danger-border); border-left-color: var(--color-danger); background: var(--color-danger-surface); }
+.toast-error > svg { color: var(--color-danger-text); }
+.toast button { display: grid; width: 32px; height: 32px; place-items: center; border: 0; border-radius: var(--radius-control); background: transparent; color: var(--color-muted); }
+.toast button:hover { background: var(--color-hover); color: var(--color-text); }
+
+.directoryCommands {
+  display: flex;
+  justify-content: flex-end;
+  min-height: 42px;
+  border-bottom: 1px solid var(--color-border);
+  padding: 3px 8px;
+}
+
+.loadingGrid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(148px, 1fr));
+  gap: 10px;
+  padding: 12px;
+}
+
+.loadingCard { min-width: 0; overflow: hidden; border: 1px solid var(--color-border); border-radius: var(--radius-panel); background: var(--color-surface); }
+.loadingCard::before { display: block; aspect-ratio: 4 / 3; background: var(--color-skeleton); content: ''; animation: skeleton 1.2s ease-in-out infinite alternate; }
+.loadingCard span { display: block; height: 9px; margin-left: 10px; border-radius: 3px; background: var(--color-skeleton); animation: skeleton 1.2s ease-in-out infinite alternate; }
+.loadingCard span:first-child { width: 62%; margin-top: 11px; }
+.loadingCard span:nth-child(2) { width: 38%; margin-top: 6px; }
+.loadingCard span:last-child { height: 10px; margin-top: 9px; background: transparent; }
+.inlineError { display: grid; justify-items: start; gap: 12px; color: var(--color-danger-text); }
+
+.uploadPanel { z-index: calc(var(--layer-overlay) - 1); border-radius: var(--radius-panel); }
+.uploadPanelHeader { height: 44px; min-height: 44px; box-sizing: border-box; }
+.uploadTask { background: var(--color-surface-raised); }
+
+@media (max-width: 760px) {
+  .overlayScrim { align-items: end; padding: 16px 0 0; }
+  .operationDialog, .loginDialog { width: 100%; max-height: calc(100dvh - 16px); border-radius: var(--radius-panel) var(--radius-panel) 0 0; }
+  .previewBackdrop { place-items: stretch; padding: 0; }
+  .previewOverlay { width: 100%; height: 100dvh; border: 0; border-radius: 0; }
+  .toastRegion { top: calc(56px + env(safe-area-inset-top)); right: 12px; width: calc(100vw - 24px); }
+  .uploadPanel { border-radius: var(--radius-panel) var(--radius-panel) 0 0; }
+}
