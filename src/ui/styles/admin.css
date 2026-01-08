@@ -1,0 +1,76 @@
+.adminLayout {
+  display: grid;
+  grid-template-columns: 210px minmax(0, 1fr);
+  width: min(1120px, calc(100% - 32px));
+  min-height: calc(100dvh - 56px);
+  gap: 28px;
+  margin: 0 auto;
+}
+
+.adminSidebar { border-right: 1px solid var(--color-border); padding: 24px 20px 24px 0; }
+.adminSidebar nav { position: sticky; top: 80px; display: grid; gap: 3px; }
+.adminSidebar a { display: flex; align-items: center; min-height: 38px; gap: 9px; border-radius: var(--radius-control); padding: 7px 9px; color: var(--color-muted); font-size: 13px; font-weight: 650; text-decoration: none; }
+.adminSidebar a:hover { background: var(--color-hover); color: var(--color-text); }
+.adminSidebar a.isActive { background: var(--color-selected); color: var(--color-primary-hover); }
+.adminNavLabel { margin: 18px 9px 5px; color: var(--color-muted); font-size: 11px; font-weight: 750; text-transform: uppercase; }
+.adminContent { min-width: 0; padding: 24px 0 48px; }
+.adminMenuButton, .adminDrawerScrim { display: none; }
+
+.adminPageHeader { display: flex; align-items: end; justify-content: space-between; gap: 20px; min-height: 74px; border-bottom: 1px solid var(--color-border); padding: 0 0 18px; }
+.adminPageHeader h1 { margin: 0 0 5px; font-size: 24px; letter-spacing: 0; }
+.adminPageHeader p { margin: 0; color: var(--color-muted); font-size: 13px; line-height: 1.45; }
+
+.preferencesPage, .storageManager { width: 100%; }
+.preferencesForm { display: grid; }
+.preferencesForm > label { display: grid; grid-template-columns: minmax(220px, 1fr) minmax(180px, 240px); align-items: center; gap: 28px; min-height: 86px; border-bottom: 1px solid var(--color-border); padding: 14px 8px; }
+.preferencesForm label > span { display: grid; gap: 4px; }
+.preferencesForm strong { font-size: 14px; }
+.preferencesForm small { color: var(--color-muted); font-size: 12px; font-weight: 400; line-height: 1.4; }
+.preferencesForm select { width: 100%; height: 38px; border: 1px solid var(--color-border-strong); border-radius: var(--radius-control); background: var(--color-surface); padding: 0 9px; color: var(--color-text); }
+
+.operationNotice { min-height: 40px; border-bottom: 1px solid var(--color-border); padding: 10px 8px; color: var(--color-muted); font-size: 13px; }
+.mountEmpty, .mountLoading { display: grid; min-height: 240px; place-content: center; justify-items: center; gap: 8px; color: var(--color-muted); }
+.mountTableWrap { overflow: visible; }
+.mountTable { width: 100%; border-collapse: collapse; table-layout: fixed; }
+.mountTable th, .mountTable td { height: 64px; border-bottom: 1px solid var(--color-border); padding: 10px 12px; text-align: left; vertical-align: middle; }
+.mountTable thead th { height: 38px; background: var(--color-surface-muted); color: var(--color-muted); font-size: 11px; font-weight: 750; }
+.mountTable thead th:first-child { width: 31%; }
+.mountTable thead th:nth-child(2) { width: 21%; }
+.mountTable thead th:nth-child(3) { width: 18%; }
+.mountTable thead th:nth-child(4) { width: 16%; }
+.mountTable thead th:last-child { width: 52px; }
+.mountTable tbody th { font-weight: 400; }
+.mountIdentity { display: flex; align-items: center; min-width: 0; gap: 10px; }
+.mountIdentity > svg { flex: 0 0 auto; color: var(--color-primary); }
+.mountIdentity > span { display: grid; min-width: 0; gap: 3px; }
+.mountIdentity strong, .mountIdentity small { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.mountIdentity strong { color: var(--color-text); font-size: 13px; }
+.mountIdentity small { color: var(--color-muted); font-size: 11px; }
+.mountTable code { overflow-wrap: anywhere; color: var(--color-text); font-family: "SFMono-Regular", Consolas, monospace; font-size: 12px; }
+.mountConnection { display: grid; gap: 3px; }
+.mountConnection small { overflow: hidden; color: var(--color-muted); font-size: 11px; text-overflow: ellipsis; white-space: nowrap; }
+.statusOnline { color: var(--color-success); }
+.statusOffline { color: var(--color-muted); }
+.mountActionCell { text-align: right !important; }
+.mountActionMenu { position: relative; display: inline-block; }
+.mountActionMenu summary { list-style: none; cursor: pointer; }
+.mountActionMenu summary::-webkit-details-marker { display: none; }
+.mountActionMenu > div { position: absolute; z-index: var(--layer-menu); top: calc(100% + 4px); right: 0; display: grid; min-width: 180px; border: 1px solid var(--color-border-strong); border-radius: var(--radius-control); background: var(--color-surface-raised); box-shadow: var(--shadow-raised); padding: 4px; }
+.mountActionMenu button { display: flex; align-items: center; min-height: 34px; gap: 8px; border: 0; border-radius: var(--radius-control); background: transparent; padding: 6px 8px; color: var(--color-text); font-size: 13px; text-align: left; white-space: nowrap; }
+.mountActionMenu button:hover:not(:disabled) { background: var(--color-hover); }
+.mountActionMenu button.destructive { border-top: 1px solid var(--color-border); color: var(--color-danger-text); }
+
+.mountDialog { width: min(calc(100% - 24px), 680px); max-height: calc(100dvh - 32px); overflow: auto; }
+.mountDialog h2, .confirmDialog h2 { margin: 0; font-size: 18px; letter-spacing: 0; }
+.mountDialog header p { margin: 3px 0 0; color: var(--color-muted); font-size: 12px; }
+.mountDialog form { padding: 16px; }
+.mountFormGrid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 14px; }
+.mountFormGrid label { display: grid; gap: 6px; font-size: 13px; font-weight: 650; }
+.mountFormGrid input, .mountFormGrid select { width: 100%; height: 38px; border: 1px solid var(--color-border-strong); border-radius: var(--radius-control); background: var(--color-surface); padding: 0 9px; color: var(--color-text); }
+.mountSwitches { display: flex; gap: 22px; margin-top: 16px; }
+.mountSwitches label { display: flex; align-items: center; gap: 7px; font-size: 13px; }
+.mountDialog footer, .confirmDialog footer { display: flex; justify-content: flex-end; gap: 8px; margin-top: 18px; }
+.mountDialog .formError { margin-top: 14px; }
+.confirmDialog { width: min(calc(100% - 24px), 420px); padding: 18px; }
+.confirmDialog p { color: var(--color-muted); line-height: 1.5; }
+.oneDriveConnectNote { grid-column: 1 / -1; border-left: 3px solid var(--color-primary); padding: 8px 10px; color: var(--color-muted); font-size: 13px; line-height: 1.5; }
