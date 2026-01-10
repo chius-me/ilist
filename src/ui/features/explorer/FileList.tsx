@@ -1,5 +1,6 @@
 import type { HTMLAttributes } from 'react';
 import type { Entry } from '../../types/entries';
+import { useI18n } from '../../i18n/I18nProvider';
 import { EntryRow, type EntryHandlers } from './EntryRow';
 
 export function FileList({
@@ -17,16 +18,17 @@ export function FileList({
   interactionProps?: HTMLAttributes<HTMLUListElement>;
   focusedId?: string | null;
 }) {
+  const { t } = useI18n();
   return (
     <div className="fileListFrame">
       <div className="fileListHeader" aria-hidden="true">
         <span />
-        <span>Name</span>
-        <span>Modified</span>
-        <span>Size</span>
-        <span>Actions</span>
+        <span>{t('toolbar.name')}</span>
+        <span>{t('toolbar.modified')}</span>
+        <span>{t('toolbar.size')}</span>
+        <span>{t('mount.columnActions')}</span>
       </div>
-      <ul className="fileList" aria-label="Files and folders" {...interactionProps}>
+      <ul className="fileList" aria-label={t('explorer.collection')} {...interactionProps}>
         {entries.map((entry) => <EntryRow key={entry.id} entry={entry} selected={selectedIds.has(entry.id)} focused={focusedId === entry.id} admin={admin} {...handlers} />)}
       </ul>
     </div>

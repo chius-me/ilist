@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useReducer, useRef } from 'react';
 import { uploadFileWithProgress } from '../../api/uploads';
+import { useI18n } from '../../i18n/I18nProvider';
 import { uploadReducer, type UploadTask } from './upload-reducer';
 
 const RESERVED_ROOT_NAMES = new Set(['api', 'file', 'admin']);
@@ -21,17 +22,18 @@ interface UploadQueueOptions {
   existingNames?: Iterable<string>;
 }
 
-function validationError(name: string, parentId: string, occupiedNames: Set<string>, canUpload: boolean): string | undefined {
-  if (!canUpload) return 'You do not have permission to upload files';
+function validationError(name: string, parentId: string, occupiedNames: Set<string>, canUpload: boolean, t: ReturnType<typeof useI18n>['t']): string | undefined {
+  if (!canUpload) return t('upload.permissionDenied');
   const byteLength = new TextEncoder().encode(name).byteLength;
   if (!name.trim() || name === '.' || name === '..' || name.includes('/') || CONTROL_CHARACTERS.test(name) || byteLength > 255 || (parentId === 'root' && RESERVED_ROOT_NAMES.has(name))) {
-    return 'Invalid file name';
+    return t('upload.invalidName');
   }
-  if (occupiedNames.has(name)) return 'Another queued file already has this name';
+  if (occupiedNames.has(name)) return t('upload.duplicateName');
   return undefined;
 }
 
 export function useUploadQueue({ transport = uploadFileWithProgress, onCompleted, canUpload = true, existingNames = [] }: UploadQueueOptions) {
+  const { t } = useI18n();
   const [tasks, dispatch] = useReducer(uploadReducer, []);
   const controllers = useRef(new Map<string, AbortController>());
   const transportRef = useRef(transport);
@@ -66,18 +68,18 @@ export function useUploadQueue({ transport = uploadFileWithProgress, onCompleted
         }
       }).catch((error: unknown) => {
         if (controller.signal.aborted || (error instanceof DOMException && error.name === 'AbortError')) dispatch({ type: 'cancelled', id: task.id });
-        else dispatch({ type: 'failed', id: task.id, error: error instanceof Error ? error.message : 'Upload failed' });
+        else dispatch({ type: 'failed', id: task.id, error: t('upload.failedMessage') });
       }).finally(() => {
         controllers.current.delete(task.id);
       });
     });
-  }, [tasks]);
+  }, [t, tasks]);
 
   const enqueue = useCallback((parentId: string, files: File[]) => {
     const occupiedNames = new Set(existingNames);
     tasks.filter((task) => task.parentId === parentId && task.status !== 'cancelled').forEach((task) => occupiedNames.add(task.file.name));
     const additions: UploadTask[] = files.map((file) => {
-      const error = validationError(file.name, parentId, occupiedNames, canUpload);
+      const error = validationError(file.name, parentId, occupiedNames, canUpload, t);
       if (!error) occupiedNames.add(file.name);
       return {
         id: crypto.randomUUID(), parentId, file,
@@ -85,7 +87,7 @@ export function useUploadQueue({ transport = uploadFileWithProgress, onCompleted
       };
     });
     if (additions.length) dispatch({ type: 'enqueue', tasks: additions });
-  }, [canUpload, existingNames, tasks]);
+  }, [canUpload, existingNames, t, tasks]);
 
   const cancel = useCallback((id: string) => {
     const controller = controllers.current.get(id);

@@ -42,7 +42,7 @@ export function EntryRow({
     >
       {selectable ? (
         <label className="entrySelect">
-          <span className="srOnly">Select {entry.name}</span>
+          <span className="srOnly">{t('entry.select', { name: entry.name })}</span>
           <input type="checkbox" checked={selected} onChange={(event) => onToggle(entry, { range: (event.nativeEvent as MouseEvent).shiftKey })} />
         </label>
       ) : <span className="entrySelectPlaceholder" aria-hidden="true" />}

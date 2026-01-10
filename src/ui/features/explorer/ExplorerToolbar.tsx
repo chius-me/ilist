@@ -45,7 +45,7 @@ export function ExplorerToolbar({
   }
 
   return (
-    <section className="explorerToolbar" aria-label="File controls">
+    <section className="explorerToolbar" aria-label={t('toolbar.controls')}>
       <label className="searchControl">
         <Search aria-hidden="true" size={17} />
         <span className="srOnly">{t('toolbar.search')}</span>
@@ -55,21 +55,21 @@ export function ExplorerToolbar({
         <label className="sortControl">
           <span className="srOnly">{t('toolbar.sort')}</span>
           <select value={sort.field} onChange={updateSort} aria-label={t('toolbar.sort')}>
-            <option value="name">Name</option>
-            <option value="updated">Modified</option>
-            <option value="size">Size</option>
+            <option value="name">{t('toolbar.name')}</option>
+            <option value="updated">{t('toolbar.modified')}</option>
+            <option value="size">{t('toolbar.size')}</option>
           </select>
         </label>
         <button
           className="iconButton"
           type="button"
-          title={sort.order === 'asc' ? 'Ascending' : 'Descending'}
-          aria-label={sort.order === 'asc' ? 'Sort ascending' : 'Sort descending'}
+          title={sort.order === 'asc' ? t('toolbar.ascending') : t('toolbar.descending')}
+          aria-label={sort.order === 'asc' ? t('toolbar.sortAscending') : t('toolbar.sortDescending')}
           onClick={() => onSort({ ...sort, order: sort.order === 'asc' ? 'desc' : 'asc' })}
         >
           <ArrowDownAZ aria-hidden="true" size={17} className={sort.order === 'desc' ? 'sortDescending' : undefined} />
         </button>
-        <div className="viewToggle" role="group" aria-label="View mode">
+        <div className="viewToggle" role="group" aria-label={t('toolbar.viewMode')}>
           <button
             className={view === 'list' ? 'active' : undefined}
             type="button"
