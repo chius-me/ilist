@@ -46,7 +46,10 @@ export function EntryRow({
           <input type="checkbox" checked={selected} onChange={(event) => onToggle(entry, { range: (event.nativeEvent as MouseEvent).shiftKey })} />
         </label>
       ) : <span className="entrySelectPlaceholder" aria-hidden="true" />}
-      <button className="entryOpen" type="button" onClick={activate} aria-label={openLabel}>
+      <button className="entryOpen" type="button" onClick={(event) => {
+        if (selectable && (event.metaKey || event.ctrlKey || event.shiftKey)) onToggle(entry, { range: event.shiftKey });
+        else activate();
+      }} aria-label={openLabel}>
         <span className={`entryIcon ${isFolder ? 'folder' : 'file'}`}><FileIcon entry={entry} size={18} /></span>
         <span className="entryName">
           <strong title={entry.name}>{entry.name}</strong>

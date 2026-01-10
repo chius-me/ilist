@@ -7,9 +7,10 @@ export default defineConfig({
   expect: {
     toHaveScreenshot: { animations: 'disabled', maxDiffPixelRatio: 0.01 },
   },
+  snapshotPathTemplate: '{testDir}/{testFilePath}-snapshots/{arg}-{projectName}{ext}',
   use: {
     baseURL: 'http://127.0.0.1:4173',
-    channel: 'chrome',
+    ...(process.env.PLAYWRIGHT_BROWSER_CHANNEL ? { channel: process.env.PLAYWRIGHT_BROWSER_CHANNEL } : {}),
     trace: 'retain-on-failure',
   },
   webServer: {
@@ -20,6 +21,6 @@ export default defineConfig({
   projects: [
     { name: 'desktop', use: { viewport: { width: 1440, height: 900 } } },
     { name: 'tablet', use: { viewport: { width: 834, height: 1112 } } },
-    { name: 'mobile', use: { ...devices['iPhone 13'], browserName: 'chromium', channel: 'chrome', viewport: { width: 390, height: 844 } } },
+    { name: 'mobile', use: { ...devices['iPhone 13'], browserName: 'chromium', viewport: { width: 390, height: 844 } } },
   ],
 });

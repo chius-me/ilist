@@ -2,6 +2,8 @@ import { ChevronRight, Folder, RefreshCw, X } from 'lucide-react';
 import { useEffect, useRef, useState } from 'react';
 import { entryPath, listDirectory } from '../../api/entries';
 import { useFeedbackI18n } from '../../components/ToastRegion';
+import { useModalFocus } from '../../hooks/useModalFocus';
+import { localizedApiError } from '../../i18n/apiErrors';
 import type { DirectoryResponse, Entry } from '../../types/entries';
 
 function canAcceptMove(directory: DirectoryResponse | null): boolean {
@@ -18,18 +20,13 @@ export function FolderPickerDialog({ entries, onClose, onSubmit }: { entries: En
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const closeButton = useRef<HTMLButtonElement>(null);
-  useEffect(() => {
-    const previous = document.activeElement instanceof HTMLElement ? document.activeElement : null;
-    closeButton.current?.focus();
-    const closeOnEscape = (event: KeyboardEvent) => { if (event.key === 'Escape') onClose(); };
-    document.addEventListener('keydown', closeOnEscape);
-    return () => { document.removeEventListener('keydown', closeOnEscape); previous?.focus(); };
-  }, [onClose]);
+  const backdrop = useRef<HTMLDivElement>(null);
+  useModalFocus({ active: true, containerRef: backdrop, initialFocusRef: closeButton, onClose });
   useEffect(() => {
     let active = true;
     setDirectory(null);
     setError(null);
-    void listDirectory(path).then((value) => { if (active) setDirectory(value); }).catch((reason) => { if (active) setError(reason instanceof Error ? reason.message : t('dialog.unableLoadFolders')); });
+    void listDirectory(path).then((value) => { if (active) setDirectory(value); }).catch((reason) => { if (active) setError(localizedApiError(reason, t, 'dialog.unableLoadFolders')); });
     return () => { active = false; };
   }, [locale, path, refreshVersion]);
   const selected = new Set(entries.map((entry) => entry.id));
@@ -42,13 +39,13 @@ export function FolderPickerDialog({ entries, onClose, onSubmit }: { entries: En
       await onSubmit(directory.current.id);
       onClose();
     } catch (reason) {
-      setError(reason instanceof Error ? reason.message : t('dialog.unableMove'));
+      setError(localizedApiError(reason, t, 'dialog.unableMove'));
     } finally {
       setBusy(false);
     }
   }
   const title = entries.length === 1 ? t('dialog.moveTitle', { name: entries[0].name }) : t('dialog.moveCountTitle', { count: entries.length });
-  return <div className="dialogBackdrop overlayScrim" onMouseDown={onClose}>
+  return <div ref={backdrop} className="dialogBackdrop overlayScrim" onMouseDown={onClose}>
     <section className="operationDialog overlaySurface" role="dialog" aria-modal="true" aria-label={t('dialog.moveSelected')} onMouseDown={(event) => event.stopPropagation()}>
       <header className="dialogHeader overlayHeader"><h2>{title}</h2><button ref={closeButton} className="iconButton" type="button" onClick={onClose} aria-label={t('common.close')} title={t('common.close')}><X aria-hidden="true" size={17} /></button></header>
       <div className="dialogBody overlayBody">

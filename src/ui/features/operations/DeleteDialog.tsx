@@ -1,6 +1,8 @@
 import { Trash2, X } from 'lucide-react';
-import { useEffect, useRef, useState } from 'react';
+import { useRef, useState } from 'react';
 import { useFeedbackI18n } from '../../components/ToastRegion';
+import { useModalFocus } from '../../hooks/useModalFocus';
+import { localizedApiError } from '../../i18n/apiErrors';
 import type { Entry } from '../../types/entries';
 
 export function DeleteDialog({ entries, onClose, onSubmit }: { entries: Entry[]; onClose: () => void; onSubmit: () => Promise<void> }) {
@@ -8,13 +10,8 @@ export function DeleteDialog({ entries, onClose, onSubmit }: { entries: Entry[];
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const cancel = useRef<HTMLButtonElement>(null);
-  useEffect(() => {
-    const previous = document.activeElement instanceof HTMLElement ? document.activeElement : null;
-    cancel.current?.focus();
-    const closeOnEscape = (event: KeyboardEvent) => { if (event.key === 'Escape') onClose(); };
-    document.addEventListener('keydown', closeOnEscape);
-    return () => { document.removeEventListener('keydown', closeOnEscape); previous?.focus(); };
-  }, [onClose]);
+  const backdrop = useRef<HTMLDivElement>(null);
+  useModalFocus({ active: true, containerRef: backdrop, initialFocusRef: cancel, onClose });
   const files = entries.filter((entry) => entry.kind === 'file');
   const bytes = files.reduce((sum, entry) => sum + entry.size, 0);
   async function remove() {
@@ -24,13 +21,13 @@ export function DeleteDialog({ entries, onClose, onSubmit }: { entries: Entry[];
       await onSubmit();
       onClose();
     } catch (reason) {
-      setError(reason instanceof Error ? reason.message : t('dialog.unableDelete'));
+      setError(localizedApiError(reason, t, 'dialog.unableDelete'));
     } finally {
       setBusy(false);
     }
   }
   const label = entries.length === 1 ? t('dialog.deleteTitle', { name: entries[0].name }) : t('dialog.deleteCountTitle', { count: entries.length });
-  return <div className="dialogBackdrop overlayScrim" onMouseDown={onClose}>
+  return <div ref={backdrop} className="dialogBackdrop overlayScrim" onMouseDown={onClose}>
     <section className="operationDialog overlaySurface" role="dialog" aria-modal="true" aria-label={label} onMouseDown={(event) => event.stopPropagation()}>
       <header className="dialogHeader overlayHeader"><h2>{label}</h2><button className="iconButton" type="button" onClick={onClose} aria-label={t('common.close')} title={t('common.close')}><X aria-hidden="true" size={17} /></button></header>
       <div className="dialogBody overlayBody">

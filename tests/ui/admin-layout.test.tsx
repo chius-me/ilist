@@ -1,4 +1,4 @@
-import { render, screen, within } from '@testing-library/react';
+import { fireEvent, render, screen, waitFor, within } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { App } from '../../src/ui/App';
@@ -17,6 +17,8 @@ describe('administration layout', () => {
       const url = String(input);
       if (url.includes('/api/admin/me')) return Response.json(admin);
       if (url.endsWith('/api/admin/mounts')) return Response.json({ ok: true, data: [savedMount] });
+      if (url.includes('/api/admin/logout')) return Response.json({ ok: true, data: {} });
+      if (url.includes('/api/fs/list')) return Response.json({ ok: true, data: { current: { id: 'root', parentId: null, name: '', kind: 'folder', size: 0, contentType: null, updatedAt: '', isPublic: true, effectivePublic: true, sortOrder: 0, description: '', mountPath: null, capabilities: { open: true, preview: false, download: false, rename: false, move: false, delete: false, changeVisibility: false, upload: false, createFolder: false } }, breadcrumbs: [], items: [] } });
       throw new Error(`Unexpected fetch: ${url}`);
     }));
   });
@@ -49,5 +51,17 @@ describe('administration layout', () => {
     const table = await screen.findByRole('table', { name: 'Storage mounts' });
     expect(within(table).getByText('/archive')).toBeVisible();
     expect(within(table).getByText('Cloudflare R2')).toBeVisible();
+  });
+
+  it('returns to the remembered public path after signing out from administration', async () => {
+    history.replaceState(null, '', '/Projects');
+    render(<App />);
+    fireEvent.click(await screen.findByRole('button', { name: 'Storage settings' }));
+    expect(location.pathname).toBe('/admin/storages');
+
+    fireEvent.click(screen.getByRole('button', { name: 'Sign out' }));
+
+    await waitFor(() => expect(location.pathname).toBe('/Projects'));
+    expect(screen.queryByRole('dialog', { name: 'Admin sign in' })).not.toBeInTheDocument();
   });
 });

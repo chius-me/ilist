@@ -21,13 +21,18 @@ export function entryActions(entry: Entry, handlers: {
   onOpen: (entry: Entry) => void;
   onPreview: (entry: Entry) => void;
   onAction: (action: EntryActionId, entry: Entry) => void;
+  onCopyFailure?: () => void;
 }): EntryAction[] {
   const actions: EntryAction[] = [entry.kind === 'folder'
     ? { id: 'open', labelKey: 'action.open', icon: FolderInput, onSelect: () => handlers.onOpen(entry) }
     : { id: 'preview', labelKey: 'action.preview', icon: Eye, onSelect: () => handlers.onPreview(entry) }];
   if (entry.capabilities.download) actions.push(
     { id: 'download', labelKey: 'action.download', icon: Download, href: fileUrl(entry, true), onSelect: () => undefined },
-    { id: 'copy', labelKey: 'action.copyLink', icon: Copy, onSelect: () => void navigator.clipboard?.writeText(new URL(fileUrl(entry), window.location.origin).toString()).catch(() => undefined) },
+    { id: 'copy', labelKey: 'action.copyLink', icon: Copy, onSelect: () => {
+      const write = navigator.clipboard?.writeText(new URL(fileUrl(entry), window.location.origin).toString());
+      if (!write) handlers.onCopyFailure?.();
+      else void write.catch(() => handlers.onCopyFailure?.());
+    } },
   );
   if (entry.capabilities.rename) actions.push({ id: 'rename', labelKey: 'action.rename', icon: Pencil, onSelect: () => handlers.onAction('rename', entry) });
   if (entry.capabilities.move) actions.push({ id: 'move', labelKey: 'action.move', icon: FolderInput, onSelect: () => handlers.onAction('move', entry) });
@@ -64,7 +69,18 @@ export function EntryActionMenu({ entry, anchor, actions, onClose }: {
 
   useEffect(() => {
     menu.current?.querySelector<HTMLButtonElement>('[role="menuitem"]')?.focus();
-    const close = (event: KeyboardEvent) => { if (event.key === 'Escape') onClose(); };
+    const close = (event: KeyboardEvent) => {
+      if (event.key === 'Escape') { onClose(); return; }
+      if (!['ArrowDown', 'ArrowUp', 'Home', 'End'].includes(event.key) || !menu.current) return;
+      event.preventDefault();
+      const items = [...menu.current.querySelectorAll<HTMLElement>('[role="menuitem"]')];
+      const current = items.indexOf(document.activeElement as HTMLElement);
+      const next = event.key === 'Home' ? 0
+        : event.key === 'End' ? items.length - 1
+          : event.key === 'ArrowDown' ? (current + 1) % items.length
+            : (current - 1 + items.length) % items.length;
+      items[next]?.focus();
+    };
     const outside = (event: MouseEvent) => { if (menu.current && !menu.current.contains(event.target as Node)) onClose(); };
     window.addEventListener('keydown', close);
     window.addEventListener('mousedown', outside);
