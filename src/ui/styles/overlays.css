@@ -56,7 +56,7 @@
 .previewHeader { min-height: 54px; }
 .previewBody { padding: 0; background: var(--color-surface-muted); }
 .previewStatus { grid-auto-flow: row; }
-.previewError a { color: var(--color-primary); font-weight: 650; }
+.previewError a { color: var(--color-accent-foreground); font-weight: 650; }
 
 .toastRegion {
   position: fixed;
@@ -130,7 +130,7 @@
 .dialogBody p { margin: 0; color: var(--color-muted); font-size: 13px; line-height: 1.45; }
 .dialogButtons { display: flex; justify-content: flex-end; gap: 8px; }
 .pickerBreadcrumbs { display: flex; min-height: 28px; overflow-x: auto; }
-.pickerBreadcrumbs button { display: inline-flex; align-items: center; flex: 0 0 auto; border: 0; background: transparent; color: var(--color-primary-hover); padding: 3px 2px; font-size: 13px; }
+.pickerBreadcrumbs button { display: inline-flex; align-items: center; flex: 0 0 auto; border: 0; background: transparent; color: var(--color-accent-foreground-strong); padding: 3px 2px; font-size: 13px; }
 .folderPicker { display: grid; max-height: 220px; overflow: auto; border: 1px solid var(--color-border); border-radius: var(--radius-control); }
 .folderPicker button { display: flex; align-items: center; min-height: 38px; gap: 8px; border: 0; border-bottom: 1px solid var(--color-border); background: var(--color-surface); padding: 7px 10px; text-align: left; }
 .folderPicker button:hover:not(:disabled) { background: var(--color-hover); }
