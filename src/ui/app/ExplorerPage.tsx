@@ -128,7 +128,9 @@ export function ExplorerPage({
     setPreviewError(null);
     setPreviewLoading(true);
     void getEntry(previewId, controller.signal).then(setPreviewEntry).catch((error: unknown) => {
-      if (!(error instanceof DOMException && error.name === 'AbortError')) setPreviewError(error instanceof Error ? error : new Error(t('preview.unavailable')));
+      if (!(error instanceof DOMException && error.name === 'AbortError')) {
+        setPreviewError(new Error(localizedApiError(error, t, 'preview.unavailable')));
+      }
     }).finally(() => {
       if (!controller.signal.aborted) setPreviewLoading(false);
     });

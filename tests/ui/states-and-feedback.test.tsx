@@ -182,4 +182,21 @@ describe('page states and feedback', () => {
     expect(await screen.findByText('用户名或密码无效。')).toBeVisible();
     expect(screen.queryByText(/Raw login/)).not.toBeInTheDocument();
   });
+
+  it('localizes a real preview metadata API failure before rendering it', async () => {
+    localStorage.setItem('ilist.ui.preferences', JSON.stringify({ version: 1, locale: 'zh-CN', theme: 'light', defaultView: 'list' }));
+    vi.stubGlobal('fetch', vi.fn(async (input: RequestInfo | URL) => {
+      const url = String(input);
+      if (url.includes('/api/admin/me')) return Response.json(admin);
+      if (url.includes('/api/fs/list')) return Response.json(root);
+      if (url.includes('/api/fs/entries/file-report')) return Response.json({ ok: false, error: { code: 'UPSTREAM_ERROR', message: 'Raw preview metadata failure' } }, { status: 502 });
+      throw new Error(`Unexpected fetch: ${url}`);
+    }));
+    render(<App />);
+
+    await userEvent.click(await screen.findByRole('button', { name: '打开 report.pdf' }));
+
+    expect(await screen.findByRole('alert')).toHaveTextContent('存储操作失败。');
+    expect(screen.queryByText(/Raw preview metadata/)).not.toBeInTheDocument();
+  });
 });

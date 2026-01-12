@@ -10,6 +10,13 @@ function hex(name: string): string {
   return match[1];
 }
 
+function darkHex(name: string): string {
+  const dark = tokens.match(/\[data-theme='dark'\]\s*\{([\s\S]*?)\n\}/)?.[1];
+  const match = dark?.match(new RegExp(`${name}:\\s*(#[0-9a-f]{6})`, 'i'));
+  if (!match) throw new Error(`Missing dark ${name}`);
+  return match[1];
+}
+
 function luminance(value: string): number {
   const channels = value.slice(1).match(/.{2}/g)!.map((part) => Number.parseInt(part, 16) / 255).map((part) => part <= 0.03928 ? part / 12.92 : ((part + 0.055) / 1.055) ** 2.4);
   return 0.2126 * channels[0] + 0.7152 * channels[1] + 0.0722 * channels[2];
@@ -27,6 +34,15 @@ describe('visual style contracts', () => {
     expect(contrast(hex('--color-muted'), hex('--color-surface'))).toBeGreaterThanOrEqual(4.5);
   });
 
+  it('keeps distinct dark primary and hover tokens at WCAG AA contrast with white text', () => {
+    const darkPrimary = darkHex('--color-primary');
+    const darkHover = darkHex('--color-primary-hover');
+    expect(darkPrimary).not.toBe(hex('--color-primary'));
+    expect(darkHover).not.toBe(hex('--color-primary-hover'));
+    expect(contrast(darkPrimary, hex('--color-primary-text'))).toBeGreaterThanOrEqual(4.5);
+    expect(contrast(darkHover, hex('--color-primary-text'))).toBeGreaterThanOrEqual(4.5);
+  });
+
   it('keeps selection controls visible and mobile actions at least 48px', () => {
     expect(explorer).toContain('.entrySelect { opacity: 1; }');
     expect(explorer).toContain('.gridSelect { position: absolute; top: 10px; right: 10px; z-index: 1; opacity: 1; }');
@@ -35,5 +51,6 @@ describe('visual style contracts', () => {
     expect(explorer).toContain('.mobileAction, .mobileActionCancel { display: flex; align-items: center; width: 100%; min-height: 48px;');
     expect(explorer).toContain('.gridMenu { width: 48px; height: 48px; flex-basis: 48px;');
     expect(explorer).toContain('.entrySize { grid-column: 2; grid-row: 2;');
+    expect(explorer).toContain('.entryOpen { grid-column: 2; grid-row: 1; min-height: 48px; height: 48px;');
   });
 });
