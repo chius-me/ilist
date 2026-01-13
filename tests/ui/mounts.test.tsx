@@ -2,6 +2,7 @@ import { fireEvent, render, screen, waitFor } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { App } from '../../src/ui/App';
+import { AppProviders } from '../../src/ui/app/AppProviders';
 import { MountManager } from '../../src/ui/features/mounts/MountManager';
 
 const admin = { ok: true, data: { username: 'admin' } };
@@ -16,6 +17,11 @@ const oneDriveMount = {
   ...savedMount, id: 'onedrive-1', name: 'Personal drive', mountPath: '/personal', driverType: 'onedrive',
   provider: 'microsoft-onedrive-personal', connected: false, config: {},
 };
+
+async function chooseAction(mountName: string, actionName: string) {
+  await userEvent.click(await screen.findByRole('button', { name: `Actions for ${mountName}` }));
+  await userEvent.click(screen.getByRole('button', { name: actionName }));
+}
 
 describe('MountManager', () => {
   beforeEach(() => history.replaceState(null, '', '/admin/storages'));
@@ -35,7 +41,7 @@ describe('MountManager', () => {
     expect(await screen.findByRole('heading', { name: 'Storage mounts' })).toBeVisible();
     expect(await screen.findByText('Archive')).toBeVisible();
     expect(screen.queryByDisplayValue(/secret/i)).not.toBeInTheDocument();
-    await userEvent.click(screen.getByRole('button', { name: 'Test Archive' }));
+    await chooseAction('Archive', 'Test connection');
     expect(await screen.findByText('Connection successful')).toBeVisible();
   });
 
@@ -86,12 +92,12 @@ describe('MountManager', () => {
     }));
 
     render(<App />);
-    await userEvent.click(await screen.findByRole('button', { name: 'Edit Archive' }));
+    await chooseAction('Archive', 'Edit');
     expect(screen.getByLabelText('Secret Access Key')).toHaveValue('');
     fireEvent.change(screen.getByLabelText('Display name'), { target: { value: 'Cold archive' } });
     await userEvent.click(screen.getByRole('button', { name: 'Save changes' }));
-    await userEvent.click(screen.getByRole('button', { name: 'Disable Archive' }));
-    await userEvent.click(screen.getByRole('button', { name: 'Delete Archive' }));
+    await chooseAction('Archive', 'Disable');
+    await chooseAction('Archive', 'Delete');
     expect(screen.getByRole('dialog', { name: 'Delete storage mount' })).toBeVisible();
     await userEvent.click(screen.getByRole('button', { name: 'Delete mount' }));
 
@@ -110,7 +116,7 @@ describe('MountManager', () => {
       return Response.json({ ok: true, data: oneDriveMount });
     }));
 
-    render(<MountManager onBack={vi.fn()} navigate={navigate} />);
+    render(<AppProviders><MountManager onBack={vi.fn()} navigate={navigate} /></AppProviders>);
     await userEvent.click(await screen.findByRole('button', { name: 'Add storage' }));
     await userEvent.selectOptions(screen.getByLabelText('Storage type'), 'onedrive');
     await userEvent.type(screen.getByLabelText('Display name'), 'Personal drive');
@@ -133,20 +139,63 @@ describe('MountManager', () => {
       return Response.json({ ok: true, data: { ...connected, connected: false } });
     }));
 
-    render(<MountManager onBack={vi.fn()} navigate={vi.fn()} />);
+    render(<AppProviders><MountManager onBack={vi.fn()} navigate={vi.fn()} /></AppProviders>);
     expect(await screen.findByText('Connected')).toBeVisible();
-    expect(screen.getByRole('button', { name: 'Reconnect Personal drive' })).toBeVisible();
-    await userEvent.click(screen.getByRole('button', { name: 'Disconnect Personal drive' }));
+    await userEvent.click(screen.getByRole('button', { name: 'Actions for Personal drive' }));
+    expect(screen.getByRole('button', { name: 'Reconnect' })).toBeVisible();
+    await userEvent.click(screen.getByRole('button', { name: 'Disconnect' }));
     expect(screen.getByRole('dialog', { name: 'Disconnect OneDrive' })).toBeVisible();
     await userEvent.click(screen.getByRole('button', { name: 'Disconnect account' }));
     await waitFor(() => expect(requests).toContain('POST /api/admin/mounts/onedrive-1/disconnect'));
+  });
+
+  it('focuses mount confirmations, closes on Escape, and restores the invoking action', async () => {
+    vi.stubGlobal('fetch', vi.fn(async () => Response.json({ ok: true, data: [savedMount] })));
+    render(<AppProviders><MountManager onBack={vi.fn()} /></AppProviders>);
+    await userEvent.click(await screen.findByRole('button', { name: 'Actions for Archive' }));
+    const deleteAction = screen.getByRole('button', { name: 'Delete' });
+    await userEvent.click(deleteAction);
+
+    expect(screen.getByRole('button', { name: 'Cancel' })).toHaveFocus();
+    fireEvent.keyDown(document, { key: 'Escape' });
+
+    await waitFor(() => expect(screen.queryByRole('dialog', { name: 'Delete storage mount' })).not.toBeInTheDocument());
+    expect(screen.getByRole('button', { name: 'Actions for Archive' })).toHaveFocus();
+  });
+
+  it('closes a mount action menu after selection and when another menu opens', async () => {
+    const connected = { ...oneDriveMount, connected: true };
+    vi.stubGlobal('fetch', vi.fn(async () => Response.json({ ok: true, data: [savedMount, connected] })));
+    render(<AppProviders><MountManager onBack={vi.fn()} /></AppProviders>);
+
+    const archiveTrigger = await screen.findByRole('button', { name: 'Actions for Archive' });
+    const personalTrigger = screen.getByRole('button', { name: 'Actions for Personal drive' });
+    await userEvent.click(archiveTrigger);
+    expect(archiveTrigger.closest('details')).toHaveAttribute('open');
+
+    await userEvent.click(personalTrigger);
+    expect(archiveTrigger.closest('details')).not.toHaveAttribute('open');
+    expect(personalTrigger.closest('details')).toHaveAttribute('open');
+
+    await userEvent.click(screen.getByRole('button', { name: 'Disconnect' }));
+    expect(personalTrigger.closest('details')).not.toHaveAttribute('open');
+    await userEvent.click(screen.getByRole('button', { name: 'Cancel' }));
+    expect(personalTrigger).toHaveFocus();
   });
 
   it('shows a concise OneDrive callback failure status', async () => {
     history.replaceState(null, '', '/admin/storages?onedrive=error');
     vi.stubGlobal('fetch', vi.fn(async () => Response.json({ ok: true, data: [oneDriveMount] })));
 
-    render(<MountManager onBack={vi.fn()} navigate={vi.fn()} />);
+    render(<AppProviders><MountManager onBack={vi.fn()} navigate={vi.fn()} /></AppProviders>);
     expect(await screen.findByText('OneDrive connection failed')).toBeVisible();
+  });
+
+  it('localizes mount API failures without exposing provider messages', async () => {
+    localStorage.setItem('ilist.ui.preferences', JSON.stringify({ version: 1, locale: 'zh-CN', theme: 'light', defaultView: 'list' }));
+    vi.stubGlobal('fetch', vi.fn(async () => Response.json({ ok: false, error: { code: 'UPSTREAM_ERROR', message: 'Raw mount provider failure' } }, { status: 502 })));
+    render(<AppProviders><MountManager onBack={vi.fn()} /></AppProviders>);
+    expect(await screen.findByText('存储操作失败。')).toBeVisible();
+    expect(screen.queryByText(/Raw mount/)).not.toBeInTheDocument();
   });
 });

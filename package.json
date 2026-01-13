@@ -6,12 +6,15 @@
   "type": "module",
   "scripts": {
     "dev": "wrangler dev",
+    "dev:web": "vite --host 127.0.0.1 --port 4173",
     "build": "vite build",
     "deploy": "npm run build && wrangler deploy --minify",
     "types": "wrangler types src/worker/env.d.ts",
     "test": "npm run test:worker && npm run test:ui",
     "test:worker": "vitest run --config vitest.worker.config.ts",
     "test:ui": "vitest run --config vitest.ui.config.ts",
+    "test:e2e": "playwright test",
+    "test:visual": "playwright test --grep @visual",
     "check": "tsc --noEmit && npm run build && npm run test",
     "migrate:objects": "node scripts/migrate-objects.mjs",
     "hash-password": "node scripts/hash-password.mjs"
@@ -25,6 +28,7 @@
   "devDependencies": {
     "@cloudflare/vitest-pool-workers": "^0.18.4",
     "@cloudflare/workers-types": "^4.20250214.0",
+    "@playwright/test": "^1.61.1",
     "@testing-library/jest-dom": "^6.9.1",
     "@testing-library/react": "^16.3.2",
     "@testing-library/user-event": "^14.6.1",

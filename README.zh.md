@@ -24,7 +24,9 @@
 - 支持使用 AWS Signature Version 4 的 S3 兼容挂载
 - 支持通过 S3 凭据或内置 Worker 绑定使用 Cloudflare R2
 - 支持公开目录浏览、稳定文件链接、下载和常见文件预览
-- 支持列表和网格视图、面包屑、排序、搜索、选择及响应式布局
+- 支持英文和简体中文界面，并提供跟随系统、浅色和深色主题，偏好保存在本地
+- 支持列表和网格视图、面包屑、排序、搜索、键盘选择及响应式布局
+- 支持适配桌面、平板和移动屏幕的存储与外观管理界面
 - 支持管理员登录、上传、新建文件夹、重命名、移动、删除及可见性控制
 - 支持 D1 迁移以及旧版 R2 对象链接的兼容
 - 支持流式传输提供商响应，不会将完整文件缓冲在 Worker 内存中
@@ -148,9 +150,12 @@ npm run dev
 | 命令 | 用途 |
 | --- | --- |
 | `npm run dev` | 运行本地 Worker 和 UI |
+| `npm run dev:web` | 运行仅前端的 Vite 开发服务器 |
 | `npm run build` | 构建 Vite 前端 |
 | `npm run test:worker` | 运行 Worker 运行时测试 |
 | `npm run test:ui` | 运行 UI 测试 |
+| `npm run test:e2e` | 在桌面、平板和移动视口运行浏览器流程测试 |
+| `npm run test:visual` | 运行浏览器截图场景 |
 | `npm run test` | 运行全部测试 |
 | `npm run check` | 类型检查、构建并运行全部测试 |
 | `npm run deploy` | 使用 Wrangler 构建并部署 |
