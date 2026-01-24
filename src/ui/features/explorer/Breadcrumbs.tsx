@@ -9,10 +9,11 @@ export function Breadcrumbs({ items, onOpen }: { items: Breadcrumb[]; onOpen: (p
       {items.map((item, index) => (
         <span className="breadcrumbItem" key={item.id}>
           {index > 0 ? <ChevronRight aria-hidden="true" size={15} /> : null}
-          <button type="button" onClick={() => onOpen(item.path)} title={item.path}>
-            {index === 0 ? <Home aria-hidden="true" size={15} /> : null}
-            <span>{item.name || 'ilist'}</span>
-          </button>
+          {index === 0 ? <button type="button" aria-label={t('explorer.pathHome')} onClick={() => onOpen(item.path)}>
+            <Home aria-hidden="true" size={15} />
+          </button> : <button type="button" onClick={() => onOpen(item.path)} title={item.path}>
+            <span>{item.name}</span>
+          </button>}
         </span>
       ))}
     </nav>
