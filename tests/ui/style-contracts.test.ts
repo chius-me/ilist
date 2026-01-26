@@ -77,4 +77,18 @@ describe('visual style contracts', () => {
   it('animates the toolbar refresh icon while it is refreshing', () => {
     expect(explorer).toContain('.explorerToolbar .isSpinning { animation: spin 0.9s linear infinite; }');
   });
+
+  it('keeps the compact command bar on one row with 48px mobile icon targets', () => {
+    expect(explorer).toContain('.explorerToolbar { position: relative; display: flex; align-items: center; min-height: 54px;');
+    expect(explorer).toContain('.toolbarPath { min-width: 0; flex: 1 1 auto; overflow: hidden; }');
+    expect(explorer).toContain('.toolbarActions { position: relative; z-index: 2; margin-left: auto;');
+    expect(explorer).toContain('.searchOverlay { position: absolute; right: 100%; width: min(360px, calc(100vw - 24px));');
+    expect(explorer).toMatch(/\.sortControl select\s*\{[\s\S]*?width: auto;[\s\S]*?max-width: 88px;/);
+    expect(explorer).toContain('.explorerToolbar .iconButton, .mobileViewToggle button { width: 48px; height: 48px; flex-basis: 48px; }');
+    expect(explorer).toContain('.desktopViewToggle, .desktopAdminActions { display: none; }');
+    expect(explorer).toContain('.mobileViewToggle, .mobileAdminActions { display: inline-flex; }');
+    expect(explorer).not.toContain('.directoryCommands');
+    expect(explorer).not.toContain('.explorerToolbar { align-items: stretch; flex-wrap: wrap; }');
+    expect(explorer).not.toContain('.toolbarActions { width: 100%; justify-content: flex-start; }');
+  });
 });

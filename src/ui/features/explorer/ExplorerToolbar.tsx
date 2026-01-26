@@ -54,6 +54,7 @@ export function ExplorerToolbar({
   const toolbar = useRef<HTMLElement>(null);
   const restoreSearchFocus = useRef(false);
   const [searchOpen, setSearchOpen] = useState(false);
+  const [adminMenuOpen, setAdminMenuOpen] = useState(false);
 
   useEffect(() => {
     if (searchOpen) {
@@ -77,6 +78,25 @@ export function ExplorerToolbar({
     return () => document.removeEventListener('mousedown', closeOnOutsideClick);
   }, [searchOpen]);
 
+  useEffect(() => {
+    if (!adminMenuOpen) return;
+    const closeOnOutsideClick = (event: MouseEvent) => {
+      if (toolbar.current?.contains(event.target as Node)) return;
+      setAdminMenuOpen(false);
+    };
+    const closeOnEscape = (event: KeyboardEvent) => {
+      if (event.key !== 'Escape') return;
+      event.preventDefault();
+      setAdminMenuOpen(false);
+    };
+    document.addEventListener('mousedown', closeOnOutsideClick);
+    document.addEventListener('keydown', closeOnEscape);
+    return () => {
+      document.removeEventListener('mousedown', closeOnOutsideClick);
+      document.removeEventListener('keydown', closeOnEscape);
+    };
+  }, [adminMenuOpen]);
+
   function updateSort(event: ChangeEvent<HTMLSelectElement>) {
     onSort({ ...sort, field: event.target.value as ExplorerSortField });
   }
@@ -86,11 +106,21 @@ export function ExplorerToolbar({
     setSearchOpen(false);
   }
 
+  function openUpload() {
+    setAdminMenuOpen(false);
+    uploadInput.current?.click();
+  }
+
+  function createFolder() {
+    setAdminMenuOpen(false);
+    onCreateFolder();
+  }
+
   return (
     <section ref={toolbar} className="explorerToolbar" aria-label={t('toolbar.controls')}>
-      <Breadcrumbs items={breadcrumbs} onOpen={onOpenPath} />
+      <div className="toolbarPath"><Breadcrumbs items={breadcrumbs} onOpen={onOpenPath} /></div>
       <div className="toolbarActions">
-        {searchOpen ? <label className="searchControl">
+        {searchOpen ? <label className="searchControl searchOverlay">
           <Search aria-hidden="true" size={17} />
           <span className="srOnly">{t('toolbar.search')}</span>
           <input ref={searchInput} value={query} onChange={(event) => onQuery(event.target.value)} onKeyDown={(event) => {
@@ -122,7 +152,7 @@ export function ExplorerToolbar({
         <button className="iconButton" type="button" onClick={onRefresh} disabled={refreshing} aria-label={t('action.refresh')} title={t('action.refresh')}>
           <RefreshCw aria-hidden="true" size={16} className={refreshing ? 'isSpinning' : undefined} />
         </button>
-        <div className="viewToggle" role="group" aria-label={t('toolbar.viewMode')}>
+        <div className="viewToggle desktopViewToggle" role="group" aria-label={t('toolbar.viewMode')}>
           <button
             className={view === 'list' ? 'active' : undefined}
             type="button"
@@ -144,20 +174,39 @@ export function ExplorerToolbar({
             <Grid2X2 aria-hidden="true" size={17} />
           </button>
         </div>
+        <div className="mobileViewToggle">
+          <button
+            type="button"
+            title={view === 'list' ? t('toolbar.switchToGrid') : t('toolbar.switchToList')}
+            aria-label={view === 'list' ? t('toolbar.switchToGrid') : t('toolbar.switchToList')}
+            onClick={() => onView(view === 'list' ? 'grid' : 'list')}
+          >
+            {view === 'list' ? <Grid2X2 aria-hidden="true" size={17} /> : <List aria-hidden="true" size={17} />}
+          </button>
+        </div>
         {admin ? (
           <>
-            {canUpload ? <>
-              <input ref={uploadInput} className="srOnly" type="file" multiple tabIndex={-1} onChange={(event) => {
-                onUpload(Array.from(event.target.files ?? []));
-                event.target.value = '';
-              }} />
-              <button className="iconButton" type="button" title={t('toolbar.upload')} aria-label={t('toolbar.upload')} onClick={() => uploadInput.current?.click()}>
+            <input ref={uploadInput} className="srOnly" type="file" multiple tabIndex={-1} onChange={(event) => {
+              onUpload(Array.from(event.target.files ?? []));
+              event.target.value = '';
+            }} />
+            <div className="desktopAdminActions">
+              {canUpload ? <button className="iconButton" type="button" title={t('toolbar.upload')} aria-label={t('toolbar.upload')} onClick={openUpload}>
                 <Upload aria-hidden="true" size={17} />
+              </button> : null}
+              {canCreateFolder ? <button className="iconButton" type="button" title={t('toolbar.createFolder')} aria-label={t('toolbar.createFolder')} onClick={createFolder}>
+                <Plus aria-hidden="true" size={17} />
+              </button> : null}
+            </div>
+            {canUpload || canCreateFolder ? <div className="mobileAdminActions">
+              <button className="iconButton" type="button" title={t('toolbar.adminMenu')} aria-label={t('toolbar.adminMenu')} aria-haspopup="menu" aria-expanded={adminMenuOpen} onClick={() => setAdminMenuOpen((open) => !open)}>
+                <Plus aria-hidden="true" size={17} />
               </button>
-            </> : null}
-            {canCreateFolder ? <button className="iconButton" type="button" title={t('toolbar.createFolder')} aria-label={t('toolbar.createFolder')} onClick={onCreateFolder}>
-              <Plus aria-hidden="true" size={17} />
-            </button> : null}
+              {adminMenuOpen ? <div className="mobileAdminMenu" role="menu" aria-label={t('toolbar.adminMenu')}>
+                {canUpload ? <button type="button" role="menuitem" onClick={openUpload}><Upload aria-hidden="true" size={17} />{t('toolbar.upload')}</button> : null}
+                {canCreateFolder ? <button type="button" role="menuitem" onClick={createFolder}><Plus aria-hidden="true" size={17} />{t('toolbar.createFolder')}</button> : null}
+              </div> : null}
+            </div> : null}
             {selectionCount > 0 ? <span className="selectionCount">{t('selection.count', { count: selectionCount })}</span> : null}
           </>
         ) : null}
