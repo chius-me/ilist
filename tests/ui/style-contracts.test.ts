@@ -73,4 +73,8 @@ describe('visual style contracts', () => {
     expect(explorer).toContain('.entrySize { grid-column: 2; grid-row: 2;');
     expect(explorer).toContain('.entryOpen { grid-column: 2; grid-row: 1; min-height: 48px; height: 48px;');
   });
+
+  it('animates the toolbar refresh icon while it is refreshing', () => {
+    expect(explorer).toContain('.explorerToolbar .isSpinning { animation: spin 0.9s linear infinite; }');
+  });
 });
