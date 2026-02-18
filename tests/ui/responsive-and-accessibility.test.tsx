@@ -48,14 +48,13 @@ const root = {
 
 describe('responsive actions', () => {
   it('uses the compact mobile view toggle and administrator menu commands', () => {
-    vi.stubGlobal('matchMedia', vi.fn().mockReturnValue({ matches: true, addEventListener: vi.fn(), removeEventListener: vi.fn() }));
     const onView = vi.fn();
     const onUpload = vi.fn();
     const onCreateFolder = vi.fn();
     const { container } = render(
       <AppProviders>
         <ExplorerToolbar
-          breadcrumbs={[]}
+          breadcrumbs={[{ id: 'root', name: 'ilist', path: '/' }]}
           query=""
           sort={{ field: 'name', order: 'asc' }}
           view="list"
@@ -96,12 +95,11 @@ describe('responsive actions', () => {
     expect(screen.queryByRole('menu', { name: 'Administrator menu' })).not.toBeInTheDocument();
   });
 
-  it('closes the compact administrator menu on Escape and outside click', () => {
-    vi.stubGlobal('matchMedia', vi.fn().mockReturnValue({ matches: true, addEventListener: vi.fn(), removeEventListener: vi.fn() }));
+  it('manages focus and keyboard navigation in the compact administrator menu', () => {
     const { container } = render(
       <AppProviders>
         <ExplorerToolbar
-          breadcrumbs={[]}
+          breadcrumbs={[{ id: 'root', name: 'ilist', path: '/' }]}
           query=""
           sort={{ field: 'name', order: 'asc' }}
           view="list"
@@ -123,12 +121,61 @@ describe('responsive actions', () => {
 
     const menuButton = within(container.querySelector<HTMLElement>('.mobileAdminActions')!).getByRole('button', { name: 'Administrator menu' });
     fireEvent.click(menuButton);
+    const upload = screen.getByRole('menuitem', { name: 'Upload files' });
+    const createFolder = screen.getByRole('menuitem', { name: 'Create folder' });
+    expect(upload).toHaveFocus();
+
+    fireEvent.keyDown(document, { key: 'ArrowDown' });
+    expect(createFolder).toHaveFocus();
+    fireEvent.keyDown(document, { key: 'ArrowDown' });
+    expect(upload).toHaveFocus();
+    fireEvent.keyDown(document, { key: 'ArrowUp' });
+    expect(createFolder).toHaveFocus();
     fireEvent.keyDown(document, { key: 'Escape' });
     expect(screen.queryByRole('menu', { name: 'Administrator menu' })).not.toBeInTheDocument();
+    expect(menuButton).toHaveFocus();
+  });
 
-    fireEvent.click(menuButton);
-    fireEvent.mouseDown(document.body);
-    expect(screen.queryByRole('menu', { name: 'Administrator menu' })).not.toBeInTheDocument();
+  it('closes the compact administrator menu when another toolbar control is pressed', () => {
+    const { container } = render(
+      <AppProviders>
+        <ExplorerToolbar
+          breadcrumbs={[{ id: 'root', name: 'ilist', path: '/' }]}
+          query=""
+          sort={{ field: 'name', order: 'asc' }}
+          view="list"
+          refreshing={false}
+          sessionStatus="admin"
+          selectionCount={0}
+          canUpload
+          canCreateFolder
+          onQuery={vi.fn()}
+          onOpenPath={vi.fn()}
+          onRefresh={vi.fn()}
+          onSort={vi.fn()}
+          onView={vi.fn()}
+          onUpload={vi.fn()}
+          onCreateFolder={vi.fn()}
+        />
+      </AppProviders>,
+    );
+
+    const toolbar = within(container.querySelector<HTMLElement>('.explorerToolbar')!);
+    const menuButton = toolbar.getByRole('button', { name: 'Administrator menu' });
+    const controls = [
+      toolbar.getByRole('button', { name: 'Search this folder' }),
+      toolbar.getByRole('combobox', { name: 'Sort files' }),
+      toolbar.getByRole('button', { name: 'Refresh' }),
+      toolbar.getByRole('button', { name: 'Switch to grid view' }),
+      toolbar.getByRole('button', { name: 'Path home' }),
+    ];
+
+    for (const control of controls) {
+      fireEvent.click(menuButton);
+      expect(screen.getByRole('menu', { name: 'Administrator menu' })).toBeVisible();
+      fireEvent.mouseDown(control);
+      expect(screen.queryByRole('menu', { name: 'Administrator menu' })).not.toBeInTheDocument();
+    }
   });
 
   for (const locale of ['en', 'zh-CN'] as const) {

@@ -51,6 +51,56 @@ test('@visual explorer list, grid, themes, and locales', async ({ page }) => {
   await expectNoHorizontalOverflow(page);
 });
 
+test('mobile command bar fits and search uses the available left region', async ({ page }, testInfo) => {
+  test.skip(testInfo.project.name !== 'mobile', '390px mobile layout contract');
+  await installApiFixtures(page, { admin: true });
+  await page.goto('/');
+
+  const toolbar = page.getByRole('region', { name: 'File controls' });
+  const browser = page.locator('.explorerBrowser');
+  const searchButton = page.getByRole('button', { name: 'Search this folder' });
+  const sort = page.getByRole('combobox', { name: 'Sort files' });
+  const iconControls = [
+    searchButton,
+    page.getByRole('button', { name: 'Sort ascending' }),
+    page.getByRole('button', { name: 'Refresh' }),
+    page.getByRole('button', { name: 'Switch to grid view' }),
+    page.getByRole('button', { name: 'Administrator menu' }),
+  ];
+  const sortBefore = await sort.boundingBox();
+  const iconBoxes = [];
+
+  expect(page.viewportSize()?.width).toBe(390);
+  await expectNoHorizontalOverflow(page);
+  await expectInsideViewport(page, toolbar);
+  for (const control of iconControls) {
+    const box = await control.boundingBox();
+    expect(box).not.toBeNull();
+    expect(box!.width).toBeGreaterThanOrEqual(48);
+    expect(box!.height).toBeGreaterThanOrEqual(48);
+    iconBoxes.push(box!);
+  }
+  expect((await sort.boundingBox())!.width).toBeLessThanOrEqual(64);
+  expect(Math.max(...iconBoxes.map((box) => box.y)) - Math.min(...iconBoxes.map((box) => box.y))).toBeLessThanOrEqual(1);
+
+  await searchButton.click();
+  const search = page.getByRole('textbox', { name: 'Search this folder' });
+  const searchControl = page.locator('.searchControl');
+  const searchBox = await searchControl.boundingBox();
+  const browserBox = await browser.boundingBox();
+  const sortAfter = await sort.boundingBox();
+  expect(searchBox).not.toBeNull();
+  expect(browserBox).not.toBeNull();
+  expect(sortBefore).not.toBeNull();
+  expect(sortAfter).not.toBeNull();
+  expect(searchBox!.x).toBeGreaterThanOrEqual(browserBox!.x);
+  expect(searchBox!.x + searchBox!.width).toBeLessThanOrEqual(sortAfter!.x + 1);
+  expect(searchBox!.width).toBeGreaterThanOrEqual(100);
+  expect(Math.abs(sortAfter!.x - sortBefore!.x)).toBeLessThanOrEqual(1);
+  await expect(search).toBeFocused();
+  await expectNoHorizontalOverflow(page);
+});
+
 test('@visual previews, selection, menus, and dialogs stay in bounds', async ({ page }) => {
   await installApiFixtures(page, { admin: true });
   await page.goto('/');
