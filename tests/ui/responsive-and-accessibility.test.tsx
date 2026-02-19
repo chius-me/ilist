@@ -136,6 +136,44 @@ describe('responsive actions', () => {
     expect(menuButton).toHaveFocus();
   });
 
+  it('does not hijack menu navigation keys when focus is outside the menu', () => {
+    const { container } = render(
+      <AppProviders>
+        <ExplorerToolbar
+          breadcrumbs={[{ id: 'root', name: 'ilist', path: '/' }]}
+          query=""
+          sort={{ field: 'name', order: 'asc' }}
+          view="list"
+          refreshing={false}
+          sessionStatus="admin"
+          selectionCount={0}
+          canUpload
+          canCreateFolder
+          onQuery={vi.fn()}
+          onOpenPath={vi.fn()}
+          onRefresh={vi.fn()}
+          onSort={vi.fn()}
+          onView={vi.fn()}
+          onUpload={vi.fn()}
+          onCreateFolder={vi.fn()}
+        />
+      </AppProviders>,
+    );
+
+    const toolbar = within(container.querySelector<HTMLElement>('.explorerToolbar')!);
+    fireEvent.click(toolbar.getByRole('button', { name: 'Administrator menu' }));
+    const sort = toolbar.getByRole('combobox', { name: 'Sort files' });
+
+    for (const key of ['ArrowDown', 'ArrowUp', 'Home', 'End']) {
+      sort.focus();
+      const event = new KeyboardEvent('keydown', { key, bubbles: true, cancelable: true });
+      document.dispatchEvent(event);
+      expect(event.defaultPrevented).toBe(false);
+      expect(sort).toHaveFocus();
+      expect(screen.getByRole('menu', { name: 'Administrator menu' })).toBeVisible();
+    }
+  });
+
   it('closes the compact administrator menu when another toolbar control is pressed', () => {
     const { container } = render(
       <AppProviders>
