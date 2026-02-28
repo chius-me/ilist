@@ -20,6 +20,13 @@ async function settleVisualState(page: Page) {
   await page.waitForTimeout(200);
 }
 
+async function expectStablePosition(before: { x: number; y: number } | null, after: { x: number; y: number } | null) {
+  expect(before).not.toBeNull();
+  expect(after).not.toBeNull();
+  expect(Math.abs(after!.x - before!.x)).toBeLessThanOrEqual(1);
+  expect(Math.abs(after!.y - before!.y)).toBeLessThanOrEqual(1);
+}
+
 async function openEntryAction(page: Page, report: string, action: string) {
   await page.getByRole('button', { name: `Actions for ${report}` }).click();
   if ((page.viewportSize()?.width ?? 0) <= 760) await page.getByRole('dialog', { name: `Actions for ${report}` }).getByRole('button', { name: action }).click();
@@ -30,12 +37,53 @@ test('@visual explorer list, grid, themes, and locales', async ({ page }) => {
   await installApiFixtures(page, { admin: true });
   await page.goto('/');
   await expect(page.getByRole('list', { name: 'Files and folders' })).toBeVisible();
+  await expect(page.getByRole('button', { name: 'Path home' })).toBeVisible();
   await expectNoHorizontalOverflow(page);
-  await expectInsideViewport(page, page.getByRole('button', { name: 'Upload files' }));
+
+  const toolbarActions = page.locator('.toolbarActions');
+  const mobile = (page.viewportSize()?.width ?? 0) <= 760;
+  await expectInsideViewport(
+    page,
+    page.getByRole('button', { name: mobile ? 'Administrator menu' : 'Upload files' }),
+  );
+  await expect.poll(() => toolbarActions.locator('button:visible, select:visible').evaluateAll((controls) => controls.map((control) => control.getAttribute('aria-label')))).toEqual(
+    mobile
+      ? ['Search this folder', 'Sort files', 'Sort ascending', 'Refresh', 'Switch to grid view', 'Administrator menu']
+      : ['Search this folder', 'Sort files', 'Sort ascending', 'Refresh', 'List view', 'Grid view', 'Upload files', 'Create folder'],
+  );
   await expect(page).toHaveScreenshot('explorer-list-light-en.png', { fullPage: true });
 
-  await page.getByRole('button', { name: 'Grid view' }).click();
-  await expect(page.getByRole('button', { name: 'Grid view' })).toHaveAttribute('aria-pressed', 'true');
+  const refresh = page.getByRole('button', { name: 'Refresh' });
+  const viewControl = mobile
+    ? page.getByRole('button', { name: 'Switch to grid view' })
+    : page.getByRole('group', { name: 'View mode' });
+  const refreshBeforeSearch = await refresh.boundingBox();
+  const viewBeforeSearch = await viewControl.boundingBox();
+  await page.getByRole('button', { name: 'Search this folder' }).click();
+  await expect(page.getByRole('textbox', { name: 'Search this folder' })).toBeFocused();
+  await expectStablePosition(refreshBeforeSearch, await refresh.boundingBox());
+  await expectStablePosition(viewBeforeSearch, await viewControl.boundingBox());
+  await expectNoHorizontalOverflow(page);
+  await settleVisualState(page);
+  await expect(page).toHaveScreenshot('explorer-search-expanded.png', { fullPage: true });
+
+  if (mobile) {
+    const adminMenuButton = page.getByRole('button', { name: 'Administrator menu' });
+    await adminMenuButton.click();
+    const adminMenu = page.getByRole('menu', { name: 'Administrator menu' });
+    await expect(adminMenu).toBeVisible();
+    await expect(adminMenu.getByRole('menuitem')).toHaveText(['Upload files', 'Create folder']);
+    await expectInsideViewport(page, adminMenu);
+    await expect(page).toHaveScreenshot('explorer-admin-menu.png', { fullPage: true });
+    await adminMenuButton.click();
+  }
+
+  const gridButton = mobile
+    ? page.getByRole('button', { name: 'Switch to grid view' })
+    : page.getByRole('button', { name: 'Grid view' });
+  await gridButton.click();
+  if (mobile) await expect(page.getByRole('button', { name: 'Switch to list view' })).toBeVisible();
+  else await expect(page.getByRole('button', { name: 'Grid view' })).toHaveAttribute('aria-pressed', 'true');
   await settleVisualState(page);
   await expect(page).toHaveScreenshot('explorer-grid-light-en.png', { fullPage: true });
 
@@ -45,7 +93,7 @@ test('@visual explorer list, grid, themes, and locales', async ({ page }) => {
   await expect(page).toHaveScreenshot('explorer-grid-dark-en.png', { fullPage: true });
 
   await page.getByRole('button', { name: 'Change language' }).click();
-  await expect(page.getByRole('button', { name: '上传文件' })).toBeVisible();
+  await expect(page.getByRole('button', { name: mobile ? '管理员菜单' : '上传文件' })).toBeVisible();
   await settleVisualState(page);
   await expect(page).toHaveScreenshot('explorer-grid-dark-zh.png', { fullPage: true });
   await expectNoHorizontalOverflow(page);
