@@ -73,4 +73,25 @@ describe('visual style contracts', () => {
     expect(explorer).toContain('.entrySize { grid-column: 2; grid-row: 2;');
     expect(explorer).toContain('.entryOpen { grid-column: 2; grid-row: 1; min-height: 48px; height: 48px;');
   });
+
+  it('animates the toolbar refresh icon while it is refreshing', () => {
+    expect(explorer).toContain('.explorerToolbar .isSpinning { animation: spin 0.9s linear infinite; }');
+  });
+
+  it('keeps the compact command bar on one row with 48px mobile icon targets', () => {
+    expect(explorer).toContain('.explorerToolbar { position: relative; display: flex; align-items: center; min-height: 54px;');
+    expect(explorer).toMatch(/\.toolbarPath\s*\{[^}]*min-width: 0;[^}]*flex: 1 1 auto;[^}]*overflow: hidden;/);
+    expect(explorer).toContain('.toolbarActions { position: relative; z-index: 2; margin-left: auto;');
+    expect(explorer).toContain('.searchOverlay { width: 100%; min-width: 0; max-width: 360px; }');
+    expect(explorer).toMatch(/\.sortControl select\s*\{[\s\S]*?width: auto;[\s\S]*?max-width: 88px;/);
+    expect(explorer).toContain('.explorerToolbar .iconButton, .mobileViewToggle button { width: 48px; height: 48px; flex-basis: 48px; }');
+    expect(explorer).toContain('.desktopViewToggle, .desktopAdminActions { display: none; }');
+    expect(explorer).toContain('.mobileViewToggle, .mobileAdminActions { display: inline-flex; }');
+    expect(explorer).not.toContain('.directoryCommands');
+    expect(explorer).not.toContain('.explorerToolbar { align-items: stretch; flex-wrap: wrap; }');
+    expect(explorer).not.toContain('.toolbarActions { width: 100%; justify-content: flex-start; }');
+    expect(explorer).toContain('.explorerPage { width: 100%; padding-top: 12px; }');
+    expect(explorer).toContain('.explorerToolbar, .toolbarActions { gap: 0; }');
+    expect(explorer).toContain('.sortControl select { width: 64px; max-width: 64px;');
+  });
 });

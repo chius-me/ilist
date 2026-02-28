@@ -1,4 +1,4 @@
-import { act, fireEvent, render, renderHook, screen, waitFor } from '@testing-library/react';
+import { act, fireEvent, render, renderHook, screen, waitFor, within } from '@testing-library/react';
 import type { ReactNode } from 'react';
 import { describe, expect, it, vi } from 'vitest';
 import { App } from '../../src/ui/App';
@@ -10,6 +10,7 @@ import { FileList } from '../../src/ui/features/explorer/FileList';
 import type { Entry } from '../../src/ui/types/entries';
 import { useUploadQueue } from '../../src/ui/features/uploads/useUploadQueue';
 import { AdminLayout } from '../../src/ui/app/AdminLayout';
+import { ExplorerToolbar } from '../../src/ui/features/explorer/ExplorerToolbar';
 
 const report: Entry = {
   id: 'report-file',
@@ -46,6 +47,175 @@ const root = {
 };
 
 describe('responsive actions', () => {
+  it('uses the compact mobile view toggle and administrator menu commands', () => {
+    const onView = vi.fn();
+    const onUpload = vi.fn();
+    const onCreateFolder = vi.fn();
+    const { container } = render(
+      <AppProviders>
+        <ExplorerToolbar
+          breadcrumbs={[{ id: 'root', name: 'ilist', path: '/' }]}
+          query=""
+          sort={{ field: 'name', order: 'asc' }}
+          view="list"
+          refreshing={false}
+          sessionStatus="admin"
+          selectionCount={0}
+          canUpload
+          canCreateFolder
+          onQuery={vi.fn()}
+          onOpenPath={vi.fn()}
+          onRefresh={vi.fn()}
+          onSort={vi.fn()}
+          onView={onView}
+          onUpload={onUpload}
+          onCreateFolder={onCreateFolder}
+        />
+      </AppProviders>,
+    );
+
+    const mobileViewToggle = container.querySelector<HTMLElement>('.mobileViewToggle');
+    expect(mobileViewToggle).not.toBeNull();
+    fireEvent.click(within(mobileViewToggle!).getByRole('button', { name: 'Switch to grid view' }));
+    expect(onView).toHaveBeenCalledWith('grid');
+
+    const mobileAdminActions = container.querySelector<HTMLElement>('.mobileAdminActions');
+    expect(mobileAdminActions).not.toBeNull();
+    fireEvent.click(within(mobileAdminActions!).getByRole('button', { name: 'Administrator menu' }));
+    expect(screen.getByRole('menu', { name: 'Administrator menu' })).toBeVisible();
+
+    fireEvent.click(screen.getByRole('menuitem', { name: 'Upload files' }));
+    expect(screen.queryByRole('menu', { name: 'Administrator menu' })).not.toBeInTheDocument();
+    fireEvent.change(container.querySelector('input[type="file"]')!, { target: { files: [new File(['report'], 'report.txt')] } });
+    expect(onUpload).toHaveBeenCalledWith([expect.objectContaining({ name: 'report.txt' })]);
+
+    fireEvent.click(within(mobileAdminActions!).getByRole('button', { name: 'Administrator menu' }));
+    fireEvent.click(screen.getByRole('menuitem', { name: 'Create folder' }));
+    expect(onCreateFolder).toHaveBeenCalledOnce();
+    expect(screen.queryByRole('menu', { name: 'Administrator menu' })).not.toBeInTheDocument();
+  });
+
+  it('manages focus and keyboard navigation in the compact administrator menu', () => {
+    const { container } = render(
+      <AppProviders>
+        <ExplorerToolbar
+          breadcrumbs={[{ id: 'root', name: 'ilist', path: '/' }]}
+          query=""
+          sort={{ field: 'name', order: 'asc' }}
+          view="list"
+          refreshing={false}
+          sessionStatus="admin"
+          selectionCount={0}
+          canUpload
+          canCreateFolder
+          onQuery={vi.fn()}
+          onOpenPath={vi.fn()}
+          onRefresh={vi.fn()}
+          onSort={vi.fn()}
+          onView={vi.fn()}
+          onUpload={vi.fn()}
+          onCreateFolder={vi.fn()}
+        />
+      </AppProviders>,
+    );
+
+    const menuButton = within(container.querySelector<HTMLElement>('.mobileAdminActions')!).getByRole('button', { name: 'Administrator menu' });
+    fireEvent.click(menuButton);
+    const upload = screen.getByRole('menuitem', { name: 'Upload files' });
+    const createFolder = screen.getByRole('menuitem', { name: 'Create folder' });
+    expect(upload).toHaveFocus();
+
+    fireEvent.keyDown(document, { key: 'ArrowDown' });
+    expect(createFolder).toHaveFocus();
+    fireEvent.keyDown(document, { key: 'ArrowDown' });
+    expect(upload).toHaveFocus();
+    fireEvent.keyDown(document, { key: 'ArrowUp' });
+    expect(createFolder).toHaveFocus();
+    fireEvent.keyDown(document, { key: 'Escape' });
+    expect(screen.queryByRole('menu', { name: 'Administrator menu' })).not.toBeInTheDocument();
+    expect(menuButton).toHaveFocus();
+  });
+
+  it('does not hijack menu navigation keys when focus is outside the menu', () => {
+    const { container } = render(
+      <AppProviders>
+        <ExplorerToolbar
+          breadcrumbs={[{ id: 'root', name: 'ilist', path: '/' }]}
+          query=""
+          sort={{ field: 'name', order: 'asc' }}
+          view="list"
+          refreshing={false}
+          sessionStatus="admin"
+          selectionCount={0}
+          canUpload
+          canCreateFolder
+          onQuery={vi.fn()}
+          onOpenPath={vi.fn()}
+          onRefresh={vi.fn()}
+          onSort={vi.fn()}
+          onView={vi.fn()}
+          onUpload={vi.fn()}
+          onCreateFolder={vi.fn()}
+        />
+      </AppProviders>,
+    );
+
+    const toolbar = within(container.querySelector<HTMLElement>('.explorerToolbar')!);
+    fireEvent.click(toolbar.getByRole('button', { name: 'Administrator menu' }));
+    const sort = toolbar.getByRole('combobox', { name: 'Sort files' });
+
+    for (const key of ['ArrowDown', 'ArrowUp', 'Home', 'End']) {
+      sort.focus();
+      const event = new KeyboardEvent('keydown', { key, bubbles: true, cancelable: true });
+      document.dispatchEvent(event);
+      expect(event.defaultPrevented).toBe(false);
+      expect(sort).toHaveFocus();
+      expect(screen.getByRole('menu', { name: 'Administrator menu' })).toBeVisible();
+    }
+  });
+
+  it('closes the compact administrator menu when another toolbar control is pressed', () => {
+    const { container } = render(
+      <AppProviders>
+        <ExplorerToolbar
+          breadcrumbs={[{ id: 'root', name: 'ilist', path: '/' }]}
+          query=""
+          sort={{ field: 'name', order: 'asc' }}
+          view="list"
+          refreshing={false}
+          sessionStatus="admin"
+          selectionCount={0}
+          canUpload
+          canCreateFolder
+          onQuery={vi.fn()}
+          onOpenPath={vi.fn()}
+          onRefresh={vi.fn()}
+          onSort={vi.fn()}
+          onView={vi.fn()}
+          onUpload={vi.fn()}
+          onCreateFolder={vi.fn()}
+        />
+      </AppProviders>,
+    );
+
+    const toolbar = within(container.querySelector<HTMLElement>('.explorerToolbar')!);
+    const menuButton = toolbar.getByRole('button', { name: 'Administrator menu' });
+    const controls = [
+      toolbar.getByRole('button', { name: 'Search this folder' }),
+      toolbar.getByRole('combobox', { name: 'Sort files' }),
+      toolbar.getByRole('button', { name: 'Refresh' }),
+      toolbar.getByRole('button', { name: 'Switch to grid view' }),
+      toolbar.getByRole('button', { name: 'Path home' }),
+    ];
+
+    for (const control of controls) {
+      fireEvent.click(menuButton);
+      expect(screen.getByRole('menu', { name: 'Administrator menu' })).toBeVisible();
+      fireEvent.mouseDown(control);
+      expect(screen.queryByRole('menu', { name: 'Administrator menu' })).not.toBeInTheDocument();
+    }
+  });
+
   for (const locale of ['en', 'zh-CN'] as const) {
     it(`renders primary surfaces in ${locale}`, async () => {
       localStorage.setItem('ilist.ui.preferences', JSON.stringify({ version: 1, locale, theme: 'light', defaultView: 'list' }));
