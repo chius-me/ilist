@@ -6,7 +6,7 @@
 
 面向 Cloudflare Workers 的自托管文件索引与管理器。
 
-[![Release](https://img.shields.io/badge/release-v0.1.2-2ea44f?logo=github)](https://github.com/chius-me/ilist/releases/tag/v0.1.2)
+[![Release](https://img.shields.io/badge/release-v0.1.3-2ea44f?logo=github)](https://github.com/chius-me/ilist/releases/tag/v0.1.3)
 [![License](https://img.shields.io/badge/license-GPL--3.0--only-blue)](https://github.com/chius-me/ilist/blob/main/LICENSE)
 ![Cloudflare Workers](https://img.shields.io/badge/Cloudflare-Workers-f38020?logo=cloudflare&logoColor=white)
 ![TypeScript](https://img.shields.io/badge/TypeScript-5.8-3178c6?logo=typescript&logoColor=white)
@@ -14,7 +14,7 @@
 
 </div>
 
-> [v0.1.2](https://github.com/chius-me/ilist/releases/tag/v0.1.2) 面向单管理员使用，并提供公开只读浏览。升级前请查看[限制](#限制)并备份 D1。
+> [v0.1.3](https://github.com/chius-me/ilist/releases/tag/v0.1.3) 面向单管理员使用，并提供公开只读浏览。升级前请查看[限制](#限制)并备份 D1。
 
 ## 功能
 
