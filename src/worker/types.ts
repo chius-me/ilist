@@ -99,6 +99,7 @@ export interface EntryCapabilities {
   preview: boolean;
   download: boolean;
   upload: boolean;
+  multipartUpload?: boolean;
   createFolder: boolean;
   rename: boolean;
   move: boolean;
