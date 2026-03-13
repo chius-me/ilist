@@ -99,7 +99,7 @@ describe('multi-mount filesystem integration', () => {
     const nativeResponse = await SELF.fetch(`${origin}/api/fs/list?path=/R2`, { headers: { cookie } });
     expect(nativeResponse.status).toBe(200);
     const nativeRoot = (await nativeResponse.json() as { data: { current: { capabilities: Record<string, boolean> } } }).data.current;
-    expect(nativeRoot.capabilities.multipartUpload).not.toBe(true);
+    expect(nativeRoot.capabilities.multipartUpload).toBe(false);
   });
 
   it('browses two mounts with collision-free IDs and downloads through the selected driver', async () => {

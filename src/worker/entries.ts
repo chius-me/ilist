@@ -15,6 +15,7 @@ function capabilities(row: EntryRow, admin: boolean): EntryCapabilities {
     preview: file,
     download: file,
     upload: admin && row.kind === 'folder',
+    multipartUpload: false,
     createFolder: admin && row.kind === 'folder',
     rename: admin && row.id !== 'root',
     move: admin && row.id !== 'root',
