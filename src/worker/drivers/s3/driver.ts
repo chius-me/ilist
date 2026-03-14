@@ -1,7 +1,7 @@
 import { HttpError } from '../../http';
 import type { Mount } from '../../types';
 import { S3Client, S3Error, type GetObjectOptions, type ListObjectsV2Options, type PutObjectOptions, type S3ListObjectsResult } from './client';
-import type { DownloadResult, ListResult, StorageDriver, StorageItem } from '../types';
+import { UPLOAD_PART_SIZE_BYTES, type CompletedUploadPart, type DownloadResult, type ListResult, type ResumableUploadAdapter, type StorageDriver, type StorageItem } from '../types';
 
 export interface S3DriverClient {
   listObjectsV2(options?: ListObjectsV2Options): Promise<S3ListObjectsResult>;
@@ -10,10 +10,17 @@ export interface S3DriverClient {
   putObject(key: string, body: BodyInit | null, options?: PutObjectOptions): Promise<Response>;
   copyObject(sourceKey: string, destinationKey: string): Promise<Response>;
   deleteObject(key: string): Promise<Response>;
+  createMultipartUpload(key: string, contentType: string | null): Promise<{ uploadId: string }>;
+  uploadPart(key: string, uploadId: string, partNumber: number, body: BodyInit): Promise<{ etag: string }>;
+  completeMultipartUpload(key: string, uploadId: string, parts: CompletedUploadPart[]): Promise<Response>;
+  abortMultipartUpload(key: string, uploadId: string): Promise<Response>;
 }
 
 type ItemKind = 'file' | 'folder';
 interface ItemIdentity { v: 1; mount: string; key: string; kind: ItemKind }
+interface S3MultipartUploadState { key: string; uploadId: string; parentId: string; contentType: string | null }
+
+const S3_RESUMABLE_UPLOAD_TTL_MS = 24 * 60 * 60 * 1000;
 
 function base64UrlEncode(value: string): string {
   const bytes = new TextEncoder().encode(value);
@@ -72,9 +79,55 @@ function notFound(): HttpError {
   return new HttpError(404, 'STORAGE_ITEM_NOT_FOUND', 'Storage item was not found');
 }
 
+function invalidUploadState(): HttpError {
+  return new HttpError(400, 'INVALID_UPLOAD_STATE', 'S3 upload session state is invalid');
+}
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === 'object' && value !== null && !Array.isArray(value);
+}
+
 export class S3Driver implements StorageDriver {
-  readonly capabilities = new Set(['list', 'download', 'upload', 'createFolder', 'rename', 'move', 'delete'] as const);
+  readonly capabilities = new Set(['list', 'download', 'upload', 'multipartUpload', 'createFolder', 'rename', 'move', 'delete'] as const);
   readonly rootId: string;
+  readonly resumableUpload: ResumableUploadAdapter = {
+    create: async (input) => {
+      const parent = this.requireFolder(input.parentId);
+      const name = validateName(input.name);
+      if (input.partSize !== UPLOAD_PART_SIZE_BYTES) {
+        throw new HttpError(400, 'INVALID_UPLOAD_PART_SIZE', 'S3 multipart uploads require 10 MiB parts');
+      }
+      const contentType = this.requireContentType(input.contentType);
+      const key = `${parent.key}${name}`;
+      const { uploadId } = await this.client.createMultipartUpload(key, contentType);
+      return {
+        state: { key, uploadId, parentId: input.parentId, contentType },
+        expiresAt: Date.now() + S3_RESUMABLE_UPLOAD_TTL_MS,
+      };
+    },
+    uploadPart: async (input) => {
+      const state = this.requireMultipartUploadState(input.state);
+      const { etag } = await this.client.uploadPart(state.key, state.uploadId, input.partNumber, input.body);
+      return { part: { partNumber: input.partNumber, size: input.size, etag } };
+    },
+    complete: async (input) => {
+      const state = this.requireMultipartUploadState(input.state);
+      const parts = [...input.parts].sort((left, right) => left.partNumber - right.partNumber);
+      await this.client.completeMultipartUpload(state.key, state.uploadId, parts);
+      const response = await this.client.headObject(state.key);
+      return {
+        ...this.toItem(state.key, 'file', state.parentId),
+        size: headerNumber(response, 'content-length'),
+        contentType: response.headers.get('content-type'),
+        modifiedAt: response.headers.get('last-modified'),
+        etag: response.headers.get('etag'),
+      };
+    },
+    abort: async (state) => {
+      const uploadState = this.requireMultipartUploadState(state);
+      await this.client.abortMultipartUpload(uploadState.key, uploadState.uploadId);
+    },
+  };
   private readonly rootPrefix: string;
 
   constructor(private readonly mount: Mount, private readonly client: S3DriverClient) {
@@ -226,6 +279,36 @@ export class S3Driver implements StorageDriver {
     const identity = this.decodeItemId(id);
     if (identity.kind !== 'folder') throw new HttpError(400, 'INVALID_STORAGE_PARENT', 'Storage parent must be a folder');
     return identity;
+  }
+
+  private requireMultipartUploadState(state: Record<string, unknown>): S3MultipartUploadState {
+    if (!isRecord(state)) throw invalidUploadState();
+    const { key, uploadId, parentId, contentType } = state;
+    if (typeof key !== 'string' || typeof uploadId !== 'string' || typeof parentId !== 'string') throw invalidUploadState();
+    if (!uploadId.trim() || /[\u0000-\u001f]/.test(uploadId)) throw invalidUploadState();
+    const normalizedContentType = this.requireContentType(contentType, true);
+
+    let parent: ItemIdentity;
+    try {
+      parent = this.requireFolder(parentId);
+    } catch {
+      throw invalidUploadState();
+    }
+    if (!key.startsWith(parent.key)) throw invalidUploadState();
+    const name = key.slice(parent.key.length);
+    try {
+      if (key !== `${parent.key}${validateName(name)}`) throw invalidUploadState();
+    } catch {
+      throw invalidUploadState();
+    }
+    return { key, uploadId, parentId, contentType: normalizedContentType };
+  }
+
+  private requireContentType(value: unknown, fromState = false): string | null {
+    if (value === null) return null;
+    if (typeof value === 'string' && !/[\u0000-\u001f]/.test(value)) return value;
+    if (fromState) throw invalidUploadState();
+    throw new HttpError(400, 'INVALID_UPLOAD_CONTENT_TYPE', 'S3 upload content type is invalid');
   }
 
   private parentId(key: string): string | null {

@@ -1,6 +1,7 @@
 import { describe, expect, it, vi } from 'vitest';
 import { S3Error, type S3ListObjectsResult } from '../../src/worker/drivers/s3/client';
 import { S3Driver, type S3DriverClient } from '../../src/worker/drivers/s3/driver';
+import { UPLOAD_PART_SIZE_BYTES } from '../../src/worker/drivers/types';
 import type { Mount } from '../../src/worker/types';
 
 const mount: Mount = {
@@ -34,6 +35,10 @@ function client(overrides: Partial<S3DriverClient> = {}): S3DriverClient {
     putObject: vi.fn(async () => response({ etag: '"new"' })),
     copyObject: vi.fn(async () => response()),
     deleteObject: vi.fn(async () => response()),
+    createMultipartUpload: vi.fn(async () => ({ uploadId: 'upload-123' })),
+    uploadPart: vi.fn(async () => ({ etag: '"part-etag"' })),
+    completeMultipartUpload: vi.fn(async () => response()),
+    abortMultipartUpload: vi.fn(async () => response()),
     ...overrides,
   };
 }
@@ -195,5 +200,111 @@ describe('S3Driver', () => {
     expect(() => driver.decodeItemId(other.itemId('tenant/root/file', 'file'))).toThrow();
     await expect(driver.createFolder(driver.rootId, '../escape')).rejects.toThrow();
     await expect(driver.upload(driver.rootId, 'nested/file', new ReadableStream(), null)).rejects.toThrow();
+  });
+
+  it('creates a root-scoped S3 multipart session and completes ordered parts with final metadata', async () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(new Date('2026-07-17T04:05:06.000Z'));
+    try {
+      const api = client({
+        headObject: vi.fn(async () => response({
+          'content-length': String(20 * 1024 * 1024),
+          'content-type': 'application/octet-stream',
+          'last-modified': 'Thu, 17 Jul 2026 04:05:10 GMT',
+          etag: '"complete-etag"',
+        })),
+      });
+      const driver = new S3Driver(mount, api);
+      const adapter = driver.resumableUpload!;
+      const session = await adapter.create({
+        parentId: driver.rootId,
+        name: 'archive.bin',
+        size: 20 * 1024 * 1024,
+        contentType: 'application/octet-stream',
+        partSize: UPLOAD_PART_SIZE_BYTES,
+      });
+      const body = new ReadableStream();
+
+      expect(session).toMatchObject({
+        state: {
+          key: 'tenant/root/archive.bin',
+          uploadId: 'upload-123',
+          parentId: driver.rootId,
+          contentType: 'application/octet-stream',
+        },
+        expiresAt: Date.now() + 24 * 60 * 60 * 1000,
+      });
+      expect(api.createMultipartUpload).toHaveBeenCalledWith('tenant/root/archive.bin', 'application/octet-stream');
+
+      await expect(adapter.uploadPart({
+        state: session.state,
+        partNumber: 1,
+        offset: 0,
+        totalSize: 20 * 1024 * 1024,
+        body,
+        size: UPLOAD_PART_SIZE_BYTES,
+        signal: new AbortController().signal,
+      })).resolves.toEqual({ part: { partNumber: 1, size: UPLOAD_PART_SIZE_BYTES, etag: '"part-etag"' } });
+      expect(api.uploadPart).toHaveBeenCalledWith('tenant/root/archive.bin', 'upload-123', 1, body);
+
+      const completed = await adapter.complete({
+        state: session.state,
+        parts: [
+          { partNumber: 2, size: UPLOAD_PART_SIZE_BYTES, etag: '"part-2"' },
+          { partNumber: 1, size: UPLOAD_PART_SIZE_BYTES, etag: '"part-1"' },
+        ],
+      });
+
+      expect(api.completeMultipartUpload).toHaveBeenCalledWith('tenant/root/archive.bin', 'upload-123', [
+        { partNumber: 1, size: UPLOAD_PART_SIZE_BYTES, etag: '"part-1"' },
+        { partNumber: 2, size: UPLOAD_PART_SIZE_BYTES, etag: '"part-2"' },
+      ]);
+      expect(api.headObject).toHaveBeenCalledWith('tenant/root/archive.bin');
+      expect(completed).toMatchObject({
+        parentId: driver.rootId,
+        name: 'archive.bin',
+        kind: 'file',
+        size: 20 * 1024 * 1024,
+        contentType: 'application/octet-stream',
+        modifiedAt: 'Thu, 17 Jul 2026 04:05:10 GMT',
+        etag: '"complete-etag"',
+      });
+
+      await adapter.abort(session.state);
+      expect(api.abortMultipartUpload).toHaveBeenCalledWith('tenant/root/archive.bin', 'upload-123');
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it('rejects invalid multipart target names and serialized provider state', async () => {
+    const api = client();
+    const driver = new S3Driver(mount, api);
+    const adapter = driver.resumableUpload!;
+    const invalidState = {
+      key: 'tenant/root/archive.bin',
+      uploadId: 'upload-123',
+      parentId: driver.rootId,
+      contentType: 42,
+    };
+
+    await expect(adapter.create({
+      parentId: driver.rootId,
+      name: '../archive.bin',
+      size: 20 * 1024 * 1024,
+      contentType: 'application/octet-stream',
+      partSize: UPLOAD_PART_SIZE_BYTES,
+    })).rejects.toMatchObject({ code: 'INVALID_ENTRY_NAME' });
+    await expect(adapter.uploadPart({
+      state: invalidState,
+      partNumber: 1,
+      offset: 0,
+      totalSize: UPLOAD_PART_SIZE_BYTES,
+      body: new ReadableStream(),
+      size: UPLOAD_PART_SIZE_BYTES,
+      signal: new AbortController().signal,
+    })).rejects.toMatchObject({ code: 'INVALID_UPLOAD_STATE' });
+    expect(api.createMultipartUpload).not.toHaveBeenCalled();
+    expect(api.uploadPart).not.toHaveBeenCalled();
   });
 });

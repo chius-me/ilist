@@ -4,7 +4,15 @@ import {
   signS3Headers,
   type S3SigningCredentials,
 } from './signing';
-import { parseCopyObjectResponseXml, parseListObjectsV2Xml, parseS3ErrorXml, type S3ListObjectsResult } from './xml';
+import type { CompletedUploadPart } from '../types';
+import {
+  parseCompleteMultipartUploadResponseXml,
+  parseCopyObjectResponseXml,
+  parseCreateMultipartUploadResponseXml,
+  parseListObjectsV2Xml,
+  parseS3ErrorXml,
+  type S3ListObjectsResult,
+} from './xml';
 
 export type S3AddressingStyle = 'path' | 'virtual';
 
@@ -138,6 +146,51 @@ export class S3Client {
     return this.send('PUT', this.requestUrl(key), { headers, body });
   }
 
+  async createMultipartUpload(key: string, contentType: string | null): Promise<{ uploadId: string }> {
+    const headers = new Headers();
+    if (contentType !== null) headers.set('content-type', contentType);
+    const response = await this.send('POST', `${this.requestUrl(key)}?uploads`, { headers });
+    return parseCreateMultipartUploadResponseXml(await response.text());
+  }
+
+  async uploadPart(key: string, uploadId: string, partNumber: number, body: BodyInit): Promise<{ etag: string }> {
+    if (!Number.isInteger(partNumber) || partNumber <= 0) {
+      throw new RangeError('S3 multipart part number must be a positive integer');
+    }
+    const url = `${this.requestUrl(key)}?partNumber=${encodeS3Component(String(partNumber))}&uploadId=${encodeS3Component(uploadId)}`;
+    const response = await this.send('PUT', url, { body });
+    const etag = response.headers.get('etag')?.trim();
+    if (!etag) throw new Error('S3 upload part response is missing ETag');
+    return { etag };
+  }
+
+  async completeMultipartUpload(key: string, uploadId: string, parts: CompletedUploadPart[]): Promise<Response> {
+    const sortedParts = [...parts].sort((left, right) => left.partNumber - right.partNumber);
+    const partNumbers = new Set<number>();
+    for (const part of sortedParts) {
+      if (!Number.isInteger(part.partNumber) || part.partNumber <= 0 || partNumbers.has(part.partNumber)) {
+        throw new RangeError('S3 multipart part numbers must be unique positive integers');
+      }
+      if (!part.etag) throw new TypeError('S3 multipart part ETag is required');
+      partNumbers.add(part.partNumber);
+    }
+    const body = `<CompleteMultipartUpload>${sortedParts.map((part) =>
+      `<Part><PartNumber>${part.partNumber}</PartNumber><ETag>${escapeXml(part.etag!)}</ETag></Part>`
+    ).join('')}</CompleteMultipartUpload>`;
+    const url = `${this.requestUrl(key)}?uploadId=${encodeS3Component(uploadId)}`;
+    const response = await this.send('POST', url, { headers: { 'content-type': 'application/xml' }, body });
+    const parsed = parseCompleteMultipartUploadResponseXml(await response.clone().text());
+    if (parsed.kind === 'error') {
+      const { error } = parsed;
+      throw new S3Error(response.status, error.code, error.message, error.resource, error.requestId);
+    }
+    return response;
+  }
+
+  abortMultipartUpload(key: string, uploadId: string): Promise<Response> {
+    return this.send('DELETE', `${this.requestUrl(key)}?uploadId=${encodeS3Component(uploadId)}`);
+  }
+
   async copyObject(sourceKey: string, destinationKey: string, options: S3RequestOptions = {}): Promise<Response> {
     const headers = new Headers(options.headers);
     headers.set('x-amz-copy-source', `/${encodeS3Component(this.bucket)}/${encodeS3Path(sourceKey)}`);
@@ -184,6 +237,16 @@ export class S3Client {
     if (!response.ok) throw await S3Error.fromResponse(response);
     return response;
   }
+}
+
+function escapeXml(value: string): string {
+  return value.replace(/[&<>"']/g, (character) => ({
+    '&': '&amp;',
+    '<': '&lt;',
+    '>': '&gt;',
+    '"': '&quot;',
+    "'": '&apos;',
+  })[character]!);
 }
 
 export type { S3ListedObject, S3ListObjectsResult } from './xml';
