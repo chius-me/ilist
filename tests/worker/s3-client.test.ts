@@ -381,6 +381,18 @@ describe('S3Client multipart requests', () => {
     await expect(client.uploadPart('archive.bin', 'upload-123', 1, 'part')).rejects.toThrow('S3 upload part response is missing ETag');
   });
 
+  it('forwards an upload-part AbortSignal to fetch', async () => {
+    const controller = new AbortController();
+    const fetcher = vi.fn<typeof fetch>(async (_input, init) => {
+      expect(init?.signal).toBe(controller.signal);
+      return new Response(null, { headers: { etag: '"part-etag"' } });
+    });
+    const client = createClient(fetcher);
+
+    await client.uploadPart('archive.bin', 'upload-123', 1, 'part', { signal: controller.signal });
+    expect(fetcher).toHaveBeenCalledOnce();
+  });
+
   it.each([
     ['malformed XML', '<InitiateMultipartUploadResult><UploadId></InitiateMultipartUploadResult>'],
     ['missing UploadId', '<InitiateMultipartUploadResult><Bucket>archive</Bucket></InitiateMultipartUploadResult>'],
