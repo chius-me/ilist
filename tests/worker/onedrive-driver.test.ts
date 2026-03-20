@@ -2,9 +2,10 @@ import { afterEach, describe, expect, it, vi } from 'vitest';
 import { env } from 'cloudflare:test';
 import { putCredentials } from '../../src/worker/credentials';
 import { createMount } from '../../src/worker/mounts';
-import { OneDriveClient, type GraphDriveItem, type GraphListResult } from '../../src/worker/drivers/onedrive/client';
+import { OneDriveClient, type GraphDriveItem, type GraphListResult, type GraphUploadPartResult, type GraphUploadSession } from '../../src/worker/drivers/onedrive/client';
 import { OneDriveDriver, type OneDriveDriverClient } from '../../src/worker/drivers/onedrive/driver';
 import { mapGraphItem } from '../../src/worker/drivers/onedrive/mapper';
+import { UPLOAD_PART_SIZE_BYTES } from '../../src/worker/drivers/types';
 import type { Env, Mount } from '../../src/worker/types';
 
 const workerEnv = () => env as unknown as Env;
@@ -29,6 +30,16 @@ function driverClient(overrides: Partial<OneDriveDriverClient> = {}): OneDriveDr
     getDownloadUrl: vi.fn(async () => 'https://download.example/default'),
     createFolder: vi.fn(async () => graphItem({ id: 'new-folder', file: undefined, folder: { childCount: 0 } })),
     upload: vi.fn(async () => graphItem({ id: 'new-file' })),
+    createUploadSession: vi.fn(async () => ({
+      uploadUrl: 'https://upload.example/session?token=private',
+      expirationDateTime: '2026-07-18T00:00:00.000Z',
+    })),
+    uploadSessionPart: vi.fn(async (): Promise<GraphUploadPartResult> => ({ completed: false, nextExpectedRanges: ['10485760-'] })),
+    getUploadSessionStatus: vi.fn(async (): Promise<GraphUploadSession> => ({
+      uploadUrl: 'https://upload.example/session?token=private',
+      expirationDateTime: '2026-07-18T00:00:00.000Z',
+    })),
+    cancelUploadSession: vi.fn(async () => undefined),
     update: vi.fn(async () => graphItem()),
     remove: vi.fn(async () => undefined),
     ...overrides,
@@ -198,7 +209,7 @@ describe('OneDrive read driver', () => {
     expect(api.update).toHaveBeenNthCalledWith(1, 'item-1', { name: 'renamed.txt' });
     expect(api.update).toHaveBeenNthCalledWith(2, 'item-1', { parentReference: { id: 'destination' } });
     expect(api.remove).toHaveBeenCalledWith('item-1');
-    expect(driver.capabilities).toEqual(new Set(['list', 'download', 'upload', 'createFolder', 'rename', 'move', 'delete']));
+    expect(driver.capabilities).toEqual(new Set(['list', 'download', 'upload', 'multipartUpload', 'createFolder', 'rename', 'move', 'delete']));
   });
 
   it('sends correctly encoded Graph write requests and preserves streamed bodies', async () => {
@@ -225,5 +236,159 @@ describe('OneDrive read driver', () => {
     expect(calls[2]!.url).toContain('/me/drive/items/item%2Fid');
     expect(JSON.parse(String(calls[3]!.init.body))).toEqual({ parentReference: { id: 'new-parent' } });
     expect(calls[4]!.init.method).toBe('DELETE');
+  });
+
+  it('separates authorized Graph session creation from unauthenticated upload-session requests', async () => {
+    const uploadUrl = 'https://upload.example/session?token=private';
+    const calls: Array<{ url: string; init: RequestInit }> = [];
+    const fetcher = vi.fn(async (input: RequestInfo | URL, init: RequestInit = {}) => {
+      calls.push({ url: String(input), init });
+      if (init.method === 'POST') return Response.json({ uploadUrl, expirationDateTime: '2026-07-18T00:00:00.000Z' });
+      if (init.method === 'PUT') return Response.json({ nextExpectedRanges: ['10485760-'] }, { status: 202 });
+      if (init.method === 'GET') return Response.json({ uploadUrl, expirationDateTime: '2026-07-18T00:00:00.000Z', nextExpectedRanges: ['10485760-'] });
+      return new Response(null, { status: 204 });
+    });
+    const client = new OneDriveClient(workerEnv(), mount.id, fetcher, async () => 'test-access');
+    const controller = new AbortController();
+    const body = new ReadableStream();
+
+    const session = await client.createUploadSession('root', '中文 video.mp4');
+    await expect(client.uploadSessionPart(session.uploadUrl, body, 'bytes 0-10485759/20971520', UPLOAD_PART_SIZE_BYTES, { signal: controller.signal }))
+      .resolves.toEqual({ completed: false, nextExpectedRanges: ['10485760-'] });
+    await expect(client.getUploadSessionStatus(session.uploadUrl)).resolves.toMatchObject({ nextExpectedRanges: ['10485760-'] });
+    await expect(client.cancelUploadSession(session.uploadUrl)).resolves.toBeUndefined();
+
+    expect(calls[0]!.url).toContain('/me/drive/root:/%E4%B8%AD%E6%96%87%20video.mp4:/createUploadSession');
+    expect(new Headers(calls[0]!.init.headers).get('authorization')).toBe('Bearer test-access');
+    expect(JSON.parse(String(calls[0]!.init.body))).toEqual({ item: { '@microsoft.graph.conflictBehavior': 'fail' } });
+    expect(calls.slice(1).map((call) => call.url)).toEqual([uploadUrl, uploadUrl, uploadUrl]);
+    expect(calls.slice(1).map((call) => new Headers(call.init.headers).get('authorization'))).toEqual([null, null, null]);
+    expect(calls[1]!.init).toMatchObject({ method: 'PUT', body, signal: controller.signal });
+    const partHeaders = new Headers(calls[1]!.init.headers);
+    expect(partHeaders.get('content-length')).toBe(String(UPLOAD_PART_SIZE_BYTES));
+    expect(partHeaders.get('content-range')).toBe('bytes 0-10485759/20971520');
+    expect(calls[2]!.init.method).toBe('GET');
+    expect(calls[3]!.init.method).toBe('DELETE');
+  });
+
+  it('validates upload-session responses and normalizes preauthenticated upload failures without exposing URLs', async () => {
+    const client = new OneDriveClient(workerEnv(), mount.id, vi.fn(async () => Response.json({
+      uploadUrl: 'http://upload.example/insecure?token=private', expirationDateTime: 'not-a-date',
+    })), async () => 'test-access');
+
+    await expect(client.createUploadSession('root', 'video.mp4')).rejects.toMatchObject({ code: 'ONEDRIVE_UPLOAD_SESSION_INVALID' });
+    await expect(client.uploadSessionPart('http://upload.example/insecure?token=private', new ReadableStream(), 'bytes 0-0/1', 1))
+      .rejects.toMatchObject({ code: 'ONEDRIVE_UPLOAD_SESSION_INVALID' });
+
+    const malformedExpiration = new OneDriveClient(workerEnv(), mount.id, vi.fn(async () => Response.json({
+      uploadUrl: 'https://upload.example/session?token=private', expirationDateTime: 'not-a-date',
+    })), async () => 'test-access');
+    await expect(malformedExpiration.createUploadSession('root', 'video.mp4')).rejects.toMatchObject({ code: 'ONEDRIVE_UPLOAD_SESSION_INVALID' });
+
+    const rateLimited = new OneDriveClient(workerEnv(), mount.id, vi.fn(async () => new Response(null, {
+      status: 429, headers: { 'retry-after': '30' },
+    })), async () => 'test-access');
+    await expect(rateLimited.uploadSessionPart('https://upload.example/session?token=private', new ReadableStream(), 'bytes 0-0/1', 1))
+      .rejects.toMatchObject({ status: 503, code: 'ONEDRIVE_UPLOAD_SESSION_RATE_LIMITED', details: { retryAfter: '30' } });
+
+    const logger = vi.spyOn(console, 'error').mockImplementation(() => undefined);
+    const failedRequest = new OneDriveClient(workerEnv(), mount.id, vi.fn(async () => {
+      throw new Error('fetch failed for https://upload.example/session?token=private');
+    }), async () => 'test-access');
+    await expect(failedRequest.uploadSessionPart('https://upload.example/session?token=private', new ReadableStream(), 'bytes 0-0/1', 1))
+      .rejects.toMatchObject({ code: 'ONEDRIVE_UPLOAD_SESSION_FAILED' });
+    expect(JSON.stringify(logger.mock.calls)).not.toContain('token=private');
+    logger.mockRestore();
+  });
+
+  it.each([200, 201])('parses a completed Graph item from a %i upload-session part response', async (status) => {
+    const client = new OneDriveClient(workerEnv(), mount.id, vi.fn(async () => Response.json(graphItem({ id: `complete-${status}` }), { status })), async () => 'test-access');
+
+    await expect(client.uploadSessionPart(
+      'https://upload.example/session?token=private', new ReadableStream(), 'bytes 0-0/1', 1,
+    )).resolves.toEqual({ completed: true, item: graphItem({ id: `complete-${status}` }) });
+  });
+
+  it('adapts OneDrive upload sessions with scoped state, exact ranges, captured completion, and cancellation', async () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(new Date('2026-07-17T04:05:06.000Z'));
+    try {
+      const completed = graphItem({ id: 'complete', name: 'video.mp4', parentReference: { id: 'root' }, size: 15 * 1024 * 1024 });
+      const api = driverClient({
+        uploadSessionPart: vi.fn(async (): Promise<GraphUploadPartResult> => ({ completed: true, item: completed })),
+      });
+      const driver = new OneDriveDriver(mount, api);
+      const adapter = driver.resumableUpload!;
+      const session = await adapter.create({
+        parentId: driver.rootId,
+        name: 'video.mp4',
+        size: 15 * 1024 * 1024,
+        contentType: 'video/mp4',
+        partSize: UPLOAD_PART_SIZE_BYTES,
+      });
+      const body = new ReadableStream();
+      const controller = new AbortController();
+      const part = await adapter.uploadPart({
+        state: session.state,
+        partNumber: 2,
+        offset: UPLOAD_PART_SIZE_BYTES,
+        totalSize: 15 * 1024 * 1024,
+        body,
+        size: 5 * 1024 * 1024,
+        signal: controller.signal,
+      });
+
+      expect(session).toMatchObject({
+        state: {
+          uploadUrl: 'https://upload.example/session?token=private',
+          expirationDateTime: '2026-07-18T00:00:00.000Z',
+          parentId: driver.rootId,
+          name: 'video.mp4',
+          contentType: 'video/mp4',
+        },
+        expiresAt: Date.parse('2026-07-18T00:00:00.000Z'),
+      });
+      expect(api.createUploadSession).toHaveBeenCalledWith('root', 'video.mp4');
+      expect(api.uploadSessionPart).toHaveBeenCalledWith(
+        'https://upload.example/session?token=private', body, 'bytes 10485760-15728639/15728640', 5 * 1024 * 1024, { signal: controller.signal },
+      );
+      expect(part).toMatchObject({
+        part: { partNumber: 2, size: 5 * 1024 * 1024, etag: null },
+        completedItem: { id: 'complete', name: 'video.mp4', kind: 'file' },
+      });
+      await expect(adapter.complete({ state: session.state, parts: [part.part], completedItem: part.completedItem }))
+        .resolves.toMatchObject({ id: 'complete', parentId: 'root', name: 'video.mp4', kind: 'file' });
+      await adapter.abort(session.state);
+      expect(api.cancelUploadSession).toHaveBeenCalledWith('https://upload.example/session?token=private');
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it('rejects out-of-scope multipart parents and expired or malformed upload-session state', async () => {
+    const scopedMount = { ...mount, rootItemId: 'mounted-root' };
+    const api = driverClient({
+      stat: vi.fn(async (id: string) => graphItem({
+        id,
+        parentReference: { id: id === 'inside' ? 'mounted-root' : 'other-root' },
+      })),
+    });
+    const adapter = new OneDriveDriver(scopedMount, api).resumableUpload!;
+    const input = {
+      partNumber: 1,
+      offset: 0,
+      totalSize: UPLOAD_PART_SIZE_BYTES,
+      body: new ReadableStream(),
+      size: UPLOAD_PART_SIZE_BYTES,
+      signal: new AbortController().signal,
+    };
+
+    await expect(adapter.create({ parentId: 'outside', name: 'video.mp4', size: UPLOAD_PART_SIZE_BYTES, contentType: null, partSize: UPLOAD_PART_SIZE_BYTES }))
+      .rejects.toMatchObject({ code: 'STORAGE_ITEM_NOT_FOUND' });
+    await expect(adapter.uploadPart({ ...input, state: {
+      uploadUrl: 'https://upload.example/session?token=private', expirationDateTime: '2026-07-16T00:00:00.000Z', parentId: 'inside', name: 'video.mp4', contentType: null,
+    } })).rejects.toMatchObject({ code: 'INVALID_UPLOAD_STATE' });
+    await expect(adapter.abort({ uploadUrl: 42, expirationDateTime: '2026-07-18T00:00:00.000Z', parentId: 'inside', name: 'video.mp4', contentType: null }))
+      .rejects.toMatchObject({ code: 'INVALID_UPLOAD_STATE' });
   });
 });
