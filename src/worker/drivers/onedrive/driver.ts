@@ -11,16 +11,14 @@ export interface OneDriveDriverClient {
   createFolder(parentId: string, name: string): Promise<GraphDriveItem>;
   upload(parentId: string, name: string, body: ReadableStream, contentType: string | null): Promise<GraphDriveItem>;
   createUploadSession(parentId: string, name: string): Promise<GraphUploadSession>;
-  uploadSessionPart(uploadUrl: string, body: ReadableStream, contentRange: string, contentLength: number, options?: UploadSessionRequestOptions): Promise<GraphUploadPartResult>;
-  getUploadSessionStatus(uploadUrl: string): Promise<GraphUploadSession>;
-  cancelUploadSession(uploadUrl: string): Promise<void>;
+  uploadSessionPart(session: GraphUploadSession, body: ReadableStream, contentRange: string, contentLength: number, options?: UploadSessionRequestOptions): Promise<GraphUploadPartResult>;
+  getUploadSessionStatus(session: GraphUploadSession): Promise<GraphUploadSession>;
+  cancelUploadSession(session: GraphUploadSession): Promise<void>;
   update(itemId: string, update: GraphItemUpdate): Promise<GraphDriveItem>;
   remove(itemId: string): Promise<void>;
 }
 
-interface OneDriveUploadSessionState {
-  uploadUrl: string;
-  expirationDateTime: string;
+interface OneDriveUploadSessionState extends GraphUploadSession {
   parentId: string;
   name: string;
   contentType: string | null;
@@ -62,6 +60,7 @@ export class OneDriveDriver implements StorageDriver {
         state: {
           uploadUrl: session.uploadUrl,
           expirationDateTime: session.expirationDateTime,
+          integrityProof: session.integrityProof,
           parentId: input.parentId,
           name,
           contentType,
@@ -72,7 +71,7 @@ export class OneDriveDriver implements StorageDriver {
     uploadPart: async (input) => {
       const state = this.requireUploadSessionState(input.state);
       const contentRange = `bytes ${input.offset}-${input.offset + input.size - 1}/${input.totalSize}`;
-      const result = await this.client.uploadSessionPart(state.uploadUrl, input.body, contentRange, input.size, { signal: input.signal });
+      const result = await this.client.uploadSessionPart(this.toGraphUploadSession(state), input.body, contentRange, input.size, { signal: input.signal });
       if (!result.completed) return { part: { partNumber: input.partNumber, size: input.size, etag: null } };
       return {
         part: { partNumber: input.partNumber, size: input.size, etag: null },
@@ -86,7 +85,7 @@ export class OneDriveDriver implements StorageDriver {
     },
     abort: async (state) => {
       const uploadState = this.requireUploadSessionState(state);
-      await this.client.cancelUploadSession(uploadState.uploadUrl);
+      await this.client.cancelUploadSession(this.toGraphUploadSession(uploadState));
     },
   };
 
@@ -147,13 +146,13 @@ export class OneDriveDriver implements StorageDriver {
 
   private requireUploadSessionState(state: Record<string, unknown>): OneDriveUploadSessionState {
     if (!isRecord(state)) throw invalidUploadState();
-    const { uploadUrl, expirationDateTime, parentId, name, contentType } = state;
-    if (typeof uploadUrl !== 'string' || typeof expirationDateTime !== 'string' || typeof parentId !== 'string' || !parentId) throw invalidUploadState();
+    const { uploadUrl, expirationDateTime, integrityProof, parentId, name, contentType } = state;
+    if (typeof uploadUrl !== 'string' || typeof expirationDateTime !== 'string' || typeof integrityProof !== 'string' || !integrityProof || typeof parentId !== 'string' || !parentId) throw invalidUploadState();
     try {
       if (new URL(uploadUrl).protocol !== 'https:' || !Number.isFinite(Date.parse(expirationDateTime)) || Date.parse(expirationDateTime) <= Date.now()) {
         throw invalidUploadState();
       }
-      return { uploadUrl, expirationDateTime, parentId, name: validName(name as string), contentType: this.requireContentType(contentType, true) };
+      return { uploadUrl, expirationDateTime, integrityProof, parentId, name: validName(name as string), contentType: this.requireContentType(contentType, true) };
     } catch {
       throw invalidUploadState();
     }
@@ -164,6 +163,10 @@ export class OneDriveDriver implements StorageDriver {
     if (typeof value === 'string' && !/[\u0000-\u001f\u007f]/.test(value)) return value;
     if (fromState) throw invalidUploadState();
     throw new HttpError(400, 'INVALID_UPLOAD_CONTENT_TYPE', 'OneDrive upload content type is invalid');
+  }
+
+  private toGraphUploadSession(state: OneDriveUploadSessionState): GraphUploadSession {
+    return { uploadUrl: state.uploadUrl, expirationDateTime: state.expirationDateTime, integrityProof: state.integrityProof };
   }
 
   private async assertInScope(itemId: string, knownItem?: GraphDriveItem): Promise<void> {

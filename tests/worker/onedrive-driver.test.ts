@@ -33,11 +33,13 @@ function driverClient(overrides: Partial<OneDriveDriverClient> = {}): OneDriveDr
     createUploadSession: vi.fn(async () => ({
       uploadUrl: 'https://upload.example/session?token=private',
       expirationDateTime: '2026-07-18T00:00:00.000Z',
+      integrityProof: 'test-proof',
     })),
     uploadSessionPart: vi.fn(async (): Promise<GraphUploadPartResult> => ({ completed: false, nextExpectedRanges: ['10485760-'] })),
     getUploadSessionStatus: vi.fn(async (): Promise<GraphUploadSession> => ({
       uploadUrl: 'https://upload.example/session?token=private',
       expirationDateTime: '2026-07-18T00:00:00.000Z',
+      integrityProof: 'test-proof',
     })),
     cancelUploadSession: vi.fn(async () => undefined),
     update: vi.fn(async () => graphItem()),
@@ -253,10 +255,10 @@ describe('OneDrive read driver', () => {
     const body = new ReadableStream();
 
     const session = await client.createUploadSession('root', '中文 video.mp4');
-    await expect(client.uploadSessionPart(session.uploadUrl, body, 'bytes 0-10485759/20971520', UPLOAD_PART_SIZE_BYTES, { signal: controller.signal }))
+    await expect(client.uploadSessionPart(session, body, 'bytes 0-10485759/20971520', UPLOAD_PART_SIZE_BYTES, { signal: controller.signal }))
       .resolves.toEqual({ completed: false, nextExpectedRanges: ['10485760-'] });
-    await expect(client.getUploadSessionStatus(session.uploadUrl)).resolves.toMatchObject({ nextExpectedRanges: ['10485760-'] });
-    await expect(client.cancelUploadSession(session.uploadUrl)).resolves.toBeUndefined();
+    await expect(client.getUploadSessionStatus(session)).resolves.toMatchObject({ nextExpectedRanges: ['10485760-'] });
+    await expect(client.cancelUploadSession(session)).resolves.toBeUndefined();
 
     expect(calls[0]!.url).toContain('/me/drive/root:/%E4%B8%AD%E6%96%87%20video.mp4:/createUploadSession');
     expect(new Headers(calls[0]!.init.headers).get('authorization')).toBe('Bearer test-access');
@@ -271,13 +273,15 @@ describe('OneDrive read driver', () => {
     expect(calls[3]!.init.method).toBe('DELETE');
   });
 
-  it('validates upload-session responses and normalizes preauthenticated upload failures without exposing URLs', async () => {
+  it('rejects missing or invalid upload-session integrity proofs before fetching', async () => {
     const client = new OneDriveClient(workerEnv(), mount.id, vi.fn(async () => Response.json({
       uploadUrl: 'http://upload.example/insecure?token=private', expirationDateTime: 'not-a-date',
     })), async () => 'test-access');
 
     await expect(client.createUploadSession('root', 'video.mp4')).rejects.toMatchObject({ code: 'ONEDRIVE_UPLOAD_SESSION_INVALID' });
-    await expect(client.uploadSessionPart('http://upload.example/insecure?token=private', new ReadableStream(), 'bytes 0-0/1', 1))
+    await expect(client.uploadSessionPart({
+      uploadUrl: 'http://upload.example/insecure?token=private', expirationDateTime: '2026-07-18T00:00:00.000Z', integrityProof: 'invalid',
+    }, new ReadableStream(), 'bytes 0-0/1', 1))
       .rejects.toMatchObject({ code: 'ONEDRIVE_UPLOAD_SESSION_INVALID' });
 
     const malformedExpiration = new OneDriveClient(workerEnv(), mount.id, vi.fn(async () => Response.json({
@@ -285,27 +289,95 @@ describe('OneDrive read driver', () => {
     })), async () => 'test-access');
     await expect(malformedExpiration.createUploadSession('root', 'video.mp4')).rejects.toMatchObject({ code: 'ONEDRIVE_UPLOAD_SESSION_INVALID' });
 
-    const rateLimited = new OneDriveClient(workerEnv(), mount.id, vi.fn(async () => new Response(null, {
-      status: 429, headers: { 'retry-after': '30' },
+    const expiredSession = new OneDriveClient(workerEnv(), mount.id, vi.fn(async () => Response.json({
+      uploadUrl: 'https://upload.example/session?token=private', expirationDateTime: '2000-01-01T00:00:00.000Z',
     })), async () => 'test-access');
-    await expect(rateLimited.uploadSessionPart('https://upload.example/session?token=private', new ReadableStream(), 'bytes 0-0/1', 1))
-      .rejects.toMatchObject({ status: 503, code: 'ONEDRIVE_UPLOAD_SESSION_RATE_LIMITED', details: { retryAfter: '30' } });
+    await expect(expiredSession.createUploadSession('root', 'video.mp4')).rejects.toMatchObject({ code: 'ONEDRIVE_UPLOAD_SESSION_INVALID' });
+
+    const uploadUrl = 'https://upload.example/session?token=private';
+    const signingClient = new OneDriveClient(workerEnv(), mount.id, vi.fn(async () => Response.json({
+      uploadUrl, expirationDateTime: '2026-07-18T00:00:00.000Z',
+    })), async () => 'test-access');
+    const session = await signingClient.createUploadSession('root', 'video.mp4');
+    const fetcher = vi.fn(async () => Response.json({ nextExpectedRanges: ['1-'] }, { status: 202 }));
+    const verifyingClient = new OneDriveClient(workerEnv(), mount.id, fetcher, async () => 'test-access');
+
+    await expect(verifyingClient.uploadSessionPart({ ...session, uploadUrl: 'https://attacker.example/session?token=private' }, new ReadableStream(), 'bytes 0-0/1', 1))
+      .rejects.toMatchObject({ code: 'ONEDRIVE_UPLOAD_SESSION_PROOF_INVALID' });
+    await expect(verifyingClient.getUploadSessionStatus({ ...session, integrityProof: '' }))
+      .rejects.toMatchObject({ code: 'ONEDRIVE_UPLOAD_SESSION_PROOF_INVALID' });
+    await expect(new OneDriveClient(workerEnv(), 'other-mount', fetcher, async () => 'test-access').cancelUploadSession(session))
+      .rejects.toMatchObject({ code: 'ONEDRIVE_UPLOAD_SESSION_PROOF_INVALID' });
+    expect(fetcher).not.toHaveBeenCalled();
+  });
+
+  it.each([
+    [404, 404, 'ONEDRIVE_UPLOAD_SESSION_NOT_FOUND', undefined],
+    [409, 409, 'ONEDRIVE_UPLOAD_SESSION_CONFLICT', undefined],
+    [416, 409, 'ONEDRIVE_UPLOAD_SESSION_INVALID_RANGE', undefined],
+    [429, 503, 'ONEDRIVE_UPLOAD_SESSION_RATE_LIMITED', { retryAfter: '30' }],
+    [500, 502, 'ONEDRIVE_UPLOAD_SESSION_FAILED', undefined],
+  ])('normalizes upload-session status %i', async (upstreamStatus, status, code, details) => {
+    const uploadUrl = 'https://upload.example/session?token=private';
+    const fetcher = vi.fn(async (_input: RequestInfo | URL, init: RequestInit = {}) => {
+      if (init.method === 'POST') return Response.json({ uploadUrl, expirationDateTime: '2026-07-18T00:00:00.000Z' });
+      return new Response(null, { status: upstreamStatus, headers: upstreamStatus === 429 ? { 'retry-after': '30' } : undefined });
+    });
+    const client = new OneDriveClient(workerEnv(), mount.id, fetcher, async () => 'test-access');
+    const session = await client.createUploadSession('root', 'video.mp4');
+
+    await expect(client.uploadSessionPart(session, new ReadableStream(), 'bytes 0-0/1', 1))
+      .rejects.toMatchObject({ status, code, details });
+  });
+
+  it('rejects a signed upload session after its expiration before fetching', async () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(new Date('2026-07-17T00:00:00.000Z'));
+    try {
+      const uploadUrl = 'https://upload.example/session?token=private';
+      const fetcher = vi.fn(async (_input: RequestInfo | URL, init: RequestInit = {}) => {
+        if (init.method === 'POST') return Response.json({ uploadUrl, expirationDateTime: '2026-07-18T00:00:00.000Z' });
+        return Response.json({ nextExpectedRanges: ['1-'] }, { status: 202 });
+      });
+      const client = new OneDriveClient(workerEnv(), mount.id, fetcher, async () => 'test-access');
+      const session = await client.createUploadSession('root', 'video.mp4');
+      vi.setSystemTime(new Date('2026-07-19T00:00:00.000Z'));
+
+      await expect(client.uploadSessionPart(session, new ReadableStream(), 'bytes 0-0/1', 1))
+        .rejects.toMatchObject({ code: 'ONEDRIVE_UPLOAD_SESSION_INVALID' });
+      expect(fetcher).toHaveBeenCalledOnce();
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it('does not log upload-session URLs when a preauthenticated request fails', async () => {
+    const uploadUrl = 'https://upload.example/session?token=private';
+    const signingClient = new OneDriveClient(workerEnv(), mount.id, vi.fn(async () => Response.json({
+      uploadUrl, expirationDateTime: '2026-07-18T00:00:00.000Z',
+    })), async () => 'test-access');
+    const session = await signingClient.createUploadSession('root', 'video.mp4');
 
     const logger = vi.spyOn(console, 'error').mockImplementation(() => undefined);
     const failedRequest = new OneDriveClient(workerEnv(), mount.id, vi.fn(async () => {
       throw new Error('fetch failed for https://upload.example/session?token=private');
     }), async () => 'test-access');
-    await expect(failedRequest.uploadSessionPart('https://upload.example/session?token=private', new ReadableStream(), 'bytes 0-0/1', 1))
+    await expect(failedRequest.uploadSessionPart(session, new ReadableStream(), 'bytes 0-0/1', 1))
       .rejects.toMatchObject({ code: 'ONEDRIVE_UPLOAD_SESSION_FAILED' });
     expect(JSON.stringify(logger.mock.calls)).not.toContain('token=private');
     logger.mockRestore();
   });
 
   it.each([200, 201])('parses a completed Graph item from a %i upload-session part response', async (status) => {
-    const client = new OneDriveClient(workerEnv(), mount.id, vi.fn(async () => Response.json(graphItem({ id: `complete-${status}` }), { status })), async () => 'test-access');
+    const uploadUrl = 'https://upload.example/session?token=private';
+    const client = new OneDriveClient(workerEnv(), mount.id, vi.fn(async (_input: RequestInfo | URL, init: RequestInit = {}) => {
+      if (init.method === 'POST') return Response.json({ uploadUrl, expirationDateTime: '2026-07-18T00:00:00.000Z' });
+      return Response.json(graphItem({ id: `complete-${status}` }), { status });
+    }), async () => 'test-access');
+    const session = await client.createUploadSession('root', 'video.mp4');
 
     await expect(client.uploadSessionPart(
-      'https://upload.example/session?token=private', new ReadableStream(), 'bytes 0-0/1', 1,
+      session, new ReadableStream(), 'bytes 0-0/1', 1,
     )).resolves.toEqual({ completed: true, item: graphItem({ id: `complete-${status}` }) });
   });
 
@@ -342,6 +414,7 @@ describe('OneDrive read driver', () => {
         state: {
           uploadUrl: 'https://upload.example/session?token=private',
           expirationDateTime: '2026-07-18T00:00:00.000Z',
+          integrityProof: 'test-proof',
           parentId: driver.rootId,
           name: 'video.mp4',
           contentType: 'video/mp4',
@@ -350,7 +423,7 @@ describe('OneDrive read driver', () => {
       });
       expect(api.createUploadSession).toHaveBeenCalledWith('root', 'video.mp4');
       expect(api.uploadSessionPart).toHaveBeenCalledWith(
-        'https://upload.example/session?token=private', body, 'bytes 10485760-15728639/15728640', 5 * 1024 * 1024, { signal: controller.signal },
+        { uploadUrl: 'https://upload.example/session?token=private', expirationDateTime: '2026-07-18T00:00:00.000Z', integrityProof: 'test-proof' }, body, 'bytes 10485760-15728639/15728640', 5 * 1024 * 1024, { signal: controller.signal },
       );
       expect(part).toMatchObject({
         part: { partNumber: 2, size: 5 * 1024 * 1024, etag: null },
@@ -359,7 +432,7 @@ describe('OneDrive read driver', () => {
       await expect(adapter.complete({ state: session.state, parts: [part.part], completedItem: part.completedItem }))
         .resolves.toMatchObject({ id: 'complete', parentId: 'root', name: 'video.mp4', kind: 'file' });
       await adapter.abort(session.state);
-      expect(api.cancelUploadSession).toHaveBeenCalledWith('https://upload.example/session?token=private');
+      expect(api.cancelUploadSession).toHaveBeenCalledWith({ uploadUrl: 'https://upload.example/session?token=private', expirationDateTime: '2026-07-18T00:00:00.000Z', integrityProof: 'test-proof' });
     } finally {
       vi.useRealTimers();
     }
@@ -386,7 +459,7 @@ describe('OneDrive read driver', () => {
     await expect(adapter.create({ parentId: 'outside', name: 'video.mp4', size: UPLOAD_PART_SIZE_BYTES, contentType: null, partSize: UPLOAD_PART_SIZE_BYTES }))
       .rejects.toMatchObject({ code: 'STORAGE_ITEM_NOT_FOUND' });
     await expect(adapter.uploadPart({ ...input, state: {
-      uploadUrl: 'https://upload.example/session?token=private', expirationDateTime: '2026-07-16T00:00:00.000Z', parentId: 'inside', name: 'video.mp4', contentType: null,
+      uploadUrl: 'https://upload.example/session?token=private', expirationDateTime: '2026-07-16T00:00:00.000Z', integrityProof: 'test-proof', parentId: 'inside', name: 'video.mp4', contentType: null,
     } })).rejects.toMatchObject({ code: 'INVALID_UPLOAD_STATE' });
     await expect(adapter.abort({ uploadUrl: 42, expirationDateTime: '2026-07-18T00:00:00.000Z', parentId: 'inside', name: 'video.mp4', contentType: null }))
       .rejects.toMatchObject({ code: 'INVALID_UPLOAD_STATE' });
