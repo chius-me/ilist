@@ -4,6 +4,11 @@ import type { AdminUser, Env } from './types';
 const COOKIE_NAME = 'ilist_session';
 const DEFAULT_TTL_SECONDS = 60 * 60 * 24 * 7;
 
+export interface AdminSession {
+  id: string;
+  user: AdminUser;
+}
+
 function bytesToHex(bytes: ArrayBuffer | Uint8Array): string {
   const view = bytes instanceof Uint8Array ? bytes : new Uint8Array(bytes);
   return [...view].map((byte) => byte.toString(16).padStart(2, '0')).join('');
@@ -94,22 +99,35 @@ export async function deleteSession(env: Env, request: Request): Promise<void> {
   await env.DB.prepare(`DELETE FROM sessions WHERE id = ?`).bind(id).run();
 }
 
-export async function currentUser(env: Env, request: Request): Promise<AdminUser | null> {
+export async function currentAdminSession(env: Env, request: Request): Promise<AdminSession | null> {
   const token = getCookie(request, COOKIE_NAME);
   if (!token) return null;
 
   const id = await sha256Hex(`${env.SESSION_SECRET}:${token}`);
   const now = Math.floor(Date.now() / 1000);
-  const session = await env.DB.prepare(`SELECT id FROM sessions WHERE id = ? AND expires_at > ?`).bind(id, now).first();
+  const session = await env.DB.prepare(`SELECT id FROM sessions WHERE id = ? AND expires_at > ?`)
+    .bind(id, now)
+    .first<{ id: string }>();
   if (!session) return null;
 
-  return { username: env.ADMIN_USERNAME || 'admin' };
+  return {
+    id: session.id,
+    user: { username: env.ADMIN_USERNAME || 'admin' },
+  };
+}
+
+export async function currentUser(env: Env, request: Request): Promise<AdminUser | null> {
+  return (await currentAdminSession(env, request))?.user ?? null;
+}
+
+export async function requireAdminSession(env: Env, request: Request): Promise<AdminSession> {
+  const session = await currentAdminSession(env, request);
+  if (!session) throw new HttpError(401, 'AUTH_REQUIRED', 'Authentication required');
+  return session;
 }
 
 export async function requireAdmin(env: Env, request: Request): Promise<AdminUser> {
-  const user = await currentUser(env, request);
-  if (!user) throw new HttpError(401, 'AUTH_REQUIRED', 'Authentication required');
-  return user;
+  return (await requireAdminSession(env, request)).user;
 }
 
 function secureCookieSuffix(request: Request): string {
