@@ -18,6 +18,7 @@ import {
   listExpiredUploadSessions,
   markUploadSessionAborted,
   recordUploadPart,
+  releaseCompletionClaim,
   releaseUploadPartClaim,
   type CreateUploadSessionRecordInput,
 } from '../../src/worker/upload-session-store';
@@ -127,6 +128,8 @@ describe('upload session store', () => {
       status: 'active',
       activePartNumber: null,
       activePartExpiresAt: null,
+      completionOwner: null,
+      completionExpiresAt: null,
     });
     expect(raw?.provider_state_ciphertext).not.toContain(providerState.uploadId);
     await expect(
@@ -287,20 +290,84 @@ describe('upload session store', () => {
     ).resolves.toEqual({ ...providerState, checkpoint: 3 });
   });
 
-  it('uses compare-and-set completion and abort transitions', async () => {
+  it('uses an exclusive completion lease and rejects stale claimant transitions after takeover', async () => {
     const record = await createRecord();
-    const claimed = await claimCompletion(workerEnv(), ownerA, record.id, 100);
+    const claimed = await claimCompletion(workerEnv(), ownerA, record.id, 'completion-a', 1_000, 100);
 
-    expect(claimed?.status).toBe('completing');
-    await expect(claimCompletion(workerEnv(), ownerA, record.id, 100)).resolves.toBeNull();
+    expect(claimed).toMatchObject({
+      status: 'completing',
+      completionOwner: 'completion-a',
+      completionExpiresAt: 1_000,
+    });
+    await expect(
+      claimCompletion(workerEnv(), ownerA, record.id, 'completion-b', 2_000, 999),
+    ).resolves.toBeNull();
     await expect(claimUploadPart(workerEnv(), ownerA, record.id, 1, 2_000, 100)).resolves.toBeNull();
 
-    const completed = await completeUploadSessionRecord(workerEnv(), ownerA, record.id, completedItem);
-    expect(completed).toMatchObject({ status: 'completed', completedItem });
-    await expect(completeUploadSessionRecord(workerEnv(), ownerA, record.id, completedItem)).resolves.toBeNull();
-    await expect(markUploadSessionAborted(workerEnv(), ownerA, record.id)).resolves.toBeNull();
+    const takeover = await claimCompletion(workerEnv(), ownerA, record.id, 'completion-b', 2_000, 1_000);
+    expect(takeover).toMatchObject({
+      status: 'completing',
+      completionOwner: 'completion-b',
+      completionExpiresAt: 2_000,
+    });
+    await expect(
+      completeUploadSessionRecord(workerEnv(), ownerA, record.id, 'completion-a', 1_000, completedItem),
+    ).resolves.toBeNull();
+    await expect(
+      releaseCompletionClaim(workerEnv(), ownerA, record.id, 'completion-a', 1_000),
+    ).resolves.toBe(false);
 
+    const completed = await completeUploadSessionRecord(
+      workerEnv(),
+      ownerA,
+      record.id,
+      'completion-b',
+      2_000,
+      completedItem,
+    );
+    expect(completed).toMatchObject({ status: 'completed', completedItem });
+    expect(completed).toMatchObject({ completionOwner: null, completionExpiresAt: null });
+    await expect(
+      completeUploadSessionRecord(workerEnv(), ownerA, record.id, 'completion-b', 2_000, completedItem),
+    ).resolves.toBeNull();
+    await expect(markUploadSessionAborted(workerEnv(), ownerA, record.id)).resolves.toBeNull();
+  });
+
+  it('releases the current completion lease into a retryable active state', async () => {
+    const record = await createRecord();
+    await claimCompletion(workerEnv(), ownerA, record.id, 'completion-a', 1_000, 100);
+
+    await expect(
+      releaseCompletionClaim(workerEnv(), ownerA, record.id, 'completion-a', 1_000),
+    ).resolves.toBe(true);
+    await expect(getOwnedUploadSession(workerEnv(), ownerA, record.id)).resolves.toMatchObject({
+      status: 'active',
+      completionOwner: null,
+      completionExpiresAt: null,
+    });
+
+    await expect(
+      claimCompletion(workerEnv(), ownerA, record.id, 'completion-b', 2_000, 200),
+    ).resolves.toMatchObject({ completionOwner: 'completion-b' });
+  });
+
+  it('fails closed instead of claiming over a malformed half-completion lease', async () => {
+    const record = await createRecord();
+    await db()
+      .prepare(
+        "UPDATE upload_sessions SET status = 'completing', completion_owner = NULL, completion_expires_at = ? WHERE id = ?",
+      )
+      .bind(1_000, record.id)
+      .run();
+
+    await expect(
+      claimCompletion(workerEnv(), ownerA, record.id, 'completion-b', 2_000, 1_000),
+    ).resolves.toBeNull();
+  });
+
+  it('uses idempotent abort transitions', async () => {
     const abortable = await createRecord();
+
     await expect(markUploadSessionAborted(workerEnv(), ownerA, abortable.id)).resolves.toMatchObject({ status: 'aborted' });
     await expect(markUploadSessionAborted(workerEnv(), ownerA, abortable.id)).resolves.toMatchObject({ status: 'aborted' });
   });
@@ -310,7 +377,7 @@ describe('upload session store', () => {
     const first = await createRecord(ownerA, { expiresAt: 100 });
     const completing = await createRecord(ownerB, { expiresAt: 150 });
     const aborted = await createRecord(ownerB, { expiresAt: 50 });
-    await db().prepare("UPDATE upload_sessions SET status = 'completing' WHERE id = ?").bind(completing.id).run();
+    await claimCompletion(workerEnv(), ownerB, completing.id, 'cleanup-claim', 1_000, 100);
     await markUploadSessionAborted(workerEnv(), ownerB, aborted.id);
     await createRecord(ownerA, { expiresAt: 400 });
 

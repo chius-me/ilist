@@ -1,6 +1,8 @@
 import { env } from 'cloudflare:test';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { driverRegistry } from '../../src/worker/drivers/registry';
+import { S3Error } from '../../src/worker/drivers/s3/client';
+import { S3Driver, type S3DriverClient } from '../../src/worker/drivers/s3/driver';
 import {
   LARGE_UPLOAD_THRESHOLD_BYTES,
   UPLOAD_PART_SIZE_BYTES,
@@ -10,6 +12,7 @@ import {
   type StorageItem,
 } from '../../src/worker/drivers/types';
 import { encodeExternalId } from '../../src/worker/external-identity';
+import { HttpError } from '../../src/worker/http';
 import { createMount } from '../../src/worker/mounts';
 import {
   abortResumableUpload,
@@ -19,6 +22,7 @@ import {
   getResumableUpload,
   uploadResumablePart,
 } from '../../src/worker/upload-service';
+import { claimCompletion } from '../../src/worker/upload-session-store';
 import type { Env, Mount } from '../../src/worker/types';
 
 const ownerSessionId = 'upload-service-owner';
@@ -121,6 +125,62 @@ function partRequest(size: number, signal?: AbortSignal): Request {
     body: 'x',
     signal,
   });
+}
+
+function dbWithFailure(shouldFail: (sql: string) => boolean): D1Database {
+  let failed = false;
+  const wrap = (statement: D1PreparedStatement, sql: string): D1PreparedStatement => new Proxy(statement, {
+    get(statementTarget, statementProperty) {
+      if (statementProperty === 'bind') return (...values: unknown[]) => wrap(statementTarget.bind(...values), sql);
+      if (statementProperty === 'run') {
+        return async <T>() => {
+          if (!failed && shouldFail(sql)) {
+            failed = true;
+            throw new Error('injected D1 failure');
+          }
+          return statementTarget.run<T>();
+        };
+      }
+      const value = Reflect.get(statementTarget, statementProperty, statementTarget);
+      return typeof value === 'function' ? value.bind(statementTarget) : value;
+    },
+  }) as D1PreparedStatement;
+  return new Proxy(workerEnv().DB, {
+    get(target, property) {
+      if (property === 'prepare') {
+        return (sql: string) => wrap(target.prepare(sql), sql.replace(/\s+/g, ' ').trim());
+      }
+      const value = Reflect.get(target, property, target);
+      return typeof value === 'function' ? value.bind(target) : value;
+    },
+  }) as D1Database;
+}
+
+function envWithDb(db: D1Database): Env {
+  return new Proxy(workerEnv(), {
+    get(target, property) {
+      if (property === 'DB') return db;
+      return Reflect.get(target, property, target);
+    },
+  });
+}
+
+function s3Client(overrides: Partial<S3DriverClient> = {}): S3DriverClient {
+  return {
+    listObjectsV2: vi.fn(async () => ({
+      objects: [], commonPrefixes: [], nextContinuationToken: null, isTruncated: false, keyCount: 0,
+    })),
+    headObject: vi.fn(async () => new Response(null)),
+    getObject: vi.fn(async () => new Response()),
+    putObject: vi.fn(async () => new Response()),
+    copyObject: vi.fn(async () => new Response()),
+    deleteObject: vi.fn(async () => new Response()),
+    createMultipartUpload: vi.fn(async () => ({ uploadId: 'upload-123' })),
+    uploadPart: vi.fn(async (_key, _uploadId, partNumber) => ({ etag: `"part-${partNumber}"` })),
+    completeMultipartUpload: vi.fn(async () => ({ etag: '"complete"' })),
+    abortMultipartUpload: vi.fn(async () => new Response(null, { status: 204 })),
+    ...overrides,
+  };
 }
 
 async function expire(id: string): Promise<void> {
@@ -310,6 +370,184 @@ describe('upload lifecycle service', () => {
     expect(successful.resumableUpload?.uploadPart).toHaveBeenCalledTimes(1);
   });
 
+  it('returns delayed matching part retries after completion starts or finishes and rejects conflicting stored metadata', async () => {
+    const mounted = await mount();
+    let rejectComplete!: (error: Error) => void;
+    const complete = vi.fn()
+      .mockImplementationOnce(() => new Promise<StorageItem>((_resolve, reject) => { rejectComplete = reject; }))
+      .mockResolvedValueOnce(storageItem({ size: UPLOAD_PART_SIZE_BYTES }));
+    const driver = fakeDriver('delayed-part', { complete });
+    driverRegistry.onedrive = () => driver;
+    const session = await createResumableUpload(workerEnv(), ownerSessionId, createInput(mounted, {
+      size: UPLOAD_PART_SIZE_BYTES,
+    }));
+    await uploadResumablePart(workerEnv(), ownerSessionId, session.id, 1, partRequest(UPLOAD_PART_SIZE_BYTES));
+
+    const pending = completeResumableUpload(workerEnv(), ownerSessionId, session.id);
+    await vi.waitFor(async () => {
+      await expect(workerEnv().DB.prepare('SELECT status FROM upload_sessions WHERE id = ?')
+        .bind(session.id).first()).resolves.toEqual({ status: 'completing' });
+    });
+    await expect(uploadResumablePart(
+      workerEnv(), ownerSessionId, session.id, 1, partRequest(UPLOAD_PART_SIZE_BYTES),
+    )).resolves.toEqual({ partNumber: 1, size: UPLOAD_PART_SIZE_BYTES });
+
+    rejectComplete(new Error('retry completion'));
+    await expect(pending).rejects.toMatchObject({ code: 'UPLOAD_PROVIDER_FAILED' });
+    await completeResumableUpload(workerEnv(), ownerSessionId, session.id);
+    await expect(uploadResumablePart(
+      workerEnv(), ownerSessionId, session.id, 1, partRequest(UPLOAD_PART_SIZE_BYTES),
+    )).resolves.toEqual({ partNumber: 1, size: UPLOAD_PART_SIZE_BYTES });
+    expect(driver.resumableUpload?.uploadPart).toHaveBeenCalledTimes(1);
+
+    const conflicting = await createResumableUpload(workerEnv(), ownerSessionId, createInput(mounted, {
+      size: UPLOAD_PART_SIZE_BYTES,
+    }));
+    await uploadResumablePart(workerEnv(), ownerSessionId, conflicting.id, 1, partRequest(UPLOAD_PART_SIZE_BYTES));
+    const now = Date.now();
+    await claimCompletion(workerEnv(), ownerSessionId, conflicting.id, 'delayed-conflict', now + 5 * 60_000, now);
+    await workerEnv().DB.prepare('UPDATE upload_sessions SET parts_json = ? WHERE id = ?')
+      .bind('[{"partNumber":1,"size":1,"etag":"different"}]', conflicting.id)
+      .run();
+    await expect(uploadResumablePart(
+      workerEnv(), ownerSessionId, conflicting.id, 1, partRequest(UPLOAD_PART_SIZE_BYTES),
+    )).rejects.toMatchObject({ code: 'UPLOAD_PART_INVALID' });
+  });
+
+  it('holds an exclusive five-minute completion lease and releases provider failures for retry', async () => {
+    const mounted = await mount();
+    let rejectComplete!: (error: Error) => void;
+    const complete = vi.fn()
+      .mockImplementationOnce(() => new Promise<StorageItem>((_resolve, reject) => { rejectComplete = reject; }))
+      .mockResolvedValueOnce(storageItem({ size: UPLOAD_PART_SIZE_BYTES }));
+    const driver = fakeDriver('completion-lease', { complete });
+    driverRegistry.onedrive = () => driver;
+    const session = await createResumableUpload(workerEnv(), ownerSessionId, createInput(mounted, {
+      size: UPLOAD_PART_SIZE_BYTES,
+    }));
+    await uploadResumablePart(workerEnv(), ownerSessionId, session.id, 1, partRequest(UPLOAD_PART_SIZE_BYTES));
+    const startedAt = Date.now();
+    const pending = completeResumableUpload(workerEnv(), ownerSessionId, session.id);
+
+    await vi.waitFor(async () => {
+      const row = await workerEnv().DB.prepare(
+        'SELECT completion_owner, completion_expires_at FROM upload_sessions WHERE id = ?',
+      ).bind(session.id).first<{ completion_owner: string | null; completion_expires_at: number | null }>();
+      expect(row?.completion_owner).toEqual(expect.any(String));
+      expect(row?.completion_expires_at).toBeGreaterThanOrEqual(startedAt + 5 * 60_000);
+      expect(row?.completion_expires_at).toBeLessThanOrEqual(Date.now() + 5 * 60_000);
+    });
+    await expect(completeResumableUpload(workerEnv(), ownerSessionId, session.id))
+      .rejects.toMatchObject({ code: 'UPLOAD_PART_BUSY' });
+    expect(complete).toHaveBeenCalledTimes(1);
+
+    rejectComplete(new Error('provider unavailable'));
+    await expect(pending).rejects.toMatchObject({ code: 'UPLOAD_PROVIDER_FAILED' });
+    await expect(workerEnv().DB.prepare(
+      'SELECT status, completion_owner, completion_expires_at FROM upload_sessions WHERE id = ?',
+    ).bind(session.id).first()).resolves.toEqual({
+      status: 'active', completion_owner: null, completion_expires_at: null,
+    });
+    await expect(completeResumableUpload(workerEnv(), ownerSessionId, session.id)).resolves.toHaveProperty('entry');
+  });
+
+  it('recovers S3 completion when provider success is followed by one local persistence failure', async () => {
+    const mounted = await mount('s3', 'persist-complete');
+    let marker = '';
+    const complete = vi.fn()
+      .mockResolvedValueOnce({ etag: '"complete"' })
+      .mockRejectedValueOnce(new S3Error(404, 'NoSuchUpload', 'already completed'));
+    const api = s3Client({
+      createMultipartUpload: vi.fn(async (_key, _contentType, value) => {
+        marker = value;
+        return { uploadId: 'upload-123' };
+      }),
+      completeMultipartUpload: complete,
+      headObject: vi.fn(async () => new Response(null, { headers: {
+        'content-length': String(25 * 1024 * 1024),
+        'x-amz-meta-ilist-upload-marker': marker,
+        etag: '"complete"',
+      } })),
+    });
+    const driver = new S3Driver(mounted, api);
+    driverRegistry.s3 = () => driver;
+    const session = await createResumableUpload(workerEnv(), ownerSessionId, createInput(mounted, {
+      parentId: encodeExternalId(mounted.id, driver.rootId),
+    }));
+    await uploadResumablePart(workerEnv(), ownerSessionId, session.id, 1, partRequest(UPLOAD_PART_SIZE_BYTES));
+    await uploadResumablePart(workerEnv(), ownerSessionId, session.id, 2, partRequest(UPLOAD_PART_SIZE_BYTES));
+    await uploadResumablePart(workerEnv(), ownerSessionId, session.id, 3, partRequest(5 * 1024 * 1024));
+    const failingEnv = envWithDb(dbWithFailure((sql) => sql.includes("SET status = 'completed'")));
+
+    await expect(completeResumableUpload(failingEnv, ownerSessionId, session.id))
+      .rejects.toMatchObject({ code: 'UPLOAD_STATE_PERSIST_FAILED' });
+    await expect(workerEnv().DB.prepare('SELECT status FROM upload_sessions WHERE id = ?')
+      .bind(session.id).first()).resolves.toEqual({ status: 'active' });
+
+    const result = await completeResumableUpload(workerEnv(), ownerSessionId, session.id);
+    expect(result.entry).toMatchObject({ name: 'archive.bin', size: 25 * 1024 * 1024 });
+    expect(complete).toHaveBeenCalledTimes(2);
+    expect(api.headObject).toHaveBeenCalledTimes(1);
+    expect(JSON.stringify(result)).not.toContain(marker);
+  });
+
+  it('lets cleanup converge an S3 abort after provider success and one local persistence failure', async () => {
+    const mounted = await mount('s3', 'persist-abort');
+    const abort = vi.fn()
+      .mockResolvedValueOnce(new Response(null, { status: 204 }))
+      .mockRejectedValueOnce(new S3Error(404, 'NoSuchUpload', 'already absent'));
+    const api = s3Client({ abortMultipartUpload: abort });
+    const driver = new S3Driver(mounted, api);
+    driverRegistry.s3 = () => driver;
+    const session = await createResumableUpload(workerEnv(), ownerSessionId, createInput(mounted, {
+      parentId: encodeExternalId(mounted.id, driver.rootId),
+    }));
+    const failingEnv = envWithDb(dbWithFailure((sql) => sql.includes("SET status = 'aborted'")));
+
+    await expect(abortResumableUpload(failingEnv, ownerSessionId, session.id))
+      .rejects.toMatchObject({ code: 'UPLOAD_STATE_PERSIST_FAILED' });
+    await expire(session.id);
+    await cleanupExpiredUploads(workerEnv(), 1);
+
+    expect(abort).toHaveBeenCalledTimes(2);
+    await expect(workerEnv().DB.prepare('SELECT status FROM upload_sessions WHERE id = ?')
+      .bind(session.id).first()).resolves.toEqual({ status: 'aborted' });
+  });
+
+  it('sanitizes hostile provider HttpErrors and maps retryable S3 failures to stable errors', async () => {
+    const mounted = await mount();
+    const uploadPart = vi.fn();
+    const driver = fakeDriver('provider-errors', { uploadPart });
+    driverRegistry.onedrive = () => driver;
+    const session = await createResumableUpload(workerEnv(), ownerSessionId, createInput(mounted));
+    const cases = [
+      [new S3Error(503, 'SlowDown', 'private slowdown', null, null, 30), 'UPLOAD_PROVIDER_RATE_LIMITED', 30],
+      [new S3Error(429, 'Throttling', 'private throttle'), 'UPLOAD_PROVIDER_RATE_LIMITED', undefined],
+      [new S3Error(408, 'RequestTimeout', 'private timeout'), 'UPLOAD_PROVIDER_RETRYABLE', undefined],
+      [new S3Error(503, 'ServiceUnavailable', 'private outage', null, null, 10), 'UPLOAD_PROVIDER_RETRYABLE', 10],
+    ] as const;
+
+    for (const [providerError, code, retryAfter] of cases) {
+      uploadPart.mockRejectedValueOnce(providerError);
+      const error = await uploadResumablePart(
+        workerEnv(), ownerSessionId, session.id, 1, partRequest(UPLOAD_PART_SIZE_BYTES),
+      ).catch((caught: unknown) => caught) as HttpError;
+      expect(error).toMatchObject({ status: 503, code });
+      expect(error.details).toEqual(retryAfter === undefined ? undefined : { retryAfter });
+      expect(error.message).not.toContain(providerError.message);
+    }
+
+    uploadPart.mockRejectedValueOnce(new HttpError(418, 'HOSTILE_PROVIDER_ERROR', 'uploadUrl=https://private', {
+      uploadUrl: 'https://upload.example/private', uploadId: 'private-id', proof: 'private-proof', retryAfter: Infinity,
+    }));
+    const hostile = await uploadResumablePart(
+      workerEnv(), ownerSessionId, session.id, 1, partRequest(UPLOAD_PART_SIZE_BYTES),
+    ).catch((caught: unknown) => caught) as HttpError;
+    expect(hostile).toMatchObject({ status: 502, code: 'UPLOAD_PROVIDER_FAILED', details: undefined });
+    expect(JSON.stringify({ message: hostile.message, details: hostile.details }))
+      .not.toMatch(/uploadUrl|uploadId|proof|private/);
+  });
+
   it('requires every expected part before completing and returns the completed entry idempotently', async () => {
     const mounted = await mount('s3');
     const driver = fakeDriver('completion');
@@ -324,7 +562,11 @@ describe('upload lifecycle service', () => {
 
     const completed = await completeResumableUpload(workerEnv(), ownerSessionId, session.id);
     const repeated = await completeResumableUpload(workerEnv(), ownerSessionId, session.id);
+    const delayedPart = await uploadResumablePart(
+      workerEnv(), ownerSessionId, session.id, 1, partRequest(UPLOAD_PART_SIZE_BYTES),
+    );
     expect(completed).toEqual(repeated);
+    expect(delayedPart).toEqual({ partNumber: 1, size: UPLOAD_PART_SIZE_BYTES });
     expect(completed.entry).toMatchObject({
       id: encodeExternalId(mounted.id, 'completed-item'),
       mountId: mounted.id,

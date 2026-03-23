@@ -54,6 +54,7 @@ export class S3Error extends Error {
   readonly code: string;
   readonly resource: string | null;
   readonly requestId: string | null;
+  readonly retryAfterSeconds: number | null;
 
   constructor(
     status: number,
@@ -61,6 +62,7 @@ export class S3Error extends Error {
     message: string,
     resource: string | null = null,
     requestId: string | null = null,
+    retryAfterSeconds: number | null = null,
   ) {
     super(message);
     this.name = 'S3Error';
@@ -68,10 +70,19 @@ export class S3Error extends Error {
     this.code = code;
     this.resource = resource;
     this.requestId = requestId;
+    this.retryAfterSeconds = retryAfterSeconds;
   }
 
   static async fromResponse(response: Response): Promise<S3Error> {
-    const fallback = new S3Error(response.status, `S3_HTTP_${response.status}`, `S3 request failed with status ${response.status}`);
+    const retryAfterSeconds = parseRetryAfterSeconds(response.headers.get('retry-after'));
+    const fallback = new S3Error(
+      response.status,
+      `S3_HTTP_${response.status}`,
+      `S3 request failed with status ${response.status}`,
+      null,
+      null,
+      retryAfterSeconds,
+    );
     let xml: string;
     try {
       xml = await response.text();
@@ -82,7 +93,14 @@ export class S3Error extends Error {
 
     try {
       const parsed = parseS3ErrorXml(xml);
-      return new S3Error(response.status, parsed.code, parsed.message, parsed.resource, parsed.requestId);
+      return new S3Error(
+        response.status,
+        parsed.code,
+        parsed.message,
+        parsed.resource,
+        parsed.requestId,
+        retryAfterSeconds,
+      );
     } catch {
       return fallback;
     }
@@ -150,9 +168,10 @@ export class S3Client {
     return this.send('PUT', this.requestUrl(key), { headers, body });
   }
 
-  async createMultipartUpload(key: string, contentType: string | null): Promise<{ uploadId: string }> {
+  async createMultipartUpload(key: string, contentType: string | null, marker: string): Promise<{ uploadId: string }> {
     const headers = new Headers();
     if (contentType !== null) headers.set('content-type', contentType);
+    headers.set('x-amz-meta-ilist-upload-marker', marker);
     const response = await this.send('POST', `${this.requestUrl(key)}?uploads`, { headers });
     return parseCreateMultipartUploadResponseXml(await response.text());
   }
@@ -174,7 +193,7 @@ export class S3Client {
     return { etag };
   }
 
-  async completeMultipartUpload(key: string, uploadId: string, parts: CompletedUploadPart[]): Promise<Response> {
+  async completeMultipartUpload(key: string, uploadId: string, parts: CompletedUploadPart[]): Promise<{ etag: string }> {
     const sortedParts = [...parts].sort((left, right) => left.partNumber - right.partNumber);
     const partNumbers = new Set<number>();
     for (const part of sortedParts) {
@@ -194,7 +213,7 @@ export class S3Client {
       const { error } = parsed;
       throw new S3Error(response.status, error.code, error.message, error.resource, error.requestId);
     }
-    return response;
+    return { etag: parsed.etag };
   }
 
   abortMultipartUpload(key: string, uploadId: string): Promise<Response> {
@@ -247,6 +266,12 @@ export class S3Client {
     if (!response.ok) throw await S3Error.fromResponse(response);
     return response;
   }
+}
+
+function parseRetryAfterSeconds(value: string | null): number | null {
+  if (value === null || !/^\d+$/.test(value.trim())) return null;
+  const seconds = Number(value.trim());
+  return Number.isSafeInteger(seconds) ? seconds : null;
 }
 
 function escapeXml(value: string): string {

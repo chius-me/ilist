@@ -208,6 +208,8 @@ export interface UploadSessionRow {
   status: UploadSessionStatus;
   active_part_number: number | null;
   active_part_expires_at: number | null;
+  completion_owner: string | null;
+  completion_expires_at: number | null;
   expires_at: number;
   created_at: string;
   updated_at: string;

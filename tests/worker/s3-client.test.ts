@@ -335,7 +335,7 @@ describe('S3Client object requests', () => {
 });
 
 describe('S3Client multipart requests', () => {
-  it('signs multipart requests, escapes sorted completion parts, and preserves the completion response', async () => {
+  it('signs marked multipart requests, escapes sorted completion parts, and returns the completion ETag', async () => {
     const seen: Array<{ method: string; url: string; headers: Headers; body: string | null }> = [];
     const partBody = new Uint8Array([1, 2, 3]);
     const completionXml = '<CompleteMultipartUploadResult><ETag>"complete"</ETag><Location>https://objects.example.test/archive</Location><Bucket>archive</Bucket><Key>archive.bin</Key></CompleteMultipartUploadResult>';
@@ -351,15 +351,14 @@ describe('S3Client multipart requests', () => {
     });
     const client = createClient(fetcher);
 
-    await expect(client.createMultipartUpload('中文/archive.bin', 'application/octet-stream')).resolves.toEqual({ uploadId: 'upload-123' });
+    await expect(client.createMultipartUpload('中文/archive.bin', 'application/octet-stream', 'session-marker')).resolves.toEqual({ uploadId: 'upload-123' });
     await expect(client.uploadPart('中文/archive.bin', 'upload-123', 1, partBody)).resolves.toEqual({ etag: '"etag-1"' });
-    const completion = await client.completeMultipartUpload('中文/archive.bin', 'upload-123', [
+    await expect(client.completeMultipartUpload('中文/archive.bin', 'upload-123', [
       { partNumber: 2, size: 10 * 1024 * 1024, etag: '"etag-2&<"' },
       { partNumber: 1, size: 10 * 1024 * 1024, etag: '"etag-1"' },
-    ]);
+    ])).resolves.toEqual({ etag: '"complete"' });
     await client.abortMultipartUpload('中文/archive.bin', 'upload-123');
 
-    expect(await completion.text()).toBe(completionXml);
     expect(seen.map(({ method, url }) => [method, rawPathname(url), new URL(url).search])).toEqual([
       ['POST', '/storage/archive/%E4%B8%AD%E6%96%87/archive.bin', '?uploads'],
       ['PUT', '/storage/archive/%E4%B8%AD%E6%96%87/archive.bin', '?partNumber=1&uploadId=upload-123'],
@@ -367,6 +366,7 @@ describe('S3Client multipart requests', () => {
       ['DELETE', '/storage/archive/%E4%B8%AD%E6%96%87/archive.bin', '?uploadId=upload-123'],
     ]);
     expect(seen[0]!.headers.get('content-type')).toBe('application/octet-stream');
+    expect(seen[0]!.headers.get('x-amz-meta-ilist-upload-marker')).toBe('session-marker');
     expect(seen[1]!.body).toBe('\u0001\u0002\u0003');
     expect(seen[2]!.body).toBe(
       '<CompleteMultipartUpload><Part><PartNumber>1</PartNumber><ETag>&quot;etag-1&quot;</ETag></Part><Part><PartNumber>2</PartNumber><ETag>&quot;etag-2&amp;&lt;&quot;</ETag></Part></CompleteMultipartUpload>',
@@ -401,7 +401,7 @@ describe('S3Client multipart requests', () => {
     const fetcher = vi.fn<typeof fetch>(async () => new Response(xml));
     const client = createClient(fetcher);
 
-    await expect(client.createMultipartUpload('archive.bin', null)).rejects.toThrow('Invalid S3 XML response');
+    await expect(client.createMultipartUpload('archive.bin', null, 'session-marker')).rejects.toThrow('Invalid S3 XML response');
   });
 
   it('rejects an S3 completion error returned with HTTP 200', async () => {
@@ -417,6 +417,28 @@ describe('S3Client multipart requests', () => {
       code: 'InvalidPart',
       message: 'Part does not match',
       requestId: 'complete-1',
+    });
+  });
+
+  it('retains only a validated retry-after duration on S3 errors', async () => {
+    const fetcher = vi.fn<typeof fetch>()
+      .mockResolvedValueOnce(new Response(
+        '<Error><Code>SlowDown</Code><Message>private upstream message</Message></Error>',
+        { status: 503, headers: { 'retry-after': '30' } },
+      ))
+      .mockResolvedValueOnce(new Response(
+        '<Error><Code>RequestTimeout</Code><Message>private upstream message</Message></Error>',
+        { status: 503, headers: { 'retry-after': 'not-seconds' } },
+      ));
+    const client = createClient(fetcher);
+
+    await expect(client.headObject('archive.bin')).rejects.toMatchObject({
+      code: 'SlowDown',
+      retryAfterSeconds: 30,
+    });
+    await expect(client.headObject('archive.bin')).rejects.toMatchObject({
+      code: 'RequestTimeout',
+      retryAfterSeconds: null,
     });
   });
 

@@ -365,8 +365,8 @@ describe('admin upload session routes', () => {
         throw new HttpError(
           503,
           'ONEDRIVE_UPLOAD_SESSION_RATE_LIMITED',
-          'OneDrive upload session is temporarily rate limited',
-          { retryAfter: '30' },
+          'uploadUrl=https://upload.example/private uploadId=private proof=private',
+          { retryAfter: '30', uploadUrl: 'https://upload.example/private', uploadId: 'private', proof: 'private' },
         );
       }),
     });
@@ -376,9 +376,15 @@ describe('admin upload session routes', () => {
 
     const response = await SELF.fetch(partRequest(cookie, id, { length: UPLOAD_PART_SIZE_BYTES }));
     expect(response.status).toBe(503);
+    const responseText = await response.clone().text();
     await expect(response.json()).resolves.toMatchObject({
-      error: { code: 'ONEDRIVE_UPLOAD_SESSION_RATE_LIMITED', details: { retryAfter: '30' } },
+      error: {
+        code: 'ONEDRIVE_UPLOAD_SESSION_RATE_LIMITED',
+        message: 'OneDrive upload session is temporarily rate limited',
+        details: { retryAfter: 30 },
+      },
     });
+    expect(responseText).not.toMatch(/uploadUrl|uploadId|proof|private/);
     await expect(workerEnv().DB.prepare('SELECT active_part_number FROM upload_sessions WHERE id = ?')
       .bind(id).first()).resolves.toEqual({ active_part_number: null });
   });
