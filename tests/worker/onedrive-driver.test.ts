@@ -545,6 +545,44 @@ describe('OneDrive read driver', () => {
     }
   });
 
+  it('completes locally from structurally valid expired state and rejects malformed expired state', async () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(new Date('2026-07-19T00:00:00.000Z'));
+    try {
+      const api = driverClient();
+      const adapter = new OneDriveDriver(mount, api).resumableUpload!;
+      const expiredState = {
+        uploadUrl: 'https://upload.example/session?token=private',
+        expirationDateTime: '2026-07-18T00:00:00.000Z',
+        integrityProof: 'test-proof',
+        parentId: 'root',
+        name: 'video.mp4',
+        contentType: 'video/mp4',
+      };
+      const completedItem = {
+        id: 'completed-item',
+        parentId: 'root',
+        name: 'video.mp4',
+        kind: 'file' as const,
+        size: UPLOAD_PART_SIZE_BYTES,
+        contentType: 'video/mp4',
+        modifiedAt: '2026-07-18T00:00:00.000Z',
+        etag: 'completed-etag',
+      };
+
+      await expect(adapter.complete({ state: expiredState, parts: [], completedItem }))
+        .resolves.toEqual(completedItem);
+      await expect(adapter.complete({
+        state: { ...expiredState, integrityProof: '' },
+        parts: [],
+        completedItem,
+      })).rejects.toMatchObject({ code: 'INVALID_UPLOAD_STATE' });
+      for (const clientMethod of Object.values(api)) expect(clientMethod).not.toHaveBeenCalled();
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
   it('rejects out-of-scope multipart parents and expired or malformed upload-session state', async () => {
     const scopedMount = { ...mount, rootItemId: 'mounted-root' };
     const api = driverClient({
