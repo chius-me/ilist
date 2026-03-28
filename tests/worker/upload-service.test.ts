@@ -562,6 +562,74 @@ describe('upload lifecycle service', () => {
       .resolves.toEqual({ completed_item_json: expect.any(String) });
   });
 
+  it('converges a persisted final OneDrive item to completed instead of aborting it', async () => {
+    const mounted = await mount();
+    const completedItem = storageItem({ size: UPLOAD_PART_SIZE_BYTES });
+    const complete = vi.fn(async (input: Parameters<ResumableUploadAdapter['complete']>[0]) => input.completedItem!);
+    const abort = vi.fn(async () => undefined);
+    const driver = fakeDriver('completed-item-abort', {
+      uploadPart: vi.fn(async (input) => ({
+        part: { partNumber: input.partNumber, size: input.size, etag: null },
+        completedItem,
+      })),
+      complete,
+      abort,
+    });
+    driverRegistry.onedrive = () => driver;
+    const session = await createResumableUpload(workerEnv(), ownerSessionId, createInput(mounted, {
+      size: UPLOAD_PART_SIZE_BYTES,
+    }));
+    await uploadResumablePart(
+      workerEnv(), ownerSessionId, session.id, 1, partRequest(UPLOAD_PART_SIZE_BYTES),
+    );
+
+    await expect(abortResumableUpload(workerEnv(), ownerSessionId, session.id)).rejects.toMatchObject({
+      status: 409,
+      code: 'UPLOAD_ALREADY_COMPLETED',
+      message: 'Upload has already completed',
+      details: undefined,
+    });
+    await expect(abortResumableUpload(workerEnv(), ownerSessionId, session.id))
+      .rejects.toMatchObject({ code: 'UPLOAD_ALREADY_COMPLETED' });
+    expect(complete).toHaveBeenCalledTimes(1);
+    expect(abort).not.toHaveBeenCalled();
+    await expect(workerEnv().DB.prepare('SELECT status FROM upload_sessions WHERE id = ?')
+      .bind(session.id).first()).resolves.toEqual({ status: 'completed' });
+  });
+
+  it('returns not-found when a stale provider response arrives after abort persisted a matching part', async () => {
+    const mounted = await mount();
+    let resolveStale!: (result: ProviderUploadPartResult) => void;
+    const part = { partNumber: 1, size: UPLOAD_PART_SIZE_BYTES, etag: 'etag-1' };
+    const uploadPart = vi.fn()
+      .mockImplementationOnce(() => new Promise<ProviderUploadPartResult>((resolve) => { resolveStale = resolve; }))
+      .mockResolvedValueOnce({ part });
+    const abort = vi.fn(async () => undefined);
+    const driver = fakeDriver('stale-provider-abort', { uploadPart, abort });
+    driverRegistry.onedrive = () => driver;
+    const session = await createResumableUpload(workerEnv(), ownerSessionId, createInput(mounted, {
+      size: UPLOAD_PART_SIZE_BYTES,
+    }));
+
+    const staleUpload = uploadResumablePart(
+      workerEnv(), ownerSessionId, session.id, 1, partRequest(UPLOAD_PART_SIZE_BYTES),
+    );
+    await vi.waitFor(() => expect(uploadPart).toHaveBeenCalledTimes(1));
+    await workerEnv().DB.prepare('UPDATE upload_sessions SET active_part_expires_at = ? WHERE id = ?')
+      .bind(Date.now() - 1, session.id)
+      .run();
+    await expect(uploadResumablePart(
+      workerEnv(), ownerSessionId, session.id, 1, partRequest(UPLOAD_PART_SIZE_BYTES),
+    )).resolves.toEqual({ partNumber: 1, size: UPLOAD_PART_SIZE_BYTES });
+    await abortResumableUpload(workerEnv(), ownerSessionId, session.id);
+
+    resolveStale({ part });
+    await expect(staleUpload).rejects.toMatchObject({ code: 'UPLOAD_SESSION_NOT_FOUND' });
+    expect(abort).toHaveBeenCalledTimes(1);
+    await expect(workerEnv().DB.prepare('SELECT status FROM upload_sessions WHERE id = ?')
+      .bind(session.id).first()).resolves.toEqual({ status: 'aborted' });
+  });
+
   it('does not return a raced recorded part after an abort wins the failed-claim reload', async () => {
     const mounted = await mount();
     const driver = fakeDriver('aborted-part-reload');
@@ -775,6 +843,78 @@ describe('upload lifecycle service', () => {
       .bind(first.id).first()).resolves.toEqual({ status: 'active' });
     await expect(workerEnv().DB.prepare('SELECT status FROM upload_sessions WHERE id = ?')
       .bind(second.id).first()).resolves.toEqual({ status: 'aborted' });
+  });
+
+  it('finalizes an expired persisted OneDrive item during cleanup without remote abort', async () => {
+    const mounted = await mount();
+    const completedItem = storageItem({ size: UPLOAD_PART_SIZE_BYTES });
+    const complete = vi.fn(async (input: Parameters<ResumableUploadAdapter['complete']>[0]) => input.completedItem!);
+    const abort = vi.fn(async () => undefined);
+    const driver = fakeDriver('completed-item-cleanup', {
+      uploadPart: vi.fn(async (input) => ({
+        part: { partNumber: input.partNumber, size: input.size, etag: null },
+        completedItem,
+      })),
+      complete,
+      abort,
+    });
+    driverRegistry.onedrive = () => driver;
+    const session = await createResumableUpload(workerEnv(), ownerSessionId, createInput(mounted, {
+      size: UPLOAD_PART_SIZE_BYTES,
+    }));
+    await uploadResumablePart(
+      workerEnv(), ownerSessionId, session.id, 1, partRequest(UPLOAD_PART_SIZE_BYTES),
+    );
+    await expire(session.id);
+
+    await cleanupExpiredUploads(workerEnv(), 1);
+
+    expect(complete).toHaveBeenCalledTimes(1);
+    expect(abort).not.toHaveBeenCalled();
+    await expect(workerEnv().DB.prepare('SELECT status FROM upload_sessions WHERE id = ?')
+      .bind(session.id).first()).resolves.toEqual({ status: 'completed' });
+  });
+
+  it('gives each cleanup row a fresh five-minute terminal lease', async () => {
+    const mounted = await mount();
+    driverRegistry.onedrive = () => fakeDriver('cleanup-lease-first');
+    const first = await createResumableUpload(workerEnv(), ownerSessionId, createInput(mounted));
+    driverRegistry.onedrive = () => fakeDriver('cleanup-lease-second');
+    const second = await createResumableUpload(workerEnv(), ownerSessionId, createInput(mounted));
+    const listNow = Date.now();
+    await workerEnv().DB.prepare('UPDATE upload_sessions SET expires_at = ? WHERE id = ?')
+      .bind(listNow - 2, first.id)
+      .run();
+    await workerEnv().DB.prepare('UPDATE upload_sessions SET expires_at = ? WHERE id = ?')
+      .bind(listNow - 1, second.id)
+      .run();
+
+    let clock = listNow;
+    let resolveSecond!: () => void;
+    const abort = vi.fn((state: Record<string, unknown>) => {
+      if (state.uploadId === 'private-cleanup-lease-first-upload-id') {
+        clock += 5 * 60_000 + 1_000;
+        return Promise.resolve();
+      }
+      return new Promise<void>((resolve) => { resolveSecond = resolve; });
+    });
+    driverRegistry.onedrive = () => fakeDriver('cleanup-lease', { abort });
+    const nowSpy = vi.spyOn(Date, 'now').mockImplementation(() => clock);
+    const cleaning = cleanupExpiredUploads(workerEnv(), 2);
+    try {
+      await vi.waitFor(() => expect(abort).toHaveBeenCalledTimes(2));
+      const row = await workerEnv().DB.prepare(
+        'SELECT terminal_expires_at FROM upload_sessions WHERE id = ?',
+      ).bind(second.id).first<{ terminal_expires_at: number | null }>();
+      expect(row?.terminal_expires_at).toBe(clock + 5 * 60_000);
+      await expect(claimTerminalOperation(
+        workerEnv(), ownerSessionId, second.id, 'abort', 'immediate-takeover', clock + 10 * 60_000, clock,
+      )).resolves.toBeNull();
+    } finally {
+      resolveSecond?.();
+      await cleaning;
+      nowSpy.mockRestore();
+    }
   });
 
   it('skips expired sessions with live part or terminal claims during cleanup', async () => {

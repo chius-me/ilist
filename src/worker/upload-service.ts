@@ -83,6 +83,10 @@ function uploadBusy(): HttpError {
   return new HttpError(409, 'UPLOAD_PART_BUSY', 'Upload session is processing another request');
 }
 
+function uploadAlreadyCompleted(): HttpError {
+  return new HttpError(409, 'UPLOAD_ALREADY_COMPLETED', 'Upload has already completed');
+}
+
 interface SafeProviderError {
   status: number;
   message: string;
@@ -440,7 +444,13 @@ export async function uploadResumablePart(
     await releaseUploadPartClaim(env, ownerSessionId, id, partNumber, claimExpiresAt).catch(() => undefined);
     throw uploadStatePersistFailed();
   }
-  if (!updated) throw uploadBusy();
+  if (!updated) {
+    const current = await ownedSession(env, ownerSessionId, id);
+    if (current.status === 'aborted') throw uploadNotFound();
+    throw uploadBusy();
+  }
+  if (updated.status === 'aborted') throw uploadNotFound();
+  if (updated.terminalOperation === 'abort') throw uploadBusy();
   const stored = recordedPart(updated, partNumber, expected.size);
   if (!stored) throw uploadBusy();
   return stored;
@@ -481,7 +491,7 @@ export async function completeResumableUpload(
   let record = await ownedSession(env, ownerSessionId, id);
   if (record.status === 'completed') return completedEntry(env, record);
   if (record.status === 'aborted') throw uploadNotFound();
-  requireCurrent(record);
+  if (!record.completedItem) requireCurrent(record);
   requireCompleteParts(record);
 
   const now = Date.now();
@@ -568,13 +578,24 @@ export async function completeResumableUpload(
   throw uploadBusy();
 }
 
+async function rejectAbortForCompletedUpload(
+  env: Env,
+  ownerSessionId: string,
+  id: string,
+): Promise<never> {
+  await completeResumableUpload(env, ownerSessionId, id);
+  throw uploadAlreadyCompleted();
+}
+
 export async function abortResumableUpload(
   env: Env,
   ownerSessionId: string,
   id: string,
 ): Promise<void> {
   let record = await ownedSession(env, ownerSessionId, id);
-  if (record.status === 'aborted' || record.status === 'completed') return;
+  if (record.status === 'aborted') return;
+  if (record.status === 'completed') throw uploadAlreadyCompleted();
+  if (record.completedItem) return rejectAbortForCompletedUpload(env, ownerSessionId, id);
   const now = Date.now();
   const terminalOwner = crypto.randomUUID();
   const terminalExpiresAt = now + TERMINAL_CLAIM_DURATION_MS;
@@ -594,7 +615,9 @@ export async function abortResumableUpload(
   }
   if (!claimed) {
     record = await ownedSession(env, ownerSessionId, id);
-    if (record.status === 'aborted' || record.status === 'completed') return;
+    if (record.status === 'aborted') return;
+    if (record.status === 'completed') throw uploadAlreadyCompleted();
+    if (record.completedItem) return rejectAbortForCompletedUpload(env, ownerSessionId, id);
     throw uploadBusy();
   }
   record = claimed;
@@ -636,17 +659,32 @@ export async function abortResumableUpload(
   }
   if (aborted) return;
   const current = await ownedSession(env, ownerSessionId, id);
-  if (current.status !== 'aborted' && current.status !== 'completed') throw uploadBusy();
+  if (current.status === 'aborted') return;
+  if (current.status === 'completed') throw uploadAlreadyCompleted();
+  if (current.completedItem) {
+    await releaseClaim();
+    return rejectAbortForCompletedUpload(env, ownerSessionId, id);
+  }
+  throw uploadBusy();
 }
 
 export async function cleanupExpiredUploads(env: Env, limit = DEFAULT_CLEANUP_LIMIT): Promise<void> {
   if (!Number.isSafeInteger(limit) || limit < 1 || limit > DEFAULT_CLEANUP_LIMIT) {
     throw new Error('Upload cleanup limit is invalid');
   }
-  const now = Date.now();
-  const expired = await listExpiredUploadSessions(env, now, limit);
+  const expired = await listExpiredUploadSessions(env, Date.now(), limit);
   for (const record of expired) {
+    if (record.completedItem) {
+      try {
+        await completeResumableUpload(env, record.ownerSessionId, record.id);
+        continue;
+      } catch {
+        await touchUploadSessionCleanupAttempt(env, record.id, Date.now()).catch(() => undefined);
+        continue;
+      }
+    }
     const terminalOwner = crypto.randomUUID();
+    const now = Date.now();
     const terminalExpiresAt = now + TERMINAL_CLAIM_DURATION_MS;
     let claimed: UploadSessionRecord | null = null;
     try {
@@ -683,6 +721,6 @@ export async function cleanupExpiredUploads(env: Env, limit = DEFAULT_CLEANUP_LI
         terminalExpiresAt,
       ).catch(() => undefined);
     }
-    await touchUploadSessionCleanupAttempt(env, record.id, now).catch(() => undefined);
+    await touchUploadSessionCleanupAttempt(env, record.id, Date.now()).catch(() => undefined);
   }
 }

@@ -345,6 +345,7 @@ export async function recordUploadPart(
   const row = await getOwnedUploadSessionRow(env, ownerSessionId, id);
   if (!row) return null;
   const record = await rowToRecord(env, row);
+  if (record.status === 'aborted' || record.terminalOperation === 'abort') return null;
   const existing = record.parts.find((part) => part.partNumber === input.part.partNumber);
   if (existing && !samePart(existing, input.part)) throw new Error('Recorded upload part does not match');
 
@@ -404,6 +405,7 @@ export async function recordUploadPart(
   if (result.meta.changes === 1) return getOwnedUploadSession(env, ownerSessionId, id);
 
   const current = await getOwnedUploadSession(env, ownerSessionId, id);
+  if (current?.status === 'aborted' || current?.terminalOperation === 'abort') return null;
   const recorded = current?.parts.find((part) => part.partNumber === input.part.partNumber);
   if (recorded && !samePart(recorded, input.part)) throw new Error('Recorded upload part does not match');
   return recorded ? current : null;
@@ -466,7 +468,8 @@ export async function claimTerminalOperation(
      WHERE id = ?
        AND owner_session_id = ?
        AND status IN ('active', 'completing')
-       AND (? = 'abort' OR expires_at > ?)
+       AND (? = 'abort' OR expires_at > ? OR completed_item_json IS NOT NULL)
+       AND (? = 'complete' OR completed_item_json IS NULL)
        AND (
          (active_part_number IS NULL AND active_part_expires_at IS NULL)
          OR (
@@ -495,6 +498,7 @@ export async function claimTerminalOperation(
       ownerSessionId,
       operation,
       now,
+      operation,
       now,
       now,
     )
@@ -595,7 +599,8 @@ export async function markUploadSessionAborted(
        AND status = 'active'
        AND terminal_operation = 'abort'
        AND terminal_owner = ?
-       AND terminal_expires_at = ?`,
+       AND terminal_expires_at = ?
+       AND completed_item_json IS NULL`,
   )
     .bind(new Date().toISOString(), id, ownerSessionId, terminalOwner, terminalExpiresAt)
     .run();
