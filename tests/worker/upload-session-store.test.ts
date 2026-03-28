@@ -9,8 +9,10 @@ import {
 } from '../../src/worker/auth';
 import { decryptCredential, encryptCredential } from '../../src/worker/crypto';
 import type { CompletedUploadPart, StorageItem } from '../../src/worker/drivers/types';
+import uploadSessionsMigration from '../../migrations/0012_upload_sessions.sql?raw';
+import terminalLeasesMigration from '../../migrations/0013_upload_terminal_leases.sql?raw';
 import {
-  claimCompletion,
+  claimTerminalOperation,
   claimUploadPart,
   completeUploadSessionRecord,
   createUploadSessionRecord,
@@ -18,7 +20,7 @@ import {
   listExpiredUploadSessions,
   markUploadSessionAborted,
   recordUploadPart,
-  releaseCompletionClaim,
+  releaseTerminalOperationClaim,
   releaseUploadPartClaim,
   type CreateUploadSessionRecordInput,
 } from '../../src/worker/upload-session-store';
@@ -94,6 +96,17 @@ describe('upload session store', () => {
     await insertMount();
   });
 
+  it('keeps terminal leases additive to the already-applied upload session migration', async () => {
+    expect(uploadSessionsMigration).not.toMatch(/terminal_operation|terminal_owner|terminal_expires_at|cleanup_attempted_at/);
+    expect(terminalLeasesMigration).toMatch(/ALTER TABLE upload_sessions\s+ADD COLUMN terminal_operation/);
+    expect(terminalLeasesMigration).toMatch(/ALTER TABLE upload_sessions\s+ADD COLUMN cleanup_attempted_at/);
+
+    const columns = await db().prepare('PRAGMA table_info(upload_sessions)').all<{ name: string }>();
+    expect(columns.results?.map(({ name }) => name)).toEqual(expect.arrayContaining([
+      'terminal_operation', 'terminal_owner', 'terminal_expires_at', 'cleanup_attempted_at',
+    ]));
+  });
+
   it('exposes the authenticated D1 session identity only through internal auth helpers', async () => {
     const created = await createSession(workerEnv());
     const request = new Request(`${origin}/api/admin/me`, {
@@ -128,8 +141,10 @@ describe('upload session store', () => {
       status: 'active',
       activePartNumber: null,
       activePartExpiresAt: null,
-      completionOwner: null,
-      completionExpiresAt: null,
+      terminalOperation: null,
+      terminalOwner: null,
+      terminalExpiresAt: null,
+      cleanupAttemptedAt: 0,
     });
     expect(raw?.provider_state_ciphertext).not.toContain(providerState.uploadId);
     await expect(
@@ -219,6 +234,38 @@ describe('upload session store', () => {
     });
   });
 
+  it('arbitrates part and terminal claims without allowing stale part persistence', async () => {
+    const record = await createRecord();
+    await claimUploadPart(workerEnv(), ownerA, record.id, 1, 1_000, 100);
+
+    await expect(
+      claimTerminalOperation(workerEnv(), ownerA, record.id, 'abort', 'abort-a', 2_000, 999),
+    ).resolves.toBeNull();
+    await expect(
+      claimTerminalOperation(workerEnv(), ownerA, record.id, 'complete', 'complete-a', 2_000, 999),
+    ).resolves.toBeNull();
+
+    const abortClaim = await claimTerminalOperation(
+      workerEnv(), ownerA, record.id, 'abort', 'abort-a', 2_000, 1_000,
+    );
+    expect(abortClaim).toMatchObject({
+      status: 'active',
+      activePartNumber: null,
+      activePartExpiresAt: null,
+      terminalOperation: 'abort',
+      terminalOwner: 'abort-a',
+      terminalExpiresAt: 2_000,
+    });
+    await expect(claimUploadPart(workerEnv(), ownerA, record.id, 1, 3_000, 1_001)).resolves.toBeNull();
+    await expect(
+      recordUploadPart(workerEnv(), ownerA, record.id, {
+        claimExpiresAt: 1_000,
+        part: { partNumber: 1, size: 10, etag: 'stale' },
+        providerState,
+      }),
+    ).resolves.toBeNull();
+  });
+
   it('fails closed instead of claiming over a malformed half-claim state', async () => {
     const record = await createRecord();
     await db()
@@ -290,102 +337,127 @@ describe('upload session store', () => {
     ).resolves.toEqual({ ...providerState, checkpoint: 3 });
   });
 
-  it('uses an exclusive completion lease and rejects stale claimant transitions after takeover', async () => {
+  it('arbitrates completion and abort leases and rejects stale operation transitions after takeover', async () => {
     const record = await createRecord();
-    const claimed = await claimCompletion(workerEnv(), ownerA, record.id, 'completion-a', 1_000, 100);
+    const claimed = await claimTerminalOperation(
+      workerEnv(), ownerA, record.id, 'complete', 'completion-a', 1_000, 100,
+    );
 
     expect(claimed).toMatchObject({
       status: 'completing',
-      completionOwner: 'completion-a',
-      completionExpiresAt: 1_000,
+      terminalOperation: 'complete',
+      terminalOwner: 'completion-a',
+      terminalExpiresAt: 1_000,
     });
     await expect(
-      claimCompletion(workerEnv(), ownerA, record.id, 'completion-b', 2_000, 999),
+      claimTerminalOperation(workerEnv(), ownerA, record.id, 'abort', 'abort-b', 2_000, 999),
     ).resolves.toBeNull();
     await expect(claimUploadPart(workerEnv(), ownerA, record.id, 1, 2_000, 100)).resolves.toBeNull();
 
-    const takeover = await claimCompletion(workerEnv(), ownerA, record.id, 'completion-b', 2_000, 1_000);
+    const takeover = await claimTerminalOperation(
+      workerEnv(), ownerA, record.id, 'abort', 'abort-b', 2_000, 1_000,
+    );
     expect(takeover).toMatchObject({
-      status: 'completing',
-      completionOwner: 'completion-b',
-      completionExpiresAt: 2_000,
+      status: 'active',
+      terminalOperation: 'abort',
+      terminalOwner: 'abort-b',
+      terminalExpiresAt: 2_000,
     });
     await expect(
       completeUploadSessionRecord(workerEnv(), ownerA, record.id, 'completion-a', 1_000, completedItem),
     ).resolves.toBeNull();
     await expect(
-      releaseCompletionClaim(workerEnv(), ownerA, record.id, 'completion-a', 1_000),
+      releaseTerminalOperationClaim(workerEnv(), ownerA, record.id, 'complete', 'completion-a', 1_000),
     ).resolves.toBe(false);
-
-    const completed = await completeUploadSessionRecord(
-      workerEnv(),
-      ownerA,
-      record.id,
-      'completion-b',
-      2_000,
-      completedItem,
-    );
-    expect(completed).toMatchObject({ status: 'completed', completedItem });
-    expect(completed).toMatchObject({ completionOwner: null, completionExpiresAt: null });
     await expect(
-      completeUploadSessionRecord(workerEnv(), ownerA, record.id, 'completion-b', 2_000, completedItem),
+      markUploadSessionAborted(workerEnv(), ownerA, record.id, 'abort-a', 1_000),
     ).resolves.toBeNull();
-    await expect(markUploadSessionAborted(workerEnv(), ownerA, record.id)).resolves.toBeNull();
+
+    const aborted = await markUploadSessionAborted(workerEnv(), ownerA, record.id, 'abort-b', 2_000);
+    expect(aborted).toMatchObject({
+      status: 'aborted', terminalOperation: null, terminalOwner: null, terminalExpiresAt: null,
+    });
+    await expect(
+      markUploadSessionAborted(workerEnv(), ownerA, record.id, 'abort-b', 2_000),
+    ).resolves.toBeNull();
   });
 
-  it('releases the current completion lease into a retryable active state', async () => {
+  it('persists and releases only an exact terminal operation lease', async () => {
     const record = await createRecord();
-    await claimCompletion(workerEnv(), ownerA, record.id, 'completion-a', 1_000, 100);
+    await claimTerminalOperation(workerEnv(), ownerA, record.id, 'complete', 'completion-a', 1_000, 100);
 
     await expect(
-      releaseCompletionClaim(workerEnv(), ownerA, record.id, 'completion-a', 1_000),
+      releaseTerminalOperationClaim(workerEnv(), ownerA, record.id, 'abort', 'completion-a', 1_000),
+    ).resolves.toBe(false);
+    await expect(
+      releaseTerminalOperationClaim(workerEnv(), ownerA, record.id, 'complete', 'completion-a', 1_000),
     ).resolves.toBe(true);
     await expect(getOwnedUploadSession(workerEnv(), ownerA, record.id)).resolves.toMatchObject({
       status: 'active',
-      completionOwner: null,
-      completionExpiresAt: null,
+      terminalOperation: null,
+      terminalOwner: null,
+      terminalExpiresAt: null,
     });
 
-    await expect(
-      claimCompletion(workerEnv(), ownerA, record.id, 'completion-b', 2_000, 200),
-    ).resolves.toMatchObject({ completionOwner: 'completion-b' });
+    await claimTerminalOperation(workerEnv(), ownerA, record.id, 'complete', 'completion-b', 2_000, 200);
+    const completed = await completeUploadSessionRecord(
+      workerEnv(), ownerA, record.id, 'completion-b', 2_000, completedItem,
+    );
+    expect(completed).toMatchObject({
+      status: 'completed', completedItem, terminalOperation: null, terminalOwner: null, terminalExpiresAt: null,
+    });
   });
 
-  it('fails closed instead of claiming over a malformed half-completion lease', async () => {
+  it('fails closed instead of claiming over a malformed half-terminal lease', async () => {
     const record = await createRecord();
     await db()
       .prepare(
-        "UPDATE upload_sessions SET status = 'completing', completion_owner = NULL, completion_expires_at = ? WHERE id = ?",
+        "UPDATE upload_sessions SET terminal_operation = 'complete', terminal_owner = NULL, terminal_expires_at = ? WHERE id = ?",
       )
       .bind(1_000, record.id)
       .run();
 
     await expect(
-      claimCompletion(workerEnv(), ownerA, record.id, 'completion-b', 2_000, 1_000),
+      claimTerminalOperation(workerEnv(), ownerA, record.id, 'complete', 'completion-b', 2_000, 1_000),
     ).resolves.toBeNull();
   });
 
-  it('uses idempotent abort transitions', async () => {
-    const abortable = await createRecord();
-
-    await expect(markUploadSessionAborted(workerEnv(), ownerA, abortable.id)).resolves.toMatchObject({ status: 'aborted' });
-    await expect(markUploadSessionAborted(workerEnv(), ownerA, abortable.id)).resolves.toMatchObject({ status: 'aborted' });
-  });
-
-  it('lists only expired nonterminal sessions in expiration order and respects the limit', async () => {
+  it('lists only expired sessions without live claims and respects cleanup-attempt ordering and the limit', async () => {
     const later = await createRecord(ownerA, { expiresAt: 200 });
     const first = await createRecord(ownerA, { expiresAt: 100 });
-    const completing = await createRecord(ownerB, { expiresAt: 150 });
+    const livePart = await createRecord(ownerA, { expiresAt: 120 });
+    const liveTerminal = await createRecord(ownerB, { expiresAt: 130 });
+    const expiredTerminal = await createRecord(ownerB, { expiresAt: 150 });
     const aborted = await createRecord(ownerB, { expiresAt: 50 });
-    await claimCompletion(workerEnv(), ownerB, completing.id, 'cleanup-claim', 1_000, 100);
-    await markUploadSessionAborted(workerEnv(), ownerB, aborted.id);
+    await claimUploadPart(workerEnv(), ownerA, livePart.id, 1, 1_000, 100);
+    await claimTerminalOperation(workerEnv(), ownerB, liveTerminal.id, 'abort', 'live-abort', 1_000, 100);
+    await claimTerminalOperation(workerEnv(), ownerB, expiredTerminal.id, 'complete', 'expired-complete', 200, 100);
+    await claimTerminalOperation(workerEnv(), ownerB, aborted.id, 'abort', 'aborted', 1_000, 100);
+    await markUploadSessionAborted(workerEnv(), ownerB, aborted.id, 'aborted', 1_000);
     await createRecord(ownerA, { expiresAt: 400 });
 
     const expired = await listExpiredUploadSessions(workerEnv(), 250, 2);
 
-    expect(expired.map((session) => session.id)).toEqual([first.id, completing.id]);
+    expect(expired.map((session) => session.id)).toEqual([first.id, expiredTerminal.id]);
     expect(expired.map((session) => session.status)).toEqual(['active', 'completing']);
     expect(expired).not.toContainEqual(expect.objectContaining({ id: later.id }));
+    expect(expired).not.toContainEqual(expect.objectContaining({ id: livePart.id }));
+    expect(expired).not.toContainEqual(expect.objectContaining({ id: liveTerminal.id }));
+  });
+
+  it('rotates malformed expired rows instead of failing or starving the next cleanup candidate', async () => {
+    const malformed = await createRecord(ownerA, { expiresAt: 100 });
+    const valid = await createRecord(ownerB, { expiresAt: 101 });
+    await db().prepare('UPDATE upload_sessions SET provider_state_ciphertext = ? WHERE id = ?')
+      .bind('{malformed', malformed.id)
+      .run();
+
+    await expect(listExpiredUploadSessions(workerEnv(), 500, 1)).resolves.toEqual([]);
+    await expect(db().prepare('SELECT cleanup_attempted_at FROM upload_sessions WHERE id = ?')
+      .bind(malformed.id).first()).resolves.toEqual({ cleanup_attempted_at: 500 });
+
+    const next = await listExpiredUploadSessions(workerEnv(), 501, 1);
+    expect(next.map(({ id }) => id)).toEqual([valid.id]);
   });
 
   it('cascades cleanup when the owning administrator session or mount is deleted', async () => {

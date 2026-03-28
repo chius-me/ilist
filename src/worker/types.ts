@@ -192,6 +192,7 @@ export interface Mount {
 }
 
 export type UploadSessionStatus = 'active' | 'completing' | 'completed' | 'aborted';
+export type UploadTerminalOperation = 'complete' | 'abort';
 
 export interface UploadSessionRow {
   id: string;
@@ -208,8 +209,10 @@ export interface UploadSessionRow {
   status: UploadSessionStatus;
   active_part_number: number | null;
   active_part_expires_at: number | null;
-  completion_owner: string | null;
-  completion_expires_at: number | null;
+  terminal_operation: UploadTerminalOperation | null;
+  terminal_owner: string | null;
+  terminal_expires_at: number | null;
+  cleanup_attempted_at: number;
   expires_at: number;
   created_at: string;
   updated_at: string;
