@@ -4,6 +4,7 @@ export const LARGE_UPLOAD_THRESHOLD_BYTES = 10 * 1024 * 1024;
 
 const DEFAULT_CONTENT_TYPE = 'application/octet-stream';
 const SESSION_PATH = '/api/admin/uploads/sessions';
+const UPLOAD_SESSION_STATUSES = ['active', 'completing', 'completed', 'aborted'] as const;
 
 export interface UploadSessionPart {
   partNumber: number;
@@ -63,6 +64,18 @@ function isSafeNonNegativeInteger(value: unknown): value is number {
   return typeof value === 'number' && Number.isSafeInteger(value) && value >= 0;
 }
 
+function isOpaqueSessionId(value: unknown): value is string {
+  return typeof value === 'string'
+    && value.length > 0
+    && value.length <= 200
+    && value.trim() === value
+    && !/[\s\u0000-\u001f\u007f]/u.test(value);
+}
+
+function isFutureExpiration(value: unknown): value is string {
+  return typeof value === 'string' && Number.isFinite(Date.parse(value)) && Date.parse(value) > Date.now();
+}
+
 function uploadResponseInvalid(): Error {
   return new Error('Upload session response is invalid');
 }
@@ -76,14 +89,13 @@ function parseSessionPart(value: unknown): UploadSessionPart {
 
 function parseUploadSession(value: unknown): UploadSessionView {
   if (!isRecord(value)
-    || typeof value.id !== 'string'
+    || !isOpaqueSessionId(value.id)
     || value.kind !== 'multipart'
-    || !isSafeNonNegativeInteger(value.partSize)
-    || value.partSize < 1
+    || value.partSize !== LARGE_UPLOAD_THRESHOLD_BYTES
     || !isSafeNonNegativeInteger(value.size)
     || !Array.isArray(value.uploadedParts)
-    || typeof value.expiresAt !== 'string'
-    || !['active', 'completing', 'completed', 'aborted'].includes(String(value.status))) {
+    || !isFutureExpiration(value.expiresAt)
+    || !UPLOAD_SESSION_STATUSES.includes(value.status as UploadSessionView['status'])) {
     throw uploadResponseInvalid();
   }
   return {
@@ -189,7 +201,6 @@ export function uploadSmallFile(input: UploadFileInput): Promise<void> {
 export async function createUploadSession(input: {
   parentId: string;
   file: File;
-  signal?: AbortSignal;
 }): Promise<UploadSessionView> {
   const result = await jsonRequest<unknown>(SESSION_PATH, {
     method: 'POST',
@@ -199,7 +210,6 @@ export async function createUploadSession(input: {
       size: input.file.size,
       contentType: input.file.type || null,
     }),
-    signal: input.signal,
   });
   return parseUploadSession(result);
 }
@@ -247,7 +257,7 @@ export async function abortUploadSession(id: string): Promise<void> {
 }
 
 function sessionParts(session: UploadSessionView, file: File): Map<number, UploadSessionPart> {
-  if (session.size !== file.size || session.partSize < 1) throw uploadResponseInvalid();
+  if (session.status !== 'active' || session.size !== file.size || session.partSize !== LARGE_UPLOAD_THRESHOLD_BYTES) throw uploadResponseInvalid();
   const partCount = Math.ceil(file.size / session.partSize);
   const parts = new Map<number, UploadSessionPart>();
   for (const part of session.uploadedParts) {
@@ -267,11 +277,26 @@ function rememberSession(control: ResumableUploadControl | undefined, session: U
 
 async function uploadMultipartFile(input: UploadFileInput): Promise<void> {
   let sessionId = input.control?.sessionId;
+  let cancellationObserved = input.signal.aborted;
+  let abortPromise: Promise<void> | undefined;
+  const observeCancellation = () => { cancellationObserved = true; };
+  const abortServerSession = (): Promise<void> => {
+    if (!sessionId) return Promise.resolve();
+    if (!abortPromise) {
+      abortPromise = abortUploadSession(sessionId).catch(() => undefined);
+    }
+    return abortPromise;
+  };
+  input.signal.addEventListener('abort', observeCancellation, { once: true });
   try {
     const session = sessionId
       ? await getUploadSession(sessionId, input.signal)
-      : await createUploadSession({ parentId: input.parentId, file: input.file, signal: input.signal });
+      : await createUploadSession({ parentId: input.parentId, file: input.file });
     sessionId = session.id;
+    if (cancellationObserved || input.signal.aborted) {
+      await abortServerSession();
+      throw abortError();
+    }
     const parts = sessionParts(session, input.file);
     rememberSession(input.control, session, parts);
     const partCount = Math.ceil(input.file.size / session.partSize);
@@ -304,15 +329,11 @@ async function uploadMultipartFile(input: UploadFileInput): Promise<void> {
   } catch (error) {
     if (isAbortError(error) && input.signal.aborted) {
       if (shouldPause(input.control)) throw new UploadPausedError();
-      if (sessionId) {
-        try {
-          await abortUploadSession(sessionId);
-        } catch {
-          // The active XHR has already been cancelled; preserve cancellation semantics.
-        }
-      }
+      await abortServerSession();
     }
     throw error;
+  } finally {
+    input.signal.removeEventListener('abort', observeCancellation);
   }
 }
 
