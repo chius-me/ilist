@@ -35,6 +35,7 @@ export interface ResumableUploadControl {
   shouldPause?(): boolean;
   onSession?(session: UploadSessionView): void;
   onPartConfirmed?(part: UploadSessionPart): void;
+  onCompleting?(): void;
 }
 
 export interface UploadFileInput {
@@ -245,10 +246,12 @@ export async function uploadSessionPart(input: {
 }
 
 export async function completeUploadSession(id: string, signal?: AbortSignal): Promise<void> {
-  await jsonRequest<unknown>(`${SESSION_PATH}/${encodeURIComponent(id)}/complete`, {
+  const response = await fetch(`${SESSION_PATH}/${encodeURIComponent(id)}/complete`, {
     method: 'POST',
     signal,
+    credentials: 'same-origin',
   });
+  if (!response.ok) await unwrap<unknown>(response);
 }
 
 export async function abortUploadSession(id: string): Promise<void> {
@@ -297,6 +300,11 @@ async function uploadMultipartFile(input: UploadFileInput): Promise<void> {
       : await createUploadSession({ parentId: input.parentId, file: input.file });
     sessionId = session.id;
     if (cancellationObserved || input.signal.aborted) {
+      if (shouldPause(input.control)) {
+        const pausedParts = sessionParts(session, input.file);
+        rememberSession(input.control, session, pausedParts);
+        throw new UploadPausedError();
+      }
       await abortServerSession();
       throw abortError();
     }
@@ -328,6 +336,7 @@ async function uploadMultipartFile(input: UploadFileInput): Promise<void> {
     }
 
     if (parts.size !== partCount) throw uploadResponseInvalid();
+    input.control?.onCompleting?.();
     await completeUploadSession(session.id, input.signal);
   } catch (error) {
     if (isAbortError(error) && input.signal.aborted) {

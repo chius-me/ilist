@@ -11,6 +11,7 @@ import type { Entry } from '../../src/ui/types/entries';
 import { useUploadQueue } from '../../src/ui/features/uploads/useUploadQueue';
 import { AdminLayout } from '../../src/ui/app/AdminLayout';
 import { ExplorerToolbar } from '../../src/ui/features/explorer/ExplorerToolbar';
+import { UploadPanel } from '../../src/ui/features/uploads/UploadPanel';
 
 const report: Entry = {
   id: 'report-file',
@@ -239,6 +240,29 @@ describe('responsive actions', () => {
 
     act(() => result.current.enqueue('root', [new File([''], '   ')]));
     await waitFor(() => expect(result.current.tasks[0]?.error).toBe('文件名无效'));
+  });
+
+  it('keeps resumable controls accessible with a long Chinese filename', () => {
+    localStorage.setItem('ilist.ui.preferences', JSON.stringify({ version: 1, locale: 'zh-CN', theme: 'light', defaultView: 'list' }));
+    const file = new File(['content'], '这是一个非常非常长但仍然需要保留暂停恢复和取消按钮的中文文件名.bin');
+    render(
+      <AppProviders>
+        <UploadPanel
+          tasks={[{ id: 'upload-1', parentId: 'root', file, transport: 'multipart', status: 'paused', uploadedBytes: 4, progress: 40, sessionId: 'session-1', partNumber: 1, partCount: 3 }]}
+          onPause={vi.fn()}
+          onResume={vi.fn()}
+          onCancel={vi.fn()}
+          onRetry={vi.fn()}
+          onRemove={vi.fn()}
+          onClearCompleted={vi.fn()}
+        />
+      </AppProviders>,
+    );
+
+    expect(screen.getByText(file.name)).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: `继续上传 ${file.name}` })).toBeVisible();
+    expect(screen.getByRole('button', { name: `取消上传 ${file.name}` })).toBeVisible();
+    expect(screen.getByRole('progressbar')).toHaveAttribute('aria-valuenow', '40');
   });
 
   it('keeps explicit open and separate action controls in both collection views', () => {
