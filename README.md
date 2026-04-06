@@ -6,7 +6,7 @@
 
 Self-hosted file index and manager for Cloudflare Workers.
 
-[![Release](https://img.shields.io/badge/release-v0.1.3-2ea44f?logo=github)](https://github.com/chius-me/ilist/releases/tag/v0.1.3)
+[![Release](https://img.shields.io/badge/release-v0.1.4-2ea44f?logo=github)](https://github.com/chius-me/ilist/releases/tag/v0.1.4)
 [![License](https://img.shields.io/badge/license-GPL--3.0--only-blue)](https://github.com/chius-me/ilist/blob/main/LICENSE)
 ![Cloudflare Workers](https://img.shields.io/badge/Cloudflare-Workers-f38020?logo=cloudflare&logoColor=white)
 ![TypeScript](https://img.shields.io/badge/TypeScript-5.8-3178c6?logo=typescript&logoColor=white)
@@ -14,7 +14,7 @@ Self-hosted file index and manager for Cloudflare Workers.
 
 </div>
 
-> [v0.1.3](https://github.com/chius-me/ilist/releases/tag/v0.1.3) targets one administrator with public read-only browsing. Review [Limitations](#limitations) and back up D1 before upgrading.
+> [v0.1.4](https://github.com/chius-me/ilist/releases/tag/v0.1.4) targets one administrator with public read-only browsing. Review [Limitations](#limitations) and back up D1 before upgrading.
 
 ## Features
 
@@ -28,6 +28,7 @@ Self-hosted file index and manager for Cloudflare Workers.
 - List and grid views, breadcrumbs, sorting, search, keyboard selection, and responsive layout
 - Responsive storage and appearance administration for desktop, tablet, and mobile screens
 - Administrator login, upload, folder creation, rename, move, delete, and visibility controls
+- Resumable OneDrive uploads and multipart S3 uploads with pause, resume, retry, cancel, and progress controls
 - D1 migrations and compatibility support for legacy R2 object links
 - Streamed provider responses without buffering complete files in Worker memory
 
@@ -35,10 +36,10 @@ Self-hosted file index and manager for Cloudflare Workers.
 
 | Storage | Browse | Download | Upload | Manage | Notes |
 | --- | ---: | ---: | ---: | ---: | --- |
-| OneDrive Personal | ✓ | ✓ | ✓ | ✓ | Personal Microsoft accounts only |
-| Cloudflare R2 binding | ✓ | ✓ | ✓ | ✓ | Built-in `R2` compatibility mount |
-| Cloudflare R2 through S3 | ✓ | ✓ | ✓ | ✓ | Use the R2 S3 endpoint and scoped credentials |
-| Other S3-compatible storage | ✓ | ✓ | ✓ | ✓ | Compatibility depends on the provider's S3 implementation |
+| OneDrive Personal | ✓ | ✓ | ✓ | ✓ | Resumable upload; personal Microsoft accounts only |
+| Cloudflare R2 binding | ✓ | ✓ | ✓ | ✓ | Built-in compatibility mount; single-request upload only |
+| Cloudflare R2 through S3 | ✓ | ✓ | ✓ | ✓ | Multipart upload with the R2 S3 endpoint and scoped credentials |
+| Other S3-compatible storage | ✓ | ✓ | ✓ | ✓ | Multipart compatibility depends on the provider's S3 implementation |
 
 OneDrive Personal Vault is not exposed. Microsoft Graph returns the locked vault without a usable file or folder facet, so ilist skips it instead of failing the parent directory.
 
@@ -133,6 +134,18 @@ Secret access key: R2 API token secret access key
 
 Use a bucket-scoped R2 API token with only the permissions ilist requires.
 
+## Upload Behavior
+
+- Files smaller than `10 MiB` use the existing single-request upload path.
+- Files of exactly `10 MiB` or larger use resumable upload when the current OneDrive or S3 mount advertises multipart support.
+- Parts are uploaded sequentially in `10 MiB` chunks. The queue runs at most two files concurrently.
+- Pause, resume, and retry preserve the opaque ilist upload session and server-confirmed parts while the page remains open. Reloading or leaving the page discards the in-memory queue; unfinished server sessions are later cleaned up, but automatic recovery after reload is not implemented.
+- Provider upload URLs, OneDrive session proofs, and S3 upload IDs remain encrypted or server-side and are never returned to the browser.
+- The built-in `R2` Worker binding remains compatible with existing deployments but does not implement resumable upload; use an S3-configured R2 mount for multipart uploads.
+- Configure an incomplete multipart upload lifecycle rule on S3-compatible buckets so abandoned provider uploads are removed if Worker cleanup cannot reach them.
+
+OneDrive resumable upload uses the same delegated `Files.ReadWrite` permission documented above. Apply all D1 migrations, including `0012_upload_sessions.sql` and `0013_upload_terminal_leases.sql`, before deploying v0.1.4.
+
 ## Local Development
 
 Create local secrets from the tracked template:
@@ -177,8 +190,8 @@ Fill in test-only values before starting Wrangler. It normally serves the applic
 - Single administrator; no registration or multi-user permission model
 - OneDrive Personal only; work and school tenants are not yet supported
 - No Google Drive, WebDAV, FTP, SFTP, SMB, or local filesystem drivers
-- Uploads use one non-resumable Worker request and are subject to Cloudflare request-body limits
-- No multipart S3 upload or OneDrive upload session yet
+- Resumable recovery is page-session-only; reloading the page does not restore the upload queue
+- Built-in R2 binding uploads remain single-request and subject to Cloudflare request-body limits
 - No cross-mount copy or move
 - No offline download, archive extraction, media transcoding, or background task system
 - Provider listings are fetched live; distributed directory caching is not implemented
@@ -218,7 +231,6 @@ docs/                         Setup and implementation documentation
 ## Roadmap
 
 - Work and school Microsoft accounts
-- Resumable and multipart uploads
 - Cross-mount copy and move
 - Additional storage drivers and background operations
 

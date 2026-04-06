@@ -6,7 +6,7 @@
 
 面向 Cloudflare Workers 的自托管文件索引与管理器。
 
-[![Release](https://img.shields.io/badge/release-v0.1.3-2ea44f?logo=github)](https://github.com/chius-me/ilist/releases/tag/v0.1.3)
+[![Release](https://img.shields.io/badge/release-v0.1.4-2ea44f?logo=github)](https://github.com/chius-me/ilist/releases/tag/v0.1.4)
 [![License](https://img.shields.io/badge/license-GPL--3.0--only-blue)](https://github.com/chius-me/ilist/blob/main/LICENSE)
 ![Cloudflare Workers](https://img.shields.io/badge/Cloudflare-Workers-f38020?logo=cloudflare&logoColor=white)
 ![TypeScript](https://img.shields.io/badge/TypeScript-5.8-3178c6?logo=typescript&logoColor=white)
@@ -14,7 +14,7 @@
 
 </div>
 
-> [v0.1.3](https://github.com/chius-me/ilist/releases/tag/v0.1.3) 面向单管理员使用，并提供公开只读浏览。升级前请查看[限制](#限制)并备份 D1。
+> [v0.1.4](https://github.com/chius-me/ilist/releases/tag/v0.1.4) 面向单管理员使用，并提供公开只读浏览。升级前请查看[限制](#限制)并备份 D1。
 
 ## 功能
 
@@ -28,6 +28,7 @@
 - 支持列表和网格视图、面包屑、排序、搜索、键盘选择及响应式布局
 - 支持适配桌面、平板和移动屏幕的存储与外观管理界面
 - 支持管理员登录、上传、新建文件夹、重命名、移动、删除及可见性控制
+- 支持 OneDrive 可续传上传和 S3 multipart 上传，并提供暂停、继续、重试、取消及进度控制
 - 支持 D1 迁移以及旧版 R2 对象链接的兼容
 - 支持流式传输提供商响应，不会将完整文件缓冲在 Worker 内存中
 
@@ -35,10 +36,10 @@
 
 | 存储 | 浏览 | 下载 | 上传 | 管理 | 备注 |
 | --- | ---: | ---: | ---: | ---: | --- |
-| OneDrive Personal | ✓ | ✓ | ✓ | ✓ | 仅支持个人 Microsoft 账户 |
-| Cloudflare R2 绑定 | ✓ | ✓ | ✓ | ✓ | 内置的 `R2` 兼容挂载 |
-| 通过 S3 接入 Cloudflare R2 | ✓ | ✓ | ✓ | ✓ | 使用 R2 S3 端点和限定范围的凭据 |
-| 其他 S3 兼容存储 | ✓ | ✓ | ✓ | ✓ | 兼容性取决于提供商的 S3 实现 |
+| OneDrive Personal | ✓ | ✓ | ✓ | ✓ | 支持可续传上传；仅支持个人 Microsoft 账户 |
+| Cloudflare R2 绑定 | ✓ | ✓ | ✓ | ✓ | 内置兼容挂载；仅支持单请求上传 |
+| 通过 S3 接入 Cloudflare R2 | ✓ | ✓ | ✓ | ✓ | 使用 R2 S3 端点和限定范围凭据进行 multipart 上传 |
+| 其他 S3 兼容存储 | ✓ | ✓ | ✓ | ✓ | multipart 兼容性取决于提供商的 S3 实现 |
 
 不提供 OneDrive Personal Vault。Microsoft Graph 返回的锁定保险库不包含可用的文件或文件夹类型信息，因此 ilist 会跳过它，避免导致父目录加载失败。
 
@@ -133,6 +134,18 @@ Secret access key: R2 API token secret access key
 
 使用仅限于存储桶范围、并且只拥有 ilist 所需权限的 R2 API token。
 
+## 上传行为
+
+- 小于 `10 MiB` 的文件继续使用原有的单请求上传路径。
+- 等于或大于 `10 MiB` 的文件，在当前 OneDrive 或 S3 挂载声明支持 multipart 时使用可续传上传。
+- 分片按顺序以 `10 MiB` 大小上传，队列最多同时处理两个文件。
+- 页面保持打开时，暂停、继续和重试会保留不透明的 ilist 会话 ID 以及服务端已确认分片。刷新或离开页面会丢失内存中的队列；服务端之后会清理未完成会话，但暂不支持刷新后的自动恢复。
+- 提供商上传 URL、OneDrive 会话证明和 S3 Upload ID 只保存在加密状态或服务端，绝不会返回浏览器。
+- 内置 `R2` Worker 绑定继续兼容已有部署，但不支持可续传上传；需要 multipart 上传时，请将 R2 配置为 S3 挂载。
+- 建议为 S3 兼容存储桶配置未完成 multipart 上传生命周期规则，以便在 Worker 无法完成清理时自动删除遗留上传。
+
+OneDrive 可续传上传继续使用上文所述的 `Files.ReadWrite` 委托权限。部署 v0.1.4 前必须应用全部 D1 迁移，包括 `0012_upload_sessions.sql` 和 `0013_upload_terminal_leases.sql`。
+
 ## 本地开发
 
 从已纳入版本控制的模板创建本地 secret：
@@ -177,8 +190,8 @@ npm run dev
 - 单个管理员；不支持注册或多用户权限模型
 - 仅支持 OneDrive Personal；暂不支持工作和学校租户
 - 不支持 Google Drive、WebDAV、FTP、SFTP、SMB 或本地文件系统驱动
-- 上传使用单个不可续传的 Worker 请求，并受 Cloudflare 请求体限制
-- 暂不支持 multipart S3 上传或 OneDrive 上传会话
+- 可续传恢复仅限当前页面会话；刷新页面后不会恢复上传队列
+- 内置 R2 绑定仍使用单请求上传，并受 Cloudflare 请求体限制
 - 不支持跨挂载复制或移动
 - 不支持离线下载、归档解压、媒体转码或后台任务系统
 - 提供商列表实时获取；尚未实现分布式目录缓存
@@ -218,7 +231,6 @@ docs/                         配置与实现文档
 ## 路线图
 
 - 工作和学校 Microsoft 账户
-- 可续传上传和 multipart 上传
 - 跨挂载复制和移动
 - 更多存储驱动和后台操作
 
