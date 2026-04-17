@@ -25,8 +25,22 @@ function hexToBytes(hex: string): Uint8Array {
   return bytes;
 }
 
-async function sha256Hex(value: string): Promise<string> {
+export async function sha256Hex(value: string): Promise<string> {
   return bytesToHex(await crypto.subtle.digest('SHA-256', new TextEncoder().encode(value)));
+}
+
+export async function hashPassword(password: string): Promise<string> {
+  const iterations = 100000;
+  const salt = crypto.getRandomValues(new Uint8Array(16));
+  const keyMaterial = await crypto.subtle.importKey('raw', new TextEncoder().encode(password), 'PBKDF2', false, [
+    'deriveBits',
+  ]);
+  const bits = await crypto.subtle.deriveBits(
+    { name: 'PBKDF2', salt, iterations, hash: 'SHA-256' },
+    keyMaterial,
+    256,
+  );
+  return `pbkdf2:${iterations}:${bytesToHex(salt)}:${bytesToHex(bits)}`;
 }
 
 function timingSafeEqualHex(left: string, right: string): boolean {
