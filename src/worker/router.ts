@@ -41,6 +41,7 @@ import { fail, HttpError, noContent, ok, readJson, requireSameOrigin, requireSam
 import { handleMountRoutes } from './mount-routes';
 import { handleOAuthRoutes } from './oauth-routes';
 import { keyFromPath, putObject, streamEntryObject } from './r2';
+import { handleShareAdminRoutes } from './share-admin-routes';
 import type { BatchFailure, BatchResult, Env } from './types';
 import { handleUploadRoutes } from './upload-routes';
 
@@ -347,6 +348,9 @@ async function handleAdmin(request: Request, env: Env, url: URL, options: RouteR
 
   const mountResponse = await handleMountRoutes(request, env, url);
   if (mountResponse) return mountResponse;
+
+  const shareResponse = await handleShareAdminRoutes(request, env, url);
+  if (shareResponse) return shareResponse;
 
   if (url.pathname === '/api/admin/objects') {
     if (request.method !== 'GET') return methodNotAllowed();
