@@ -42,6 +42,7 @@ import { handleMountRoutes } from './mount-routes';
 import { handleOAuthRoutes } from './oauth-routes';
 import { keyFromPath, putObject, streamEntryObject } from './r2';
 import { handleShareAdminRoutes } from './share-admin-routes';
+import { handleSharePublicRoutes } from './share-public-routes';
 import type { BatchFailure, BatchResult, Env } from './types';
 import { handleUploadRoutes } from './upload-routes';
 
@@ -557,6 +558,16 @@ function withSecurityHeaders(response: Response): Response {
   });
 }
 
+function withPrivateNoStore(response: Response): Response {
+  const headers = new Headers(response.headers);
+  headers.set('cache-control', 'private, no-store');
+  return new Response(response.body, {
+    status: response.status,
+    statusText: response.statusText,
+    headers,
+  });
+}
+
 export async function routeRequest(request: Request, env: Env, options: RouteRequestOptions = {}): Promise<Response> {
   const url = new URL(request.url);
 
@@ -565,6 +576,10 @@ export async function routeRequest(request: Request, env: Env, options: RouteReq
   }
 
   try {
+    if (url.pathname.startsWith('/s/')) {
+      const shareResponse = await handleSharePublicRoutes(request, env, url);
+      return withSecurityHeaders(withPrivateNoStore(shareResponse ?? await env.ASSETS.fetch(request)));
+    }
     if (url.pathname.startsWith('/api/public/')) {
       return withSecurityHeaders(await handlePublic(request, env, url));
     }
@@ -581,9 +596,11 @@ export async function routeRequest(request: Request, env: Env, options: RouteReq
     return await env.ASSETS.fetch(request);
   } catch (error) {
     if (error instanceof HttpError) {
-      return withSecurityHeaders(fail(error.status, error.code, error.message, error.details));
+      const response = fail(error.status, error.code, error.message, error.details);
+      return withSecurityHeaders(url.pathname.startsWith('/s/') ? withPrivateNoStore(response) : response);
     }
     console.error(error);
-    return withSecurityHeaders(fail(500, 'Internal server error'));
+    const response = fail(500, 'Internal server error');
+    return withSecurityHeaders(url.pathname.startsWith('/s/') ? withPrivateNoStore(response) : response);
   }
 }
