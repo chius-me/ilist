@@ -1,4 +1,4 @@
-import { Copy, Download, Eye, EyeOff, FolderInput, Info, Pencil, Trash2 } from 'lucide-react';
+import { Copy, Download, Eye, EyeOff, FolderInput, Info, Pencil, Share2, Trash2 } from 'lucide-react';
 import type { ComponentType } from 'react';
 import { useEffect, useLayoutEffect, useRef, useState } from 'react';
 import { fileUrl } from '../../api/entries';
@@ -6,7 +6,7 @@ import { useI18n } from '../../i18n/I18nProvider';
 import type { MessageKey } from '../../i18n/messages';
 import type { Entry } from '../../types/entries';
 
-export type EntryActionId = 'rename' | 'move' | 'properties' | 'delete' | 'publish' | 'hide';
+export type EntryActionId = 'rename' | 'move' | 'properties' | 'delete' | 'publish' | 'hide' | 'share';
 
 export type EntryAction = {
   id: string;
@@ -22,6 +22,7 @@ export function entryActions(entry: Entry, handlers: {
   onPreview: (entry: Entry) => void;
   onAction: (action: EntryActionId, entry: Entry) => void;
   onCopyFailure?: () => void;
+  canShare?: boolean;
 }): EntryAction[] {
   const actions: EntryAction[] = [entry.kind === 'folder'
     ? { id: 'open', labelKey: 'action.open', icon: FolderInput, onSelect: () => handlers.onOpen(entry) }
@@ -34,6 +35,7 @@ export function entryActions(entry: Entry, handlers: {
       else void write.catch(() => handlers.onCopyFailure?.());
     } },
   );
+  if (handlers.canShare) actions.push({ id: 'share', labelKey: 'action.share', icon: Share2, onSelect: () => handlers.onAction('share', entry) });
   if (entry.capabilities.rename) actions.push({ id: 'rename', labelKey: 'action.rename', icon: Pencil, onSelect: () => handlers.onAction('rename', entry) });
   if (entry.capabilities.move) actions.push({ id: 'move', labelKey: 'action.move', icon: FolderInput, onSelect: () => handlers.onAction('move', entry) });
   if (entry.capabilities.rename) actions.push({ id: 'properties', labelKey: 'action.properties', icon: Info, onSelect: () => handlers.onAction('properties', entry) });

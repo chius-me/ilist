@@ -1,8 +1,8 @@
-import { ArrowLeft, Database, Menu, Palette, X } from 'lucide-react';
+import { ArrowLeft, Database, Menu, Palette, Share2, X } from 'lucide-react';
 import { type MouseEvent, type PropsWithChildren, useEffect, useState } from 'react';
 import { useI18n } from '../i18n/I18nProvider';
 
-export type AdminSection = 'storage' | 'appearance';
+export type AdminSection = 'storage' | 'shares' | 'appearance';
 
 export interface AdminLayoutProps extends PropsWithChildren {
   active: AdminSection;
@@ -45,6 +45,7 @@ export function AdminLayout({ active, onNavigate, onBack, children }: AdminLayou
           <a href="/" onClick={back}><ArrowLeft aria-hidden="true" size={17} />{t('nav.files')}</a>
           <span className="adminNavLabel">{t('shell.admin')}</span>
           <a className={active === 'storage' ? 'isActive' : ''} href="/admin/storages" aria-current={active === 'storage' ? 'page' : undefined} onClick={(event) => navigate(event, 'storage')}><Database aria-hidden="true" size={17} />{t('nav.storage')}</a>
+          <a className={active === 'shares' ? 'isActive' : ''} href="/admin/shares" aria-current={active === 'shares' ? 'page' : undefined} onClick={(event) => navigate(event, 'shares')}><Share2 aria-hidden="true" size={17} />{t('nav.shares')}</a>
           <a className={active === 'appearance' ? 'isActive' : ''} href="/admin/appearance" aria-current={active === 'appearance' ? 'page' : undefined} onClick={(event) => navigate(event, 'appearance')}><Palette aria-hidden="true" size={17} />{t('nav.appearance')}</a>
         </nav>
       </aside>
