@@ -319,7 +319,7 @@ git commit -m "feat: serve protected file shares"
 
 - [ ] **Step 1: Write failing UI interaction tests**
 
-Test action visibility only for administrators, create form defaults, password and expiration validation, one-time link copy, edit without token rotation, clear password, enable or disable, delete confirmation, loading, empty, and API error states. Verify secrets and provider IDs never render.
+Test action visibility only for administrators, create form defaults, password and expiration validation, one-time link copy at creation, edit without token rotation, clear password, enable or disable, delete confirmation, loading, empty, and API error states. Verify secrets and provider IDs never render. Existing shares do not offer link recovery because only the token hash is stored.
 
 ```tsx
 await user.click(screen.getByRole('menuitem', { name: 'Share' }));
@@ -429,7 +429,7 @@ git commit -m "feat: add public share browsing"
 
 - [ ] **Step 1: Add failing Playwright workflows and visual scenarios**
 
-Add administrator create/copy/edit/disable/delete, password unlock, folder navigation, preview, download-denied, expired, disabled, and unavailable flows. Add deterministic desktop, tablet, and 390px mobile screenshots for share dialog, share manager, password page, shared folder list/grid, file preview, and unavailable states.
+Add administrator create-and-copy/edit/disable/delete, password unlock, folder navigation, preview, download-denied, expired, disabled, and unavailable flows. Confirm the raw link is unavailable after the creation result closes. Add deterministic desktop, tablet, and 390px mobile screenshots for share dialog, share manager, password page, shared folder list/grid, file preview, and unavailable states.
 
 - [ ] **Step 2: Run browser tests and verify RED before fixture completion**
 
@@ -485,5 +485,5 @@ Expected: GitHub reports a stable, non-draft, non-prerelease `v0.1.5`; local `HE
 
 - Spec coverage: share records, token hashing, passwords, expiration, download policy, enable/disable/delete, private targets, native and external mounts, management UI, public UI, unavailable states, tests, migration, deployment, and release are each assigned to a task.
 - Placeholder scan: no implementation placeholder or deferred requirement remains.
-- Type consistency: the plan consistently uses `Share`, sealed item handles, `/api/admin/shares`, and `/s/:token/*`; public APIs never consume raw provider IDs.
+- Type consistency: the plan consistently uses `Share`, sealed item handles, `/api/admin/shares`, and `/s/:token/*`; public APIs never consume raw provider IDs. The raw URL is copyable only from the create response and cannot be recovered from the management list.
 - Scope: Google Drive, uploads through shares, recipient accounts, quotas, counters, and cross-mount operations remain outside `v0.1.5`.
