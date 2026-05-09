@@ -9,9 +9,10 @@ interface AppHeaderProps {
   onStorage(): void;
   onSignIn(): void;
   onSignOut(): void | Promise<void>;
+  showSessionActions?: boolean;
 }
 
-export function AppHeader({ admin, username, onHome, onStorage, onSignIn, onSignOut }: AppHeaderProps) {
+export function AppHeader({ admin, username, onHome, onStorage, onSignIn, onSignOut, showSessionActions = true }: AppHeaderProps) {
   const { resolvedTheme, updatePreferences } = usePreferences();
   const { locale, t } = useI18n();
   const dark = resolvedTheme === 'dark';
@@ -47,7 +48,7 @@ export function AppHeader({ admin, username, onHome, onStorage, onSignIn, onSign
           <button className="headerControl" type="button" onClick={changeTheme} aria-label={t('shell.changeTheme')} title={t('shell.changeTheme')}>
             {dark ? <Sun aria-hidden="true" size={17} /> : <Moon aria-hidden="true" size={17} />}
           </button>
-          {admin ? (
+          {showSessionActions && admin ? (
             <>
               <button className="headerControl" type="button" onClick={onStorage} aria-label={t('shell.storageSettings')} title={t('shell.storageSettings')}>
                 <Settings aria-hidden="true" size={17} />
@@ -57,11 +58,11 @@ export function AppHeader({ admin, username, onHome, onStorage, onSignIn, onSign
                 <LogOut aria-hidden="true" size={17} />
               </button>
             </>
-          ) : (
+          ) : showSessionActions ? (
             <button className="headerControl" type="button" onClick={onSignIn} aria-label={t('nav.signIn')} title={t('nav.signIn')}>
               <LogIn aria-hidden="true" size={17} />
             </button>
-          )}
+          ) : null}
         </div>
       </div>
     </header>

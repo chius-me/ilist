@@ -19,7 +19,8 @@ export function EntryRow({
   onPreview,
   onToggle,
   onMenu,
-}: EntryHandlers & { entry: Entry; selected: boolean; focused?: boolean; admin: boolean }) {
+  fileUrlFor = (item, download) => `/file/${encodeURIComponent(item.id)}/${encodeURIComponent(item.name)}${download ? '?download=1' : ''}`,
+}: EntryHandlers & { entry: Entry; selected: boolean; focused?: boolean; admin: boolean; fileUrlFor?: (entry: Entry, download: boolean) => string }) {
   const { formatBytes, formatDate, t } = useI18n();
   const isFolder = entry.kind === 'folder';
   const selectable = admin && isEntryMutable(entry);
@@ -58,7 +59,7 @@ export function EntryRow({
       <time className="entryDate" dateTime={entry.updatedAt}>{formatDate(entry.updatedAt)}</time>
       <span className="entrySize">{isFolder ? '—' : formatBytes(entry.size)}</span>
       <span className="entryActions">
-        {entry.capabilities.download ? <a className="iconButton" href={`/file/${encodeURIComponent(entry.id)}/${encodeURIComponent(entry.name)}?download=1`} title={`${t('action.download')} ${entry.name}`} aria-label={`${t('action.download')} ${entry.name}`}><Download aria-hidden="true" size={16} /></a> : null}
+        {entry.capabilities.download ? <a className="iconButton" href={fileUrlFor(entry, true)} title={`${t('action.download')} ${entry.name}`} aria-label={`${t('action.download')} ${entry.name}`}><Download aria-hidden="true" size={16} /></a> : null}
         {admin ? (
           <button className="iconButton" type="button" title={t('entry.actions', { name: entry.name })} aria-label={t('entry.actions', { name: entry.name })} onClick={(event) => onMenu(entry, event.currentTarget)}>
             <MoreHorizontal aria-hidden="true" size={17} />

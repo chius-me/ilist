@@ -19,6 +19,8 @@ type PreviewOverlayProps = {
   loading?: boolean;
   error?: Error | null;
   onClose: () => void;
+  urlFor?: (entry: Entry, download: boolean) => string;
+  allowDownload?: boolean;
 };
 
 async function readTextPreview(url: string, signal: AbortSignal): Promise<string> {
@@ -52,9 +54,9 @@ async function readTextPreview(url: string, signal: AbortSignal): Promise<string
   return new TextDecoder().decode(bytes);
 }
 
-function TextPreview({ entry }: { entry: Entry }) {
+function TextPreview({ entry, urlFor }: { entry: Entry; urlFor: (entry: Entry, download: boolean) => string }) {
   const { locale, t } = useFeedbackI18n();
-  const url = fileUrl(entry);
+  const url = urlFor(entry, false);
   const unavailableMessage = t('preview.unavailable');
   const [text, setText] = useState<string | null>(null);
   const [error, setError] = useState<Error | null>(null);
@@ -71,7 +73,7 @@ function TextPreview({ entry }: { entry: Entry }) {
     return () => controller.abort();
   }, [locale, unavailableMessage, url]);
 
-  if (error) return <PreviewError message={error.message} entry={entry} />;
+  if (error) return <PreviewError message={error.message} entry={entry} urlFor={urlFor} allowDownload={entry.capabilities.download} />;
   if (text === null) return <PreviewLoading />;
   return <pre className="previewText">{text}</pre>;
 }
@@ -81,26 +83,26 @@ function PreviewLoading() {
   return <div className="previewStatus" role="status"><LoaderCircle aria-hidden="true" size={20} />{t('preview.loading')}</div>;
 }
 
-function PreviewError({ message, entry }: { message: string; entry?: Entry | null }) {
+function PreviewError({ message, entry, urlFor = fileUrl, allowDownload = true }: { message: string; entry?: Entry | null; urlFor?: (entry: Entry, download: boolean) => string; allowDownload?: boolean }) {
   const { t } = useFeedbackI18n();
   return (
     <div className="previewStatus previewError" role="alert">
       <AlertCircle aria-hidden="true" size={20} />
       <span>{message}</span>
-      {entry ? <a href={fileUrl(entry, true)} aria-label={`${t('action.download')} ${entry.name}`}>{t('action.download')}</a> : null}
+      {entry && allowDownload ? <a href={urlFor(entry, true)} aria-label={`${t('action.download')} ${entry.name}`}>{t('action.download')}</a> : null}
     </div>
   );
 }
 
-function PreviewBody({ entry }: { entry: Entry }) {
+function PreviewBody({ entry, urlFor }: { entry: Entry; urlFor: (entry: Entry, download: boolean) => string }) {
   const { formatBytes, t } = useFeedbackI18n();
-  const url = fileUrl(entry);
+  const url = urlFor(entry, false);
   switch (previewKind(entry)) {
     case 'image': return <img className="previewImage" src={url} alt={entry.name} />;
     case 'video': return <video className="previewVideo" controls src={url}>{t('preview.videoFallback')}</video>;
     case 'audio': return <audio className="previewAudio" controls src={url}>{t('preview.audioFallback')}</audio>;
     case 'pdf': return <iframe className="previewPdf" title={t('preview.pdfTitle')} src={url} />;
-    case 'text': return <TextPreview entry={entry} />;
+    case 'text': return <TextPreview entry={entry} urlFor={urlFor} />;
     case 'fallback': return (
       <div className="previewFallback">
         <strong>{t('preview.unavailable')}</strong>
@@ -113,7 +115,7 @@ function PreviewBody({ entry }: { entry: Entry }) {
   }
 }
 
-export function PreviewOverlay({ entry = null, loading = false, error = null, onClose }: PreviewOverlayProps) {
+export function PreviewOverlay({ entry = null, loading = false, error = null, onClose, urlFor = fileUrl, allowDownload = entry?.capabilities.download ?? true }: PreviewOverlayProps) {
   const { t } = useFeedbackI18n();
   const closeButton = useRef<HTMLButtonElement>(null);
   const backdrop = useRef<HTMLDivElement>(null);
@@ -125,14 +127,14 @@ export function PreviewOverlay({ entry = null, loading = false, error = null, on
         <header className="previewHeader overlayHeader">
           <h2 title={entry?.name}>{entry?.name || t('preview.file')}</h2>
           <span className="previewHeaderActions">
-            {entry && !error ? <a className="iconButton" href={fileUrl(entry, true)} aria-label={`${t('action.download')} ${entry.name}`} title={`${t('action.download')} ${entry.name}`}><Download aria-hidden="true" size={17} /></a> : null}
+            {entry && !error && allowDownload ? <a className="iconButton" href={urlFor(entry, true)} aria-label={`${t('action.download')} ${entry.name}`} title={`${t('action.download')} ${entry.name}`}><Download aria-hidden="true" size={17} /></a> : null}
             <button ref={closeButton} className="iconButton" type="button" onClick={onClose} aria-label={t('preview.close')} title={t('preview.close')}><X aria-hidden="true" size={18} /></button>
           </span>
         </header>
         <div className="previewBody">
           {loading ? <PreviewLoading /> : null}
-          {error ? <PreviewError message={error.message} entry={entry} /> : null}
-          {!loading && !error && entry ? <PreviewBody entry={entry} /> : null}
+          {error ? <PreviewError message={error.message} entry={entry} urlFor={urlFor} allowDownload={allowDownload} /> : null}
+          {!loading && !error && entry ? <PreviewBody entry={entry} urlFor={urlFor} /> : null}
         </div>
       </section>
     </div>

@@ -32,6 +32,7 @@ const API_ERROR_MESSAGES: Partial<Record<string, MessageKey>> = {
   ONEDRIVE_UPLOAD_SESSION_INVALID: 'upload.providerFailed',
   INVALID_UPLOAD_PART_SIZE: 'upload.partRetry',
   INVALID_UPLOAD_CONTENT_TYPE: 'upload.partRetry',
+  SHARE_PASSWORD_INVALID: 'publicShare.passwordInvalid',
 };
 
 export function localizedApiError(error: unknown, t: (key: MessageKey) => string, fallback: MessageKey): string {

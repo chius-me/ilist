@@ -24,6 +24,7 @@ export interface ExplorerCollectionProps {
   onSelectAll(ids: string[]): void;
   onReplaceSelection(ids: string[]): void;
   onClearSelection(): void;
+  fileUrlFor?: (entry: Entry, download: boolean) => string;
 }
 
 function intersects(first: MarqueeRect, second: DOMRect): boolean {
@@ -53,6 +54,7 @@ export function ExplorerCollection({
   onSelectAll,
   onReplaceSelection,
   onClearSelection,
+  fileUrlFor,
 }: ExplorerCollectionProps) {
   const [focusedId, setFocusedId] = useState<string | null>(null);
   const [marquee, setMarquee] = useState<MarqueeRect | null>(null);
@@ -164,7 +166,7 @@ export function ExplorerCollection({
   return (
     <>
       {view === 'list'
-        ? <FileList entries={entries} selectedIds={selectedIds} admin={admin} handlers={handlers} interactionProps={interactionProps} focusedId={focusedId} />
+        ? <FileList entries={entries} selectedIds={selectedIds} admin={admin} handlers={handlers} interactionProps={interactionProps} focusedId={focusedId} fileUrlFor={fileUrlFor} />
         : <FileGrid entries={entries} selectedIds={selectedIds} admin={admin} handlers={handlers} interactionProps={interactionProps} focusedId={focusedId} />}
       {marquee ? <div className="selectionMarquee" aria-hidden="true" style={marqueeStyle(marquee)} /> : null}
     </>
