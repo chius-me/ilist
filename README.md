@@ -6,7 +6,7 @@
 
 Self-hosted file index and manager for Cloudflare Workers.
 
-[![Release](https://img.shields.io/badge/release-v0.1.4-2ea44f?logo=github)](https://github.com/chius-me/ilist/releases/tag/v0.1.4)
+[![Release](https://img.shields.io/badge/release-v0.1.5-2ea44f?logo=github)](https://github.com/chius-me/ilist/releases/tag/v0.1.5)
 [![License](https://img.shields.io/badge/license-GPL--3.0--only-blue)](https://github.com/chius-me/ilist/blob/main/LICENSE)
 ![Cloudflare Workers](https://img.shields.io/badge/Cloudflare-Workers-f38020?logo=cloudflare&logoColor=white)
 ![TypeScript](https://img.shields.io/badge/TypeScript-5.8-3178c6?logo=typescript&logoColor=white)
@@ -14,7 +14,7 @@ Self-hosted file index and manager for Cloudflare Workers.
 
 </div>
 
-> [v0.1.4](https://github.com/chius-me/ilist/releases/tag/v0.1.4) targets one administrator with public read-only browsing. Review [Limitations](#limitations) and back up D1 before upgrading.
+> [v0.1.5](https://github.com/chius-me/ilist/releases/tag/v0.1.5) adds revocable file and folder shares. Review [Limitations](#limitations) and back up D1 before upgrading.
 
 ## Features
 
@@ -24,6 +24,7 @@ Self-hosted file index and manager for Cloudflare Workers.
 - S3-compatible mounts with AWS Signature Version 4
 - Cloudflare R2 through either S3 credentials or the built-in Worker binding
 - Public directory browsing, stable file links, downloads, and common file previews
+- Revocable file and folder shares with optional passwords, expiration, and download policy
 - English and Simplified Chinese interface with system, light, and dark themes stored locally
 - List and grid views, breadcrumbs, sorting, search, keyboard selection, and responsive layout
 - Responsive storage and appearance administration for desktop, tablet, and mobile screens
@@ -55,7 +56,7 @@ Browser
         +-- Virtual filesystem and storage driver registry
         +-- OneDrive Personal driver -> Microsoft Graph
         +-- S3 driver -> R2 or another S3-compatible provider
-        +-- D1 -> mounts, encrypted credentials, entries, sessions
+        +-- D1 -> mounts, encrypted credentials, entries, sessions, shares
         +-- R2 binding -> built-in compatibility storage
 ```
 
@@ -144,7 +145,17 @@ Use a bucket-scoped R2 API token with only the permissions ilist requires.
 - The built-in `R2` Worker binding remains compatible with existing deployments but does not implement resumable upload; use an S3-configured R2 mount for multipart uploads.
 - Configure an incomplete multipart upload lifecycle rule on S3-compatible buckets so abandoned provider uploads are removed if Worker cleanup cannot reach them.
 
-OneDrive resumable upload uses the same delegated `Files.ReadWrite` permission documented above. Apply all D1 migrations, including `0012_upload_sessions.sql` and `0013_upload_terminal_leases.sql`, before deploying v0.1.4.
+OneDrive resumable upload uses the same delegated `Files.ReadWrite` permission documented above. Apply all D1 migrations, including `0012_upload_sessions.sql`, `0013_upload_terminal_leases.sql`, and `0014_shares.sql`, before deploying v0.1.5.
+
+## Controlled Shares
+
+Administrators can create a share from any file or folder action menu and manage existing shares at `/admin/shares`. A share may require a password, expire at a chosen time, block explicit downloads, or be disabled and re-enabled. Folder shares support nested browsing, list and grid views, and the same safe preview types as the main explorer.
+
+The raw `/s/:token` URL is returned only once when the share is created. D1 stores only its SHA-256 hash, so the management page cannot recover or copy an existing link. Public item IDs are share-scoped encrypted handles rather than mount or provider IDs. Password authorization uses a short-lived, `HttpOnly`, `SameSite=Lax` cookie scoped to that share path.
+
+Every metadata, listing, preview, and file request rechecks the current password, enabled, expiration, target, and download policy. Share responses use `Cache-Control: private, no-store`; do not add a Cloudflare cache rule that overrides this policy. Disabling or deleting a share therefore takes effect on the next request.
+
+Public share routes are rooted at `/s/:token`. Administrator automation may use `GET`, `POST`, `PATCH`, and `DELETE` under `/api/admin/shares`, subject to the normal administrator session and same-origin protections.
 
 ## Local Development
 
@@ -184,6 +195,8 @@ Fill in test-only values before starting Wrangler. It normally serves the applic
 - Use least-privilege, bucket-scoped S3 or R2 credentials.
 - Do not commit `.dev.vars`, D1 exports, access tokens, client secrets, or temporary uploads.
 - Private mounts rely on ilist authorization; review Cloudflare logs, Access policies, and caching rules for your deployment.
+- Share links are bearer credentials. Send them through an appropriate private channel and add a password for sensitive targets.
+- Existing share URLs cannot be recovered from D1; create a replacement share if the original URL is lost.
 
 ## Limitations
 
@@ -193,6 +206,7 @@ Fill in test-only values before starting Wrangler. It normally serves the applic
 - Resumable recovery is page-session-only; reloading the page does not restore the upload queue
 - Built-in R2 binding uploads remain single-request and subject to Cloudflare request-body limits
 - No cross-mount copy or move
+- Shares do not support uploads, recipient accounts, access quotas, or access counters
 - No offline download, archive extraction, media transcoding, or background task system
 - Provider listings are fetched live; distributed directory caching is not implemented
 - Built-in R2 recursive deletion is bounded and reports per-entry failures; S3-compatible and OneDrive folder deletion follow provider-specific behavior

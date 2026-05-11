@@ -17,6 +17,20 @@ export interface UploadFixtureState {
   directoryCalls: number;
 }
 
+interface ShareFixture {
+  id: string;
+  mountId: string;
+  mountName: string;
+  name: string;
+  targetKind: 'file' | 'folder';
+  protected: boolean;
+  expiresAt: string | null;
+  allowDownload: boolean;
+  enabled: boolean;
+  createdAt: string;
+  updatedAt: string;
+}
+
 const UPLOAD_PART_SIZE = 10 * 1024 * 1024;
 
 const mutableCapabilities = {
@@ -115,6 +129,23 @@ export async function installApiFixtures(page: Page, options: ApiFixtureOptions 
   };
   let uploadSize = UPLOAD_PART_SIZE * 2 + UPLOAD_PART_SIZE / 2;
   let failedPartTwo = false;
+  let shareAuthorized = false;
+  const sharedFolder = {
+    ...fixtureEntries[0], id: 'sealed-root', parentId: null, name: 'Shared workspace',
+    isPublic: false, effectivePublic: false,
+    capabilities: { ...folderCapabilities, rename: false, move: false, delete: false, changeVisibility: false },
+  };
+  const sharedNested = { ...sharedFolder, id: 'sealed-nested', parentId: 'sealed-root', name: 'Nested' };
+  const sharedFile = {
+    ...fixtureEntries[2], id: 'sealed-file', parentId: 'sealed-nested', name: 'shared-notes.txt', size: 64,
+    isPublic: false, effectivePublic: false,
+    capabilities: { ...mutableCapabilities, download: false, rename: false, move: false, delete: false, changeVisibility: false },
+  };
+  let shares: ShareFixture[] = [{
+    id: 'existing-share', mountId: 'r2', mountName: 'Production archive', name: 'financial-plan.pdf',
+    targetKind: 'file', protected: false, expiresAt: null, allowDownload: true, enabled: true,
+    createdAt: '2026-07-18T00:00:00.000Z', updatedAt: '2026-07-18T00:00:00.000Z',
+  }];
 
   const uploadSession = () => ({
     id: 'e2e-upload-session',
@@ -140,6 +171,78 @@ export async function installApiFixtures(page: Page, options: ApiFixtureOptions 
   await page.route('**/api/admin/login', (route) => json(route, {
     ok: false, error: { code: 'INVALID_CREDENTIALS', message: 'Invalid credentials' },
   }, 401));
+
+  await page.route('**/api/admin/shares**', (route) => {
+    const request = route.request();
+    const url = new URL(request.url());
+    if (request.method() === 'GET' && url.pathname === '/api/admin/shares') return json(route, { ok: true, data: shares });
+    if (request.method() === 'POST' && url.pathname === '/api/admin/shares') {
+      const input = request.postDataJSON() as { entryId: string; password?: string; allowDownload: boolean; enabled?: boolean; expiresAt?: string };
+      const source = fixtureEntries.find((entry) => entry.id === input.entryId) ?? fixtureEntries[2];
+      const share = {
+        id: 'created-share', mountId: 'native-r2', mountName: 'Built-in R2', name: source.name,
+        targetKind: source.kind as 'file' | 'folder', protected: Boolean(input.password), expiresAt: input.expiresAt ?? null,
+        allowDownload: input.allowDownload, enabled: input.enabled ?? true,
+        createdAt: '2026-07-18T01:00:00.000Z', updatedAt: '2026-07-18T01:00:00.000Z',
+      };
+      shares = [share, ...shares.filter((item) => item.id !== share.id)];
+      return json(route, { ok: true, data: { share, url: 'http://127.0.0.1:4173/s/e2e-share-token' } }, 201);
+    }
+    const id = decodeURIComponent(url.pathname.split('/').pop() ?? '');
+    if (request.method() === 'PATCH') {
+      const input = request.postDataJSON() as { allowDownload?: boolean; enabled?: boolean; expiresAt?: string | null; password?: string; clearPassword?: boolean };
+      const existing = shares.find((item) => item.id === id);
+      if (!existing) return json(route, { ok: false, error: { code: 'SHARE_NOT_FOUND', message: 'Share not found' } }, 404);
+      const updated = {
+        ...existing,
+        ...(typeof input.allowDownload === 'boolean' ? { allowDownload: input.allowDownload } : {}),
+        ...(typeof input.enabled === 'boolean' ? { enabled: input.enabled } : {}),
+        ...(input.expiresAt !== undefined ? { expiresAt: input.expiresAt } : {}),
+        ...(input.password ? { protected: true } : {}),
+        ...(input.clearPassword ? { protected: false } : {}),
+        updatedAt: '2026-07-18T02:00:00.000Z',
+      };
+      shares = shares.map((item) => item.id === id ? updated : item);
+      return json(route, { ok: true, data: updated });
+    }
+    if (request.method() === 'DELETE') {
+      shares = shares.filter((item) => item.id !== id);
+      return route.fulfill({ status: 204, body: '' });
+    }
+    return json(route, { ok: false, error: { code: 'NOT_FOUND', message: 'Not found' } }, 404);
+  });
+
+  await page.route('**/s/**', (route) => {
+    const request = route.request();
+    const url = new URL(request.url());
+    if (url.pathname === '/s/disabled-share-token/api') {
+      return json(route, { ok: false, error: { code: 'SHARE_DISABLED', message: 'Disabled' } }, 410);
+    }
+    if (!url.pathname.startsWith('/s/e2e-share-token/')) return route.fallback();
+    if (url.pathname === '/s/e2e-share-token/auth' && request.method() === 'POST') {
+      const input = request.postDataJSON() as { password: string };
+      if (input.password !== 'share-passphrase') return json(route, { ok: false, error: { code: 'SHARE_PASSWORD_INVALID', message: 'Invalid password' } }, 401);
+      shareAuthorized = true;
+      return json(route, { ok: true, data: {} });
+    }
+    if (!shareAuthorized) return json(route, { ok: false, error: { code: 'SHARE_PASSWORD_REQUIRED', message: 'Password required' } }, 401);
+    if (url.pathname === '/s/e2e-share-token/api') return json(route, { ok: true, data: {
+      name: 'Shared workspace', targetKind: 'folder', allowDownload: false, protected: true, expiresAt: null, entry: sharedFolder,
+    } });
+    if (url.pathname === '/s/e2e-share-token/api/list') {
+      const nested = url.searchParams.get('parent') === 'sealed-nested';
+      return json(route, { ok: true, data: {
+        current: nested ? sharedNested : sharedFolder,
+        breadcrumbs: [],
+        items: nested ? [sharedFile] : [sharedNested],
+      } });
+    }
+    if (url.pathname === '/s/e2e-share-token/file/sealed-file/shared-notes.txt') {
+      if (url.searchParams.get('download') === '1') return json(route, { ok: false, error: { code: 'SHARE_DOWNLOAD_DISABLED', message: 'Download disabled' } }, 403);
+      return route.fulfill({ status: 200, contentType: 'text/plain', body: 'Shared preview fixture\nPrivate content remains protected.' });
+    }
+    return json(route, { ok: false, error: { code: 'SHARE_NOT_FOUND', message: 'Not found' } }, 404);
+  });
 
   await page.route('**/api/fs/list**', async (route) => {
     uploads.directoryCalls += 1;
@@ -216,7 +319,9 @@ export async function installApiFixtures(page: Page, options: ApiFixtureOptions 
     await new Promise((resolve) => setTimeout(resolve, 1500));
     await route.fulfill({ status: 201, body: '' });
   });
-  await page.route('**/file/**', (route) => route.fulfill({ status: 200, contentType: 'application/octet-stream', body: 'fixture' }));
+  await page.route('**/file/**', (route) => new URL(route.request().url()).pathname.startsWith('/s/')
+    ? route.fallback()
+    : route.fulfill({ status: 200, contentType: 'application/octet-stream', body: 'fixture' }));
   await page.route('**/file/report/**', (route) => route.fulfill({
     status: 200,
     contentType: 'text/plain',
