@@ -13,6 +13,13 @@ export interface EntryCapabilities {
   changeVisibility: boolean;
 }
 
+export interface FileExportOption {
+  format: string;
+  label: string;
+  extension: string;
+  contentType: string;
+}
+
 export interface Entry {
   id: string;
   parentId: string | null;
@@ -26,6 +33,7 @@ export interface Entry {
   sortOrder: number;
   description: string;
   mountPath: string | null;
+  exportOptions?: FileExportOption[];
   capabilities: EntryCapabilities;
 }
 

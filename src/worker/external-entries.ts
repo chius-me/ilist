@@ -39,6 +39,7 @@ export function externalEntry(item: StorageItem, mount: Mount, driver: StorageDr
     description: '',
     mountId: mount.id,
     mountPath: mount.mountPath,
+    exportOptions: item.exportOptions?.map((option) => ({ ...option })),
     driverType: mount.driverType,
     provider: mount.provider,
     capabilities: capabilities(driver, item, admin),
