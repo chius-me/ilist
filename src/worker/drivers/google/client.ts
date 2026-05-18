@@ -4,6 +4,7 @@ import { GOOGLE_FOLDER_MIME_TYPE } from './items';
 import { getGoogleAccessToken, refreshGoogleAccessToken } from './tokens';
 
 const DRIVE_BASE = 'https://www.googleapis.com/drive/v3';
+const DRIVE_UPLOAD_BASE = 'https://www.googleapis.com/upload/drive/v3';
 const FILE_FIELDS = 'id,name,mimeType,size,modifiedTime,md5Checksum,parents,trashed';
 const RESPONSE_HEADERS = [
   'accept-ranges', 'cache-control', 'content-length', 'content-range', 'content-type',
@@ -61,6 +62,42 @@ function safeResponse(response: Response): Response {
     status: response.status,
     statusText: response.statusText,
     headers,
+  });
+}
+
+function multipartBody(
+  boundary: string,
+  metadata: Record<string, unknown>,
+  contentType: string,
+  body: ReadableStream,
+): ReadableStream<Uint8Array> {
+  const encoder = new TextEncoder();
+  const prefix = encoder.encode(
+    `--${boundary}\r\nContent-Type: application/json; charset=UTF-8\r\n\r\n${JSON.stringify(metadata)}`
+    + `\r\n--${boundary}\r\nContent-Type: ${contentType}\r\n\r\n`,
+  );
+  const suffix = encoder.encode(`\r\n--${boundary}--\r\n`);
+  return new ReadableStream<Uint8Array>({
+    async start(controller) {
+      controller.enqueue(prefix);
+      const reader = body.getReader();
+      try {
+        while (true) {
+          const result = await reader.read();
+          if (result.done) break;
+          controller.enqueue(result.value);
+        }
+        controller.enqueue(suffix);
+        controller.close();
+      } catch (error) {
+        controller.error(error);
+      } finally {
+        reader.releaseLock();
+      }
+    },
+    cancel(reason) {
+      return body.cancel(reason);
+    },
   });
 }
 
@@ -132,6 +169,28 @@ export class GoogleDriveClient {
 
   createFolder(parentId: string, name: string): Promise<GoogleFile> {
     return this.createMetadata({ name, mimeType: GOOGLE_FOLDER_MIME_TYPE, parents: [parentId] });
+  }
+
+  upload(
+    parentId: string,
+    name: string,
+    body: ReadableStream,
+    contentType: string | null,
+  ): Promise<GoogleFile> {
+    const boundary = `ilist-${crypto.randomUUID()}`;
+    const url = new URL(`${DRIVE_UPLOAD_BASE}/files`);
+    url.searchParams.set('uploadType', 'multipart');
+    url.searchParams.set('fields', FILE_FIELDS);
+    return this.requestJson<GoogleFile>(url.toString(), {
+      method: 'POST',
+      headers: { 'content-type': `multipart/related; boundary=${boundary}` },
+      body: multipartBody(
+        boundary,
+        { name, parents: [parentId] },
+        contentType ?? 'application/octet-stream',
+        body,
+      ) as BodyInit,
+    });
   }
 
   rename(itemId: string, name: string): Promise<GoogleFile> {
