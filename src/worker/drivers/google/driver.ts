@@ -1,7 +1,14 @@
 import { HttpError } from '../../http';
 import type { Mount } from '../../types';
-import type { DownloadResult, ListResult, StorageDriver, StorageItem } from '../types';
-import type { GoogleFile, GoogleListResult } from './client';
+import {
+  UPLOAD_PART_SIZE_BYTES,
+  type DownloadResult,
+  type ListResult,
+  type ResumableUploadAdapter,
+  type StorageDriver,
+  type StorageItem,
+} from '../types';
+import type { GoogleFile, GoogleListResult, GoogleUploadPartResult, GoogleUploadSession } from './client';
 import { GoogleDriveClient } from './client';
 import { isGoogleNativeFile, mapGoogleFile } from './items';
 
@@ -12,9 +19,35 @@ export interface GoogleDriveDriverClient {
   exportFile(itemId: string, contentType: string): Promise<Response>;
   createFolder(parentId: string, name: string): Promise<GoogleFile>;
   upload(parentId: string, name: string, body: ReadableStream, contentType: string | null): Promise<GoogleFile>;
+  createResumableUpload(parentId: string, name: string, size: number, contentType: string | null): Promise<GoogleUploadSession>;
+  uploadResumablePart(
+    sessionUrl: string,
+    body: ReadableStream,
+    contentRange: string,
+    contentLength: number,
+    options?: { signal?: AbortSignal },
+  ): Promise<GoogleUploadPartResult>;
+  abortResumableUpload(sessionUrl: string): Promise<void>;
   rename(itemId: string, name: string): Promise<GoogleFile>;
   move(itemId: string, destinationId: string): Promise<GoogleFile>;
   trash(itemId: string): Promise<GoogleFile>;
+}
+
+interface GoogleUploadState {
+  sessionUrl: string;
+  expiresAt: number;
+  nextOffset: number;
+  parentId: string;
+  name: string;
+  contentType: string | null;
+}
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === 'object' && value !== null && !Array.isArray(value);
+}
+
+function invalidUploadState(): HttpError {
+  return new HttpError(400, 'INVALID_UPLOAD_STATE', 'Google upload session state is invalid');
 }
 
 function validName(name: string): string {
@@ -31,8 +64,64 @@ function validName(name: string): string {
 }
 
 export class GoogleDriveDriver implements StorageDriver {
-  readonly capabilities = new Set(['list', 'download', 'upload', 'createFolder', 'rename', 'move', 'delete'] as const);
+  readonly capabilities = new Set(['list', 'download', 'upload', 'multipartUpload', 'createFolder', 'rename', 'move', 'delete'] as const);
   readonly rootId: string;
+  readonly resumableUpload: ResumableUploadAdapter = {
+    create: async (input) => {
+      await this.assertInScope(input.parentId);
+      if (input.partSize !== UPLOAD_PART_SIZE_BYTES) {
+        throw new HttpError(400, 'INVALID_UPLOAD_PART_SIZE', 'Google upload sessions require 10 MiB parts');
+      }
+      const name = validName(input.name);
+      const contentType = this.validContentType(input.contentType);
+      const session = await this.client.createResumableUpload(input.parentId, name, input.size, contentType);
+      if (!Number.isSafeInteger(session.expiresAt) || session.expiresAt <= Date.now()) {
+        throw new HttpError(502, 'GOOGLE_UPLOAD_SESSION_INVALID', 'Google upload session is invalid');
+      }
+      return {
+        state: {
+          sessionUrl: session.sessionUrl,
+          expiresAt: session.expiresAt,
+          nextOffset: 0,
+          parentId: input.parentId,
+          name,
+          contentType,
+        },
+        expiresAt: session.expiresAt,
+      };
+    },
+    uploadPart: async (input) => {
+      const state = this.requireLiveUploadState(input.state);
+      if (state.nextOffset !== input.offset) {
+        throw new HttpError(409, 'GOOGLE_UPLOAD_SESSION_INVALID_RANGE', 'Google upload part range is invalid');
+      }
+      const result = await this.client.uploadResumablePart(
+        state.sessionUrl,
+        input.body,
+        `bytes ${input.offset}-${input.offset + input.size - 1}/${input.totalSize}`,
+        input.size,
+        { signal: input.signal },
+      );
+      if (!result.completed) {
+        return {
+          state: { ...state, nextOffset: result.nextOffset },
+          part: { partNumber: input.partNumber, size: input.size, etag: null },
+        };
+      }
+      return {
+        part: { partNumber: input.partNumber, size: input.size, etag: null },
+        completedItem: { ...mapGoogleFile(result.item, state.parentId), parentId: state.parentId },
+      };
+    },
+    complete: async (input) => {
+      this.requireUploadState(input.state);
+      if (!input.completedItem) throw new HttpError(409, 'UPLOAD_INCOMPLETE', 'Google upload session has not completed');
+      return input.completedItem;
+    },
+    abort: async (state) => {
+      await this.client.abortResumableUpload(this.requireLiveUploadState(state).sessionUrl);
+    },
+  };
 
   constructor(private readonly mount: Mount, private readonly client: GoogleDriveDriverClient) {
     this.rootId = mount.rootItemId ?? 'root';
@@ -108,6 +197,48 @@ export class GoogleDriveDriver implements StorageDriver {
     if (itemId === this.rootId) {
       throw new HttpError(400, 'INVALID_STORAGE_OPERATION', `Mount root cannot be ${operation}`);
     }
+  }
+
+  private validContentType(value: unknown, fromState = false): string | null {
+    if (value === null) return null;
+    if (typeof value === 'string' && !/[\u0000-\u001f\u007f]/.test(value)) return value;
+    if (fromState) throw invalidUploadState();
+    throw new HttpError(400, 'INVALID_UPLOAD_CONTENT_TYPE', 'Google upload content type is invalid');
+  }
+
+  private requireUploadState(state: Record<string, unknown>): GoogleUploadState {
+    if (!isRecord(state)) throw invalidUploadState();
+    const { sessionUrl, expiresAt, nextOffset, parentId, name, contentType } = state;
+    if (
+      typeof sessionUrl !== 'string'
+      || typeof expiresAt !== 'number'
+      || !Number.isSafeInteger(expiresAt)
+      || typeof nextOffset !== 'number'
+      || !Number.isSafeInteger(nextOffset)
+      || nextOffset < 0
+      || typeof parentId !== 'string'
+      || !parentId
+      || typeof name !== 'string'
+    ) throw invalidUploadState();
+    try {
+      if (new URL(sessionUrl).protocol !== 'https:') throw invalidUploadState();
+      return {
+        sessionUrl,
+        expiresAt,
+        nextOffset,
+        parentId,
+        name: validName(name),
+        contentType: this.validContentType(contentType, true),
+      };
+    } catch {
+      throw invalidUploadState();
+    }
+  }
+
+  private requireLiveUploadState(state: Record<string, unknown>): GoogleUploadState {
+    const uploadState = this.requireUploadState(state);
+    if (uploadState.expiresAt <= Date.now()) throw invalidUploadState();
+    return uploadState;
   }
 
   private async assertInScope(itemId: string, knownItem?: GoogleFile): Promise<void> {
