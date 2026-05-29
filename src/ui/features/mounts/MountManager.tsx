@@ -1,6 +1,6 @@
 import { CirclePower, Cloud, Link, Link2Off, MoreHorizontal, Pencil, Plus, RefreshCw, Trash2 } from 'lucide-react';
 import { useCallback, useEffect, useRef, useState, type MouseEvent } from 'react';
-import { createMount, disconnectMount, listMounts, oneDriveConnectUrl, removeMount, testMount, updateMount } from '../../api/mounts';
+import { createMount, disconnectMount, googleDriveConnectUrl, listMounts, oneDriveConnectUrl, removeMount, testMount, updateMount } from '../../api/mounts';
 import { useI18n } from '../../i18n/I18nProvider';
 import type { Mount, MountInput } from '../../types/mounts';
 import { MountDialog } from './MountDialog';
@@ -14,10 +14,19 @@ interface MountManagerProps {
 
 function providerName(mount: Mount, t: ReturnType<typeof useI18n>['t']): string {
   if (mount.driverType === 'onedrive') return t('mount.providerOneDrive');
+  if (mount.driverType === 'google') return t('mount.providerGoogleDrive');
   if (mount.provider === 'cloudflare-r2') return 'Cloudflare R2';
   if (mount.provider === 'aws-s3') return 'AWS S3';
   if (mount.provider === 'backblaze-b2') return 'Backblaze B2';
   return mount.provider;
+}
+
+function isOAuthMount(mount: Mount): boolean {
+  return mount.driverType === 'onedrive' || mount.driverType === 'google';
+}
+
+function connectUrl(mount: Pick<Mount, 'id' | 'driverType'>): string {
+  return mount.driverType === 'google' ? googleDriveConnectUrl(mount.id) : oneDriveConnectUrl(mount.id);
 }
 
 function MountConfirmation({ label, message, confirmLabel, busy, onClose, onConfirm }: {
@@ -75,9 +84,13 @@ export function MountManager(props: MountManagerProps) {
 
   useEffect(() => { void refresh(); }, [refresh]);
   useEffect(() => {
-    const status = new URL(window.location.href).searchParams.get('onedrive');
-    if (status === 'connected') setNotice(t('mount.oneDriveConnected'));
-    if (status === 'error') setNotice(t('mount.oneDriveConnectionFailed'));
+    const search = new URL(window.location.href).searchParams;
+    const oneDrive = search.get('onedrive');
+    const google = search.get('google');
+    if (oneDrive === 'connected') setNotice(t('mount.oneDriveConnected'));
+    if (oneDrive === 'error') setNotice(t('mount.oneDriveConnectionFailed'));
+    if (google === 'connected') setNotice(t('mount.googleDriveConnected'));
+    if (google === 'error') setNotice(t('mount.googleDriveConnectionFailed'));
   }, [t]);
 
   async function save(input: MountInput) {
@@ -87,7 +100,10 @@ export function MountManager(props: MountManagerProps) {
       if (editing) await updateMount(editing.id, input);
       else {
         const created = await createMount(input);
-        if (input.driverType === 'onedrive') { navigate(oneDriveConnectUrl(created.id)); return; }
+        if (input.driverType === 'onedrive' || input.driverType === 'google') {
+          navigate(connectUrl(created));
+          return;
+        }
       }
       setEditing(undefined);
       await refresh();
@@ -140,7 +156,7 @@ export function MountManager(props: MountManagerProps) {
     try {
       await disconnectMount(disconnecting.id);
       setDisconnecting(null);
-      setNotice(t('mount.oneDriveDisconnected'));
+      setNotice(t(disconnecting.driverType === 'google' ? 'mount.googleDriveDisconnected' : 'mount.oneDriveDisconnected'));
       await refresh();
     } catch (cause) {
       setNotice(localizedApiError(cause, t, 'mount.disconnectFailed'));
@@ -170,8 +186,8 @@ export function MountManager(props: MountManagerProps) {
             event.preventDefault();
             setOpenMenuId((current) => current === mount.id ? null : mount.id);
           }}><MoreHorizontal aria-hidden="true" size={17} /></summary><div>
-            {mount.driverType === 'onedrive' ? <>
-              <button type="button" onClick={(event) => selectMountAction(event, () => navigate(oneDriveConnectUrl(mount.id)))}><Link aria-hidden="true" size={16} />{mount.connected ? t('mount.reconnect') : t('mount.connect')}</button>
+            {isOAuthMount(mount) ? <>
+              <button type="button" onClick={(event) => selectMountAction(event, () => navigate(connectUrl(mount)))}><Link aria-hidden="true" size={16} />{mount.connected ? t('mount.reconnect') : t('mount.connect')}</button>
               {mount.connected ? <button type="button" onClick={(event) => selectMountAction(event, () => setDisconnecting(mount))}><Link2Off aria-hidden="true" size={16} />{t('mount.disconnect')}</button> : null}
             </> : <button type="button" onClick={(event) => selectMountAction(event, () => void test(mount))}><RefreshCw aria-hidden="true" size={16} />{t('mount.test')}</button>}
             <button type="button" disabled={busy} onClick={(event) => selectMountAction(event, () => void toggle(mount))}><CirclePower aria-hidden="true" size={16} />{mount.enabled ? t('mount.disable') : t('mount.enable')}</button>
@@ -183,6 +199,6 @@ export function MountManager(props: MountManagerProps) {
     </table></div> : null}
     {editing !== undefined ? <MountDialog mount={editing} busy={busy} error={error} onClose={() => { setEditing(undefined); setError(null); }} onSubmit={save} /> : null}
     {deleting ? <MountConfirmation label={t('mount.deleteDialogTitle')} message={t('mount.deleteDialogMessage', { name: deleting.name })} confirmLabel={t('mount.deleteConfirm')} busy={busy} onClose={() => setDeleting(null)} onConfirm={() => void confirmDelete()} /> : null}
-    {disconnecting ? <MountConfirmation label={t('mount.disconnectDialogTitle')} message={t('mount.disconnectDialogMessage', { name: disconnecting.name })} confirmLabel={t('mount.disconnectConfirm')} busy={busy} onClose={() => setDisconnecting(null)} onConfirm={() => void confirmDisconnect()} /> : null}
+    {disconnecting ? <MountConfirmation label={t(disconnecting.driverType === 'google' ? 'mount.disconnectGoogleDialogTitle' : 'mount.disconnectDialogTitle')} message={t(disconnecting.driverType === 'google' ? 'mount.disconnectGoogleDialogMessage' : 'mount.disconnectDialogMessage', { name: disconnecting.name })} confirmLabel={t('mount.disconnectConfirm')} busy={busy} onClose={() => setDisconnecting(null)} onConfirm={() => void confirmDisconnect()} /> : null}
   </main>;
 }

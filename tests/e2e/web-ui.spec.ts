@@ -238,6 +238,20 @@ test('@visual upload, storage, and appearance surfaces', async ({ page }) => {
   await expect(page).toHaveScreenshot('appearance-preferences.png', { fullPage: true });
 });
 
+test('creates a Google Drive mount and enters its OAuth flow', async ({ page }) => {
+  await installApiFixtures(page, { admin: true });
+  await page.goto('/');
+  await page.getByRole('button', { name: 'Storage settings' }).click();
+  await page.getByRole('button', { name: 'Add storage' }).click();
+  await page.getByLabel('Storage type').selectOption('google');
+  await page.getByLabel('Display name').fill('Google projects');
+  await page.getByLabel('Mount path').fill('/google-projects');
+  await page.getByLabel('Root folder ID').fill('folder-root-id');
+  await page.getByRole('button', { name: 'Create and connect' }).click();
+
+  await expect(page).toHaveURL(/\/api\/admin\/oauth\/google\/start\?mountId=google-e2e$/);
+});
+
 test('resumable upload pauses, retries only the failed part, completes, and cancels', async ({ page }) => {
   const uploads = await installApiFixtures(page, { admin: true });
   await page.goto('/');

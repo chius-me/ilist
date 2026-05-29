@@ -97,7 +97,7 @@ export const fixtureEntries = [
   },
 ] as const;
 
-const mounts = [
+const initialMounts = [
   {
     id: 'r2', name: 'Production archive', mountPath: '/archive', driverType: 's3', provider: 'cloudflare-r2',
     enabled: true, isPublic: true, sortOrder: 0, rootItemId: null, connected: true,
@@ -119,6 +119,7 @@ export async function installApiFixtures(page: Page, options: ApiFixtureOptions 
   const admin = options.admin ?? true;
   const directoryState = options.directoryState ?? 'normal';
   const completionDelayMs = options.completionDelayMs ?? 1500;
+  let mounts: Array<Record<string, unknown>> = initialMounts.map((mount) => ({ ...mount, config: { ...mount.config } }));
   const uploads: UploadFixtureState = {
     createCalls: 0,
     partCalls: [],
@@ -273,8 +274,28 @@ export async function installApiFixtures(page: Page, options: ApiFixtureOptions 
     return entry ? json(route, { ok: true, data: entry }) : json(route, { ok: false, error: { code: 'ENTRY_NOT_FOUND', message: 'Entry not found' } }, 404);
   });
 
-  await page.route('**/api/admin/mounts', (route) => json(route, { ok: true, data: mounts }));
+  await page.route('**/api/admin/mounts', (route) => {
+    if (route.request().method() === 'GET') return json(route, { ok: true, data: mounts });
+    if (route.request().method() === 'POST') {
+      const input = route.request().postDataJSON() as Record<string, unknown>;
+      const created = {
+        ...input,
+        id: 'google-e2e',
+        connected: false,
+        createdAt: '2026-07-18T00:00:00.000Z',
+        updatedAt: '2026-07-18T00:00:00.000Z',
+      };
+      mounts = [...mounts, created];
+      return json(route, { ok: true, data: created });
+    }
+    return json(route, { ok: false, error: { code: 'METHOD_NOT_ALLOWED', message: 'Method not allowed' } }, 405);
+  });
   await page.route('**/api/admin/mounts/**', (route) => json(route, { ok: true, data: mounts[0] }));
+  await page.route('**/api/admin/oauth/google/start**', (route) => route.fulfill({
+    status: 200,
+    contentType: 'text/html',
+    body: '<!doctype html><title>Google OAuth</title>',
+  }));
   await page.route('**/api/admin/entries/**', (route) => json(route, { ok: true, data: { succeeded: ['report'], failed: [] } }));
   await page.route('**/api/admin/uploads/sessions**', async (route) => {
     const request = route.request();
