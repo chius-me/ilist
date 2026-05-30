@@ -1,13 +1,28 @@
 import type { ComponentType } from 'react';
-import { useRef } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import type { MessageKey } from '../../i18n/messages';
 import { useFeedbackI18n } from '../../components/ToastRegion';
 import { useModalFocus } from '../../hooks/useModalFocus';
+
+const MOBILE_ACTIONS_QUERY = '(max-width: 760px)';
+
+export function useMobileActions() {
+  const [mobile, setMobile] = useState(() => window.matchMedia(MOBILE_ACTIONS_QUERY).matches);
+  useEffect(() => {
+    const media = window.matchMedia(MOBILE_ACTIONS_QUERY);
+    const update = () => setMobile(media.matches);
+    update();
+    media.addEventListener('change', update);
+    return () => media.removeEventListener('change', update);
+  }, []);
+  return mobile;
+}
 
 export type MobileAction = {
   id: string;
   label?: string;
   labelKey?: MessageKey;
+  labelValues?: Record<string, string | number>;
   onSelect: () => void;
   href?: string;
   destructive?: boolean;
@@ -19,7 +34,7 @@ export function MobileActionSheet({ open, title, anchor, actions, translate, can
   title: string;
   anchor?: HTMLElement | null;
   actions: MobileAction[];
-  translate?: (key: MessageKey) => string;
+  translate?: (key: MessageKey, values?: Record<string, string | number>) => string;
   cancelLabel?: string;
   onClose: () => void;
 }) {
@@ -40,7 +55,7 @@ export function MobileActionSheet({ open, title, anchor, actions, translate, can
         <div className="mobileActionList">
           {actions.map((action, index) => {
             const Icon = action.icon;
-            const content = <>{Icon ? <Icon aria-hidden={true} size={18} /> : null}{action.labelKey ? translateMessage(action.labelKey) : action.label}</>;
+            const content = <>{Icon ? <Icon aria-hidden={true} size={18} /> : null}{action.labelKey ? translateMessage(action.labelKey, action.labelValues) : action.label}</>;
             const className = `mobileAction${action.destructive ? ' destructive' : ''}`;
             const setFirstAction = index === 0 ? (node: HTMLButtonElement | HTMLAnchorElement | null) => { firstAction.current = node; } : undefined;
             if (action.href) return <a key={action.id} ref={setFirstAction} className={className} href={action.href} onClick={onClose}>{content}</a>;

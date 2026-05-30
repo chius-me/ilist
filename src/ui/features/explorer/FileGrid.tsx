@@ -26,6 +26,7 @@ export function FileGrid({
       {entries.map((entry) => {
         const selected = selectedIds.has(entry.id);
         const selectable = admin && isEntryMutable(entry);
+        const showActionMenu = admin || Boolean(entry.capabilities.download && entry.exportOptions?.length);
         return (
           <li
             id={`explorer-entry-${entry.id}`}
@@ -34,7 +35,7 @@ export function FileGrid({
             className={`fileCard${selected ? ' isSelected' : ''}${focusedId === entry.id ? ' isFocused' : ''}`}
             key={entry.id}
             onContextMenu={(event) => {
-              if (!admin) return;
+              if (!showActionMenu) return;
               event.preventDefault();
               const anchor = event.target instanceof HTMLElement ? event.target.closest<HTMLElement>('button, a, input') ?? event.currentTarget : event.currentTarget;
               anchor.focus();
@@ -53,7 +54,7 @@ export function FileGrid({
                 <small>{entry.kind === 'folder' ? t('entry.folder') : formatBytes(entry.size)}</small>
               </span>
             </button>
-            {admin ? <button className="gridMenu iconButton" type="button" title={t('entry.actions', { name: entry.name })} aria-label={t('entry.actions', { name: entry.name })} onClick={(event) => handlers.onMenu(entry, event.currentTarget)}><MoreHorizontal aria-hidden="true" size={17} /></button> : null}
+            {showActionMenu ? <button className="gridMenu iconButton" type="button" title={t('entry.actions', { name: entry.name })} aria-label={t('entry.actions', { name: entry.name })} onClick={(event) => handlers.onMenu(entry, event.currentTarget)}><MoreHorizontal aria-hidden="true" size={17} /></button> : null}
           </li>
         );
       })}

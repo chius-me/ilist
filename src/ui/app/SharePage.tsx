@@ -3,7 +3,9 @@ import { useCallback, useEffect, useState } from 'react';
 import { ApiError } from '../api/client';
 import { getPublicShare, listPublicShare, publicShareFileUrl, unlockPublicShare } from '../api/public-shares';
 import { ExplorerCollection } from '../features/explorer/ExplorerCollection';
+import { entryActions, EntryActionMenu } from '../features/explorer/EntryActionMenu';
 import type { EntryHandlers } from '../features/explorer/EntryRow';
+import { MobileActionSheet, useMobileActions } from '../features/explorer/MobileActionSheet';
 import { PreviewOverlay } from '../features/preview/PreviewOverlay';
 import { SharePasswordForm } from '../features/shares/SharePasswordForm';
 import { useI18n } from '../i18n/I18nProvider';
@@ -36,6 +38,8 @@ export function SharePage({ token }: { token: string }) {
   const [busy, setBusy] = useState(false);
   const [preview, setPreview] = useState<Entry | null>(null);
   const [trail, setTrail] = useState<ShareTrailItem[]>([]);
+  const [menu, setMenu] = useState<{ entry: Entry; anchor: HTMLElement | null } | null>(null);
+  const mobileActions = useMobileActions();
 
   const load = useCallback(async () => {
     setError(null);
@@ -97,9 +101,15 @@ export function SharePage({ token }: { token: string }) {
     onOpen: (entry) => void openFolder(entry),
     onPreview: setPreview,
     onToggle: () => undefined,
-    onMenu: () => undefined,
+    onMenu: (entry, anchor) => setMenu({ entry, anchor: anchor ?? null }),
   };
-  const urlFor = (entry: Entry, download: boolean) => publicShareFileUrl(token, entry, download);
+  const urlFor = (entry: Entry, download: boolean, exportFormat?: string) => publicShareFileUrl(token, entry, download, exportFormat);
+  const currentEntryActions = menu ? entryActions(menu.entry, {
+    onOpen: handlers.onOpen,
+    onPreview: handlers.onPreview,
+    onAction: () => undefined,
+    fileUrlFor: urlFor,
+  }) : [];
 
   let content;
   if (passwordRequired) {
@@ -117,5 +127,9 @@ export function SharePage({ token }: { token: string }) {
     </main>;
   }
 
-  return <AppShell admin={false} contentId="shared-content" publicView onHome={() => undefined} onStorage={() => undefined} onSignIn={() => undefined} onSignOut={() => undefined}>{content}{preview ? <PreviewOverlay entry={preview} onClose={() => setPreview(null)} urlFor={urlFor} allowDownload={meta?.allowDownload ?? false} /> : null}</AppShell>;
+  return <AppShell admin={false} contentId="shared-content" publicView onHome={() => undefined} onStorage={() => undefined} onSignIn={() => undefined} onSignOut={() => undefined}>{content}
+    {menu && !mobileActions ? <EntryActionMenu entry={menu.entry} anchor={menu.anchor} actions={currentEntryActions} onClose={() => setMenu(null)} /> : null}
+    {menu && mobileActions ? <MobileActionSheet open title={t('entry.actions', { name: menu.entry.name })} anchor={menu.anchor} actions={currentEntryActions} translate={t} cancelLabel={t('action.cancel')} onClose={() => setMenu(null)} /> : null}
+    {preview ? <PreviewOverlay entry={preview} onClose={() => setPreview(null)} urlFor={urlFor} allowDownload={meta?.allowDownload ?? false} /> : null}
+  </AppShell>;
 }
