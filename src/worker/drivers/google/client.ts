@@ -65,7 +65,14 @@ function validatedSessionUrl(value: unknown): string {
   if (typeof value !== 'string') throw new HttpError(502, 'GOOGLE_UPLOAD_SESSION_INVALID', 'Google upload session is invalid');
   try {
     const url = new URL(value);
-    if (url.protocol !== 'https:') throw new Error('Invalid protocol');
+    if (
+      url.protocol !== 'https:'
+      || url.hostname !== 'www.googleapis.com'
+      || url.port
+      || url.username
+      || url.password
+      || !url.pathname.startsWith('/upload/drive/')
+    ) throw new Error('Invalid Google Drive upload URL');
     return url.toString();
   } catch {
     throw new HttpError(502, 'GOOGLE_UPLOAD_SESSION_INVALID', 'Google upload session is invalid');
@@ -117,26 +124,33 @@ function multipartBody(
     + `\r\n--${boundary}\r\nContent-Type: ${contentType}\r\n\r\n`,
   );
   const suffix = encoder.encode(`\r\n--${boundary}--\r\n`);
+  let reader: ReadableStreamDefaultReader<Uint8Array> | null = null;
+  let cancelled = false;
   return new ReadableStream<Uint8Array>({
     async start(controller) {
       controller.enqueue(prefix);
-      const reader = body.getReader();
+      const currentReader = body.getReader();
+      reader = currentReader;
       try {
         while (true) {
-          const result = await reader.read();
+          const result = await currentReader.read();
           if (result.done) break;
           controller.enqueue(result.value);
         }
-        controller.enqueue(suffix);
-        controller.close();
+        if (!cancelled) {
+          controller.enqueue(suffix);
+          controller.close();
+        }
       } catch (error) {
-        controller.error(error);
+        if (!cancelled) controller.error(error);
       } finally {
-        reader.releaseLock();
+        currentReader.releaseLock();
+        if (reader === currentReader) reader = null;
       }
     },
     cancel(reason) {
-      return body.cancel(reason);
+      cancelled = true;
+      return reader ? reader.cancel(reason) : body.cancel(reason);
     },
   });
 }

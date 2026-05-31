@@ -157,6 +157,24 @@ describe('Google Drive API client', () => {
     expect(multipart).toContain('streamed-body');
   });
 
+  it('cancels the locked small-upload reader when the multipart request is aborted', async () => {
+    let sourceCancelled = false;
+    const body = new ReadableStream<Uint8Array>({
+      pull() { return new Promise(() => undefined); },
+      cancel() { sourceCancelled = true; },
+    });
+    const fetcher = vi.fn(async (_input: RequestInfo | URL, init?: RequestInit) => {
+      const reader = (init?.body as ReadableStream<Uint8Array>).getReader();
+      await reader.read();
+      await reader.cancel('request aborted');
+      return Response.json(googleFile({ id: 'cancelled-upload' }));
+    });
+    const client = new GoogleDriveClient(workerEnv(), 'mount-google', fetcher, async () => 'test-access');
+
+    await expect(client.upload('folder-1', 'cancel.bin', body, null)).resolves.toMatchObject({ id: 'cancelled-upload' });
+    expect(sourceCancelled).toBe(true);
+  });
+
   it('creates a private resumable session and advances 308 ranges to final metadata', async () => {
     const sessionUrl = 'https://www.googleapis.com/upload/drive/v3/files?upload_id=private-token';
     const calls: Array<{ url: string; init: RequestInit }> = [];
@@ -188,6 +206,24 @@ describe('Google Drive API client', () => {
     expect(new Headers(calls[0]!.init.headers).get('x-upload-content-length')).toBe(String(12 * 1024 * 1024));
     expect(calls.slice(1).every((call) => new Headers(call.init.headers).get('authorization') === null)).toBe(true);
     expect(new Headers(calls[1]!.init.headers).get('content-range')).toBe('bytes 0-10485759/12582912');
+  });
+
+  it('rejects resumable session URLs outside the Google Drive upload endpoint', async () => {
+    const fetcher = vi.fn(async () => new Response(null, {
+      status: 200,
+      headers: { location: 'https://example.com/upload/drive/v3/files?upload_id=private-token' },
+    }));
+    const client = new GoogleDriveClient(workerEnv(), 'mount-google', fetcher, async () => 'test-access');
+
+    await expect(client.createResumableUpload('folder-1', 'video.mp4', 12 * 1024 * 1024, 'video/mp4'))
+      .rejects.toMatchObject({ code: 'GOOGLE_UPLOAD_SESSION_INVALID' });
+    await expect(client.uploadResumablePart(
+      'https://example.com/upload/drive/v3/files?upload_id=private-token',
+      new ReadableStream(),
+      'bytes 0-0/1',
+      1,
+    )).rejects.toMatchObject({ code: 'GOOGLE_UPLOAD_SESSION_INVALID' });
+    expect(fetcher).toHaveBeenCalledTimes(1);
   });
 
   it.each([
