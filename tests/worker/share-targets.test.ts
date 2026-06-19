@@ -76,7 +76,17 @@ function fakeDriver(): StorageDriver {
       if (!item) throw new Error('missing');
       return item;
     }),
-    getDownload: vi.fn(async () => ({ kind: 'stream' as const, response: new Response('external', { headers: { 'content-type': 'text/plain' } }) })),
+    getDownload: vi.fn(async () => ({
+      kind: 'stream' as const,
+      response: new Response('external', {
+        headers: {
+          'content-type': 'text/html',
+          'content-disposition': 'inline; filename=provider.html',
+          'set-cookie': 'provider=secret',
+          'x-provider-debug': 'private',
+        },
+      }),
+    })),
     createFolder: vi.fn(), upload: vi.fn(), rename: vi.fn(), move: vi.fn(), remove: vi.fn(),
   };
 }
@@ -152,5 +162,10 @@ describe('shared storage targets', () => {
       new Request('https://ilist.example/s/token/file/handle/external.txt'), false, registry,
     );
     await expect(response.text()).resolves.toBe('external');
+    expect(response.headers.get('content-type')).toBe('application/octet-stream');
+    expect(response.headers.get('content-disposition')).toMatch(/^attachment;/);
+    expect(response.headers.get('content-security-policy')).toBe("sandbox; default-src 'none'; frame-ancestors 'none'");
+    expect(response.headers.get('set-cookie')).toBeNull();
+    expect(response.headers.get('x-provider-debug')).toBeNull();
   });
 });

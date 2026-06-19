@@ -2,6 +2,7 @@ import { getEntryById, listChildRows } from './db';
 import { createDriver, driverRegistry } from './drivers/registry';
 import type { DriverRegistry, StorageDriver, StorageItem } from './drivers/types';
 import { decodeExternalId } from './external-identity';
+import { secureFileResponse } from './file-response-security';
 import { HttpError } from './http';
 import { getMount } from './mounts';
 import { streamEntryObject } from './r2';
@@ -192,12 +193,6 @@ export async function listSharedFolder(
   };
 }
 
-function privateResponse(response: Response): Response {
-  const headers = new Headers(response.headers);
-  headers.set('cache-control', 'private, no-store');
-  return new Response(response.body, { status: response.status, statusText: response.statusText, headers });
-}
-
 export async function downloadSharedFile(
   env: Env,
   share: Share,
@@ -209,21 +204,28 @@ export async function downloadSharedFile(
   const resolved = await resolveSharedItem(env, share, handle, registry);
   if (resolved.item.kind !== 'file') throw new HttpError(400, 'NOT_A_FILE', 'Shared item is not a file');
   if (resolved.nativeRow) {
-    return privateResponse(await streamEntryObject(env.R2_BUCKET, resolved.nativeRow, request, {
+    return streamEntryObject(env.R2_BUCKET, resolved.nativeRow, request, {
       download,
       publicFile: false,
-    }));
+    });
   }
   const result = await resolved.driver!.getDownload(resolved.item.id, request);
+  const requestedExport = new URL(request.url).searchParams.get('export');
+  const exportOption = requestedExport
+    ? resolved.item.exportOptions?.find((option) => option.format === requestedExport)
+    : undefined;
+  const options = {
+    filename: exportOption ? `${resolved.item.name}.${exportOption.extension}` : resolved.item.name,
+    contentType: exportOption?.contentType ?? resolved.item.contentType,
+    download,
+    publicFile: false,
+    method: request.method,
+  };
   if (result.kind === 'stream') {
-    return privateResponse(new Response(request.method === 'HEAD' ? null : result.response.body, {
-      status: result.response.status,
-      statusText: result.response.statusText,
-      headers: result.response.headers,
-    }));
+    return secureFileResponse(result.response, options);
   }
   const headers = new Headers();
   const range = request.headers.get('range');
   if (range) headers.set('range', range);
-  return privateResponse(await fetch(result.url, { method: request.method, headers, redirect: 'follow' }));
+  return secureFileResponse(await fetch(result.url, { method: request.method, headers, redirect: 'follow' }), options);
 }

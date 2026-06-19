@@ -243,7 +243,13 @@ describe('multi-mount filesystem integration', () => {
     const driver = fakeDriver('private');
     driver.getDownload = vi.fn(async () => ({
       kind: 'stream' as const,
-      response: new Response('provider-body', { headers: { 'cache-control': 'public, max-age=3600', 'content-type': 'text/plain' } }),
+      response: new Response('provider-body', { headers: {
+        'cache-control': 'public, max-age=3600',
+        'content-type': 'text/html',
+        'content-disposition': 'inline; filename=upstream.html',
+        'set-cookie': 'provider=secret',
+        'x-provider-debug': 'private',
+      } }),
     }));
     driverRegistry.onedrive = () => driver;
     const cookie = await login();
@@ -253,6 +259,11 @@ describe('multi-mount filesystem integration', () => {
     const response = await SELF.fetch(`${origin}/file/${entry.id}/private.txt`, { method: 'HEAD', headers: { cookie } });
     expect(response.status).toBe(200);
     expect(response.headers.get('cache-control')).toBe('private, no-store');
+    expect(response.headers.get('content-type')).toBe('application/octet-stream');
+    expect(response.headers.get('content-disposition')).toMatch(/^attachment;/);
+    expect(response.headers.get('content-security-policy')).toBe("sandbox; default-src 'none'; frame-ancestors 'none'");
+    expect(response.headers.get('set-cookie')).toBeNull();
+    expect(response.headers.get('x-provider-debug')).toBeNull();
     await expect(response.text()).resolves.toBe('');
   });
 

@@ -63,7 +63,7 @@ test('visitor unlocks a folder share, navigates, previews, and cannot download',
   expect(deniedStatus).toBe(403);
 });
 
-test('Workspace export actions use controlled-share URLs and preview PDF', async ({ page }) => {
+test('Workspace export actions use controlled-share URLs without embedding PDF', async ({ page }) => {
   await installApiFixtures(page, { admin: false, workspaceExports: true });
   await page.goto('/s/e2e-share-token');
   await page.getByLabel('Password').fill('share-passphrase');
@@ -79,7 +79,10 @@ test('Workspace export actions use controlled-share URLs and preview PDF', async
   await page.keyboard.press('Escape');
 
   await page.getByRole('button', { name: `Open ${name}` }).click();
-  await expect(page.getByRole('dialog', { name: `Preview ${name}` }).getByTitle('PDF preview')).toHaveAttribute('src', /\/s\/e2e-share-token\/file\/sealed-workspace-doc\/Project%20brief\?export=pdf/);
+  const preview = page.getByRole('dialog', { name: `Preview ${name}` });
+  await expect(preview.getByTitle('PDF preview')).toHaveCount(0);
+  await expect(preview).toContainText('Preview is not available for this file type.');
+  await expect(preview.getByRole('link', { name: `Export PDF ${name}` })).toHaveAttribute('href', /\/s\/e2e-share-token\/file\/sealed-workspace-doc\/Project%20brief\?download=1&export=pdf/);
 });
 
 test('@visual share creation, management, and public states', async ({ page }) => {
