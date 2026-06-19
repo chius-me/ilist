@@ -17,6 +17,10 @@ const oneDriveMount = {
   ...savedMount, id: 'onedrive-1', name: 'Personal drive', mountPath: '/personal', driverType: 'onedrive',
   provider: 'microsoft-onedrive-personal', connected: false, config: {},
 };
+const googleMount = {
+  ...savedMount, id: 'google-1', name: 'Google projects', mountPath: '/google-projects', driverType: 'google',
+  provider: 'google', rootItemId: 'folder-root-id', connected: false, config: {},
+};
 
 async function chooseAction(mountName: string, actionName: string) {
   await userEvent.click(await screen.findByRole('button', { name: `Actions for ${mountName}` }));
@@ -129,6 +133,30 @@ describe('MountManager', () => {
     });
   });
 
+  it('creates a named Google mount with an optional root folder before starting OAuth', async () => {
+    const navigate = vi.fn();
+    let submitted: Record<string, unknown> | null = null;
+    vi.stubGlobal('fetch', vi.fn(async (_input: RequestInfo | URL, init?: RequestInit) => {
+      if (!init?.method) return Response.json({ ok: true, data: [] });
+      submitted = JSON.parse(String(init.body));
+      return Response.json({ ok: true, data: googleMount });
+    }));
+
+    render(<AppProviders><MountManager onBack={vi.fn()} navigate={navigate} /></AppProviders>);
+    await userEvent.click(await screen.findByRole('button', { name: 'Add storage' }));
+    await userEvent.selectOptions(screen.getByLabelText('Storage type'), 'google');
+    await userEvent.type(screen.getByLabelText('Display name'), 'Google projects');
+    await userEvent.type(screen.getByLabelText('Mount path'), '/google-projects');
+    await userEvent.type(screen.getByLabelText('Root folder ID'), 'folder-root-id');
+    await userEvent.click(screen.getByRole('button', { name: 'Create and connect' }));
+
+    await waitFor(() => expect(navigate).toHaveBeenCalledWith('/api/admin/oauth/google/start?mountId=google-1'));
+    expect(submitted).toMatchObject({
+      name: 'Google projects', mountPath: '/google-projects', driverType: 'google', provider: 'google',
+      rootItemId: 'folder-root-id', config: {},
+    });
+  });
+
   it('shows connection state and confirms disconnecting OneDrive', async () => {
     const connected = { ...oneDriveMount, connected: true };
     const requests: string[] = [];
@@ -147,6 +175,26 @@ describe('MountManager', () => {
     expect(screen.getByRole('dialog', { name: 'Disconnect OneDrive' })).toBeVisible();
     await userEvent.click(screen.getByRole('button', { name: 'Disconnect account' }));
     await waitFor(() => expect(requests).toContain('POST /api/admin/mounts/onedrive-1/disconnect'));
+  });
+
+  it('shows Google callback state and confirms disconnecting Google Drive', async () => {
+    history.replaceState(null, '', '/admin/storages?google=connected');
+    const connected = { ...googleMount, connected: true };
+    const requests: string[] = [];
+    vi.stubGlobal('fetch', vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
+      const url = String(input);
+      if (!init?.method) return Response.json({ ok: true, data: [connected] });
+      requests.push(`${init.method} ${url}`);
+      return Response.json({ ok: true, data: { ...connected, connected: false } });
+    }));
+
+    render(<AppProviders><MountManager onBack={vi.fn()} navigate={vi.fn()} /></AppProviders>);
+    expect(await screen.findByText('Google Drive connected')).toBeVisible();
+    await userEvent.click(screen.getByRole('button', { name: 'Actions for Google projects' }));
+    await userEvent.click(screen.getByRole('button', { name: 'Disconnect' }));
+    expect(screen.getByRole('dialog', { name: 'Disconnect Google Drive' })).toBeVisible();
+    await userEvent.click(screen.getByRole('button', { name: 'Disconnect account' }));
+    await waitFor(() => expect(requests).toContain('POST /api/admin/mounts/google-1/disconnect'));
   });
 
   it('focuses mount confirmations, closes on Escape, and restores the invoking action', async () => {
@@ -189,6 +237,14 @@ describe('MountManager', () => {
 
     render(<AppProviders><MountManager onBack={vi.fn()} navigate={vi.fn()} /></AppProviders>);
     expect(await screen.findByText('OneDrive connection failed')).toBeVisible();
+  });
+
+  it('shows a concise Google callback failure status', async () => {
+    history.replaceState(null, '', '/admin/storages?google=error');
+    vi.stubGlobal('fetch', vi.fn(async () => Response.json({ ok: true, data: [googleMount] })));
+
+    render(<AppProviders><MountManager onBack={vi.fn()} navigate={vi.fn()} /></AppProviders>);
+    expect(await screen.findByText('Google Drive connection failed')).toBeVisible();
   });
 
   it('localizes mount API failures without exposing provider messages', async () => {

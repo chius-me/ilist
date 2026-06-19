@@ -1,5 +1,5 @@
 import type { StorageCredentials } from '../credentials';
-import type { Env, Mount, MountDriverType } from '../types';
+import type { Env, FileExportOption, Mount, MountDriverType } from '../types';
 
 export type DriverCapability =
   | 'list'
@@ -20,6 +20,7 @@ export interface StorageItem {
   contentType: string | null;
   modifiedAt: string | null;
   etag: string | null;
+  exportOptions?: FileExportOption[];
 }
 
 export const LARGE_UPLOAD_THRESHOLD_BYTES = 10 * 1024 * 1024;

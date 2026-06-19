@@ -112,6 +112,20 @@ const SAFE_PROVIDER_ERRORS: Record<string, SafeProviderError> = {
   ONEDRIVE_UPLOAD_SESSION_FAILED: { status: 502, message: 'OneDrive upload session request failed' },
   ONEDRIVE_UPLOAD_SESSION_INVALID: { status: 502, message: 'OneDrive upload session response was invalid' },
   ONEDRIVE_UPLOAD_SESSION_PROOF_INVALID: { status: 400, message: 'OneDrive upload session proof is invalid' },
+  GOOGLE_AUTH_FAILED: { status: 401, message: 'Google Drive authentication failed' },
+  GOOGLE_ACCESS_DENIED: { status: 403, message: 'Google Drive access was denied' },
+  GOOGLE_RATE_LIMITED: { status: 503, message: 'Google Drive is temporarily rate limited', retryable: true },
+  GOOGLE_QUOTA_EXCEEDED: { status: 503, message: 'Google Drive quota is temporarily unavailable', retryable: true },
+  GOOGLE_UPSTREAM_FAILED: { status: 502, message: 'Google Drive request failed' },
+  GOOGLE_UPLOAD_SESSION_EXPIRED: { status: 410, message: 'Google upload session has expired' },
+  GOOGLE_UPLOAD_SESSION_INVALID_RANGE: { status: 409, message: 'Google upload part range is invalid' },
+  GOOGLE_UPLOAD_SESSION_RATE_LIMITED: {
+    status: 503,
+    message: 'Google upload session is temporarily rate limited',
+    retryable: true,
+  },
+  GOOGLE_UPLOAD_SESSION_FAILED: { status: 502, message: 'Google upload session request failed' },
+  GOOGLE_UPLOAD_SESSION_INVALID: { status: 502, message: 'Google upload session is invalid' },
   STORAGE_ITEM_NOT_FOUND: { status: 404, message: 'Storage item was not found' },
   STORAGE_CONFLICT: { status: 409, message: 'Storage item conflicts with an existing item' },
   INVALID_ENTRY_NAME: { status: 400, message: 'Storage item name is invalid' },
@@ -212,7 +226,7 @@ async function ownedSession(env: Env, ownerSessionId: string, id: string): Promi
 
 async function sessionDriver(env: Env, record: UploadSessionRecord): Promise<SessionDriver> {
   const mount = await getMount(env.DB, record.mountId);
-  if (!mount || (mount.driverType !== 'onedrive' && mount.driverType !== 's3')) throw uploadUnsupported();
+  if (!mount || !['onedrive', 's3', 'google'].includes(mount.driverType)) throw uploadUnsupported();
   const driver = await createDriver(env, mount);
   if (!requireResumableUploadAdapter(driver)) throw uploadUnsupported();
   return { mount, driver };
@@ -282,7 +296,7 @@ export async function createResumableUpload(
   if (
     !external
     || external.item.kind !== 'folder'
-    || (external.mount.driverType !== 'onedrive' && external.mount.driverType !== 's3')
+    || !['onedrive', 's3', 'google'].includes(external.mount.driverType)
     || !requireResumableUploadAdapter(external.driver)
   ) {
     throw uploadUnsupported();
