@@ -646,3 +646,71 @@ export async function retryStorageRecoveryOperation(
     .run();
   return result.meta.changes === 1;
 }
+
+export interface AuthRateLimitRow {
+  key_hash: string;
+  scope: string;
+  window_started_at: number;
+  failure_count: number;
+  blocked_until: number;
+  updated_at: number;
+}
+
+export function getAuthRateLimit(db: D1Database, keyHash: string): Promise<AuthRateLimitRow | null> {
+  return db.prepare('SELECT * FROM auth_rate_limits WHERE key_hash = ?').bind(keyHash).first<AuthRateLimitRow>();
+}
+
+export async function recordAuthRateLimitFailure(
+  db: D1Database,
+  keyHash: string,
+  scope: string,
+  now: number,
+  windowSeconds: number,
+  maxBackoffSeconds: number,
+): Promise<number> {
+  const row = await db.prepare(`INSERT INTO auth_rate_limits (
+      key_hash, scope, window_started_at, failure_count, blocked_until, updated_at
+    ) VALUES (?, ?, ?, 1, ? + 1, ?)
+    ON CONFLICT(key_hash) DO UPDATE SET
+      scope = excluded.scope,
+      window_started_at = CASE
+        WHEN excluded.updated_at >= auth_rate_limits.window_started_at + ? THEN excluded.window_started_at
+        ELSE auth_rate_limits.window_started_at
+      END,
+      failure_count = CASE
+        WHEN excluded.updated_at >= auth_rate_limits.window_started_at + ? THEN 1
+        ELSE auth_rate_limits.failure_count + 1
+      END,
+      blocked_until = CASE
+        WHEN excluded.updated_at >= auth_rate_limits.window_started_at + ? THEN excluded.updated_at + 1
+        ELSE excluded.updated_at + MIN(?, 1 << auth_rate_limits.failure_count)
+      END,
+      updated_at = excluded.updated_at
+    RETURNING failure_count`)
+    .bind(keyHash, scope, now, now, now, windowSeconds, windowSeconds, windowSeconds, maxBackoffSeconds)
+    .first<{ failure_count: number }>();
+  if (!row) throw new Error('Authentication failure was not recorded');
+  return row.failure_count;
+}
+
+export async function clearAuthRateLimit(db: D1Database, keyHash: string): Promise<void> {
+  await db.prepare('DELETE FROM auth_rate_limits WHERE key_hash = ?').bind(keyHash).run();
+}
+
+export async function deleteAuthRateLimitsBefore(
+  db: D1Database,
+  cutoff: number,
+  limit = 100,
+): Promise<number> {
+  const boundedLimit = Math.max(1, Math.min(500, Math.floor(limit)));
+  const result = await db.prepare(`DELETE FROM auth_rate_limits
+    WHERE key_hash IN (
+      SELECT key_hash FROM auth_rate_limits
+      WHERE updated_at < ?
+      ORDER BY updated_at ASC
+      LIMIT ?
+    )`)
+    .bind(cutoff, boundedLimit)
+    .run();
+  return result.meta.changes;
+}

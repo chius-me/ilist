@@ -1,5 +1,6 @@
 import { SELF, env } from 'cloudflare:test';
 import { describe, expect, it } from 'vitest';
+import { routeRequest } from '../../src/worker/router';
 import type { Env } from '../../src/worker/types';
 
 const origin = 'https://ilist.example';
@@ -49,6 +50,77 @@ async function createShare(entryId: string, policy: Record<string, unknown> = {}
 }
 
 describe('public share routes', () => {
+  it('limits share passwords before verification and returns an integer Retry-After', async () => {
+    const { fileId } = await nativeTree();
+    const { token } = await createShare(fileId, { password: 'share-password' });
+    let now = 20_000;
+    let verificationCalls = 0;
+    const options = {
+      passwordAuthentication: {
+        now: () => now,
+        verifyPassword: async () => {
+          verificationCalls += 1;
+          return false;
+        },
+      },
+    };
+    const attempt = () => routeRequest(new Request(`${origin}/s/${token}/auth`, {
+      method: 'POST',
+      headers: {
+        'CF-Connecting-IP': '203.0.113.30',
+        'content-type': 'application/json',
+        origin,
+      },
+      body: JSON.stringify({ password: 'wrong-password' }),
+    }), workerEnv(), options);
+
+    for (let index = 0; index < 10; index += 1) {
+      const response = await attempt();
+      expect(response.status).toBe(401);
+      if (index < 9) now += Math.min(2 ** index, 8);
+    }
+    expect(verificationCalls).toBe(10);
+
+    const throttled = await attempt();
+    expect(throttled.status).toBe(429);
+    expect(throttled.headers.get('retry-after')).toBe('8');
+    expect(await throttled.json()).toMatchObject({ error: { code: 'AUTH_RATE_LIMITED' } });
+    expect(verificationCalls).toBe(10);
+  });
+
+  it('records malformed and oversized share passwords without verifying them', async () => {
+    const { fileId } = await nativeTree();
+    const { token } = await createShare(fileId, { password: 'share-password' });
+    let verificationCalls = 0;
+    const options = {
+      passwordAuthentication: {
+        now: () => 21_000,
+        verifyPassword: async () => {
+          verificationCalls += 1;
+          return false;
+        },
+      },
+    };
+    const authenticate = (ip: string, body: string) => routeRequest(new Request(`${origin}/s/${token}/auth`, {
+      method: 'POST',
+      headers: { 'CF-Connecting-IP': ip, 'content-type': 'application/json', origin },
+      body,
+    }), workerEnv(), options);
+
+    const malformed = await authenticate('203.0.113.31', JSON.stringify({ password: 123 }));
+    expect(malformed.status).toBe(401);
+    expect((await authenticate('203.0.113.31', JSON.stringify({ password: 'not-reached' }))).status).toBe(429);
+
+    const invalidJson = await authenticate('203.0.113.32', '{');
+    expect(invalidJson.status).toBe(401);
+    expect((await authenticate('203.0.113.32', JSON.stringify({ password: 'not-reached' }))).status).toBe(429);
+
+    const oversized = await authenticate('203.0.113.33', JSON.stringify({ password: '密'.repeat(86) }));
+    expect(oversized.status).toBe(401);
+    expect((await authenticate('203.0.113.33', JSON.stringify({ password: 'not-reached' }))).status).toBe(429);
+    expect(verificationCalls).toBe(0);
+  });
+
   it('returns metadata for a private file without exposing its storage identity', async () => {
     const { fileId } = await nativeTree();
     const { token } = await createShare(fileId, { allowDownload: true });
@@ -72,13 +144,13 @@ describe('public share routes', () => {
     expect(await blocked.json()).toMatchObject({ error: { code: 'SHARE_PASSWORD_REQUIRED' } });
 
     const wrong = await SELF.fetch(`${origin}/s/${token}/auth`, {
-      method: 'POST', headers: { origin, 'content-type': 'application/json' }, body: JSON.stringify({ password: 'wrong-password' }),
+      method: 'POST', headers: { 'CF-Connecting-IP': '203.0.113.40', origin, 'content-type': 'application/json' }, body: JSON.stringify({ password: 'wrong-password' }),
     });
     expect(wrong.status).toBe(401);
     expect(await wrong.json()).toMatchObject({ error: { code: 'SHARE_PASSWORD_INVALID' } });
 
     const unlocked = await SELF.fetch(`${origin}/s/${token}/auth`, {
-      method: 'POST', headers: { origin, 'content-type': 'application/json' }, body: JSON.stringify({ password: 'share-password' }),
+      method: 'POST', headers: { 'CF-Connecting-IP': '203.0.113.41', origin, 'content-type': 'application/json' }, body: JSON.stringify({ password: 'share-password' }),
     });
     expect(unlocked.status).toBe(200);
     const setCookie = unlocked.headers.get('set-cookie')!;

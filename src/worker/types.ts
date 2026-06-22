@@ -7,6 +7,7 @@ export interface Env {
   CREDENTIAL_MASTER_KEY: string;
   SESSION_SECRET: string;
   SESSION_TTL_SECONDS?: string;
+  AUTH_RATE_LIMIT_TEST_CLIENT_IP?: string;
   MICROSOFT_CLIENT_ID: string;
   MICROSOFT_CLIENT_SECRET: string;
   GOOGLE_CLIENT_ID: string;

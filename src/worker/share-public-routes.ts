@@ -1,4 +1,10 @@
 import { sha256Hex, verifyPassword } from './auth';
+import {
+  assertAuthAllowed,
+  clearAuthFailures,
+  recordAuthFailure,
+  type AuthRateLimitPolicy,
+} from './auth-rate-limit';
 import { HttpError, ok, readJson, requireSameOriginWhenPresent } from './http';
 import {
   createShareAuthorization,
@@ -10,6 +16,12 @@ import { downloadSharedFile, listSharedFolder, resolveSharedItem } from './share
 import type { Env, Share } from './types';
 
 const SHARE_AUTH_TTL_SECONDS = 60 * 60;
+const MAX_PASSWORD_BYTES = 256;
+
+export interface SharePublicRouteOptions {
+  now?: () => number;
+  verifyPassword?: typeof verifyPassword;
+}
 
 function methodNotAllowed(): Response {
   return new Response(null, { status: 405 });
@@ -43,16 +55,35 @@ async function requirePasswordAuthorization(env: Env, request: Request, share: S
   }
 }
 
-async function authenticate(request: Request, env: Env, share: Share, token: string): Promise<Response> {
+async function authenticate(
+  request: Request,
+  env: Env,
+  share: Share,
+  token: string,
+  options: SharePublicRouteOptions = {},
+): Promise<Response> {
   if (request.method !== 'POST') return methodNotAllowed();
   requireSameOriginWhenPresent(request);
-  const body = await readJson<{ password?: unknown }>(request);
-  if (typeof body.password !== 'string' || share.passwordHash === null) {
+  const policy: AuthRateLimitPolicy = { maxFailures: 10, windowSeconds: 60, now: options.now };
+  const rateLimit = await assertAuthAllowed(env, request, 'share-password', share.id, policy);
+  let body: { password?: unknown };
+  try {
+    body = await readJson<{ password?: unknown }>(request);
+  } catch {
+    await recordAuthFailure(rateLimit);
     throw new HttpError(401, 'SHARE_PASSWORD_INVALID', 'Share password is invalid');
   }
-  if (!await verifyPassword(body.password, share.passwordHash)) {
+  if (typeof body.password !== 'string'
+    || new TextEncoder().encode(body.password).byteLength > MAX_PASSWORD_BYTES
+    || share.passwordHash === null) {
+    await recordAuthFailure(rateLimit);
     throw new HttpError(401, 'SHARE_PASSWORD_INVALID', 'Share password is invalid');
   }
+  if (!await (options.verifyPassword ?? verifyPassword)(body.password, share.passwordHash)) {
+    await recordAuthFailure(rateLimit);
+    throw new HttpError(401, 'SHARE_PASSWORD_INVALID', 'Share password is invalid');
+  }
+  await clearAuthFailures(rateLimit);
   const now = Math.floor(Date.now() / 1000);
   const expiresAt = Math.min(now + SHARE_AUTH_TTL_SECONDS, share.expiresAt ?? Number.MAX_SAFE_INTEGER);
   const authorization = await createShareAuthorization(env, share.id, expiresAt);
@@ -77,7 +108,12 @@ function normalizePublicError(error: unknown): never {
   throw new HttpError(503, 'SHARE_PROVIDER_UNAVAILABLE', 'Shared storage is unavailable');
 }
 
-export async function handleSharePublicRoutes(request: Request, env: Env, url: URL): Promise<Response | null> {
+export async function handleSharePublicRoutes(
+  request: Request,
+  env: Env,
+  url: URL,
+  options: SharePublicRouteOptions = {},
+): Promise<Response | null> {
   const match = /^\/s\/([^/]+)(\/.*)?$/.exec(url.pathname);
   if (!match) return null;
   const token = decodePathValue(match[1]);
@@ -85,7 +121,7 @@ export async function handleSharePublicRoutes(request: Request, env: Env, url: U
   if (suffix === '' || suffix === '/') return null;
 
   const share = await activeShare(env, token);
-  if (suffix === '/auth') return authenticate(request, env, share, token);
+  if (suffix === '/auth') return authenticate(request, env, share, token, options);
   await requirePasswordAuthorization(env, request, share, token);
 
   try {
