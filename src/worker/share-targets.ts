@@ -1,4 +1,4 @@
-import { getEntryById, listChildRows } from './db';
+import { getEntryById, listAncestorRows, listChildRows } from './db';
 import { createDriver, driverRegistry } from './drivers/registry';
 import type { DriverRegistry, StorageDriver, StorageItem } from './drivers/types';
 import { decodeExternalId } from './external-identity';
@@ -65,7 +65,7 @@ function sharedCapabilities(item: StorageItem, allowDownload: boolean): EntryCap
 
 async function sharedEntry(env: Env, share: Share, item: StorageItem, root = false): Promise<Entry> {
   return {
-    id: await sealShareItem(env, share.id, item.id),
+    id: await sealShareItem(env, share.id, share.providerItemId, item.id),
     parentId: null,
     name: root ? share.name : item.name,
     kind: item.kind,
@@ -150,14 +150,22 @@ export async function resolveSharedItem(
   registry: DriverRegistry = driverRegistry,
 ): Promise<ResolvedSharedItem> {
   const mount = await requireMount(env, share.mountId);
-  const itemId = handle ? await openShareItem(env, share.id, handle) : share.providerItemId;
+  const opened = handle
+    ? await openShareItem(env, share.id, handle)
+    : { rootItemId: share.providerItemId, itemId: share.providerItemId };
+  if (opened.rootItemId !== null && opened.rootItemId !== share.providerItemId) throw targetMissing();
+  const itemId = opened.itemId;
   if (mount.driverType === 'native-r2') {
-    const row = await getEntryById(env.DB, itemId);
-    if (!row || row.status !== 'ready') throw targetMissing();
+    const ancestors = await listAncestorRows(env.DB, itemId);
+    const row = ancestors[0] ?? null;
+    const rootIndex = ancestors.findIndex((candidate) => candidate.id === share.providerItemId);
+    const livePath = rootIndex >= 0 && ancestors.slice(0, rootIndex + 1).every((candidate) => candidate.status === 'ready');
+    if (!row || !livePath) throw targetMissing();
     const item = nativeItem(row);
     return { mount, driver: null, item, nativeRow: row, entry: await sharedEntry(env, share, item, item.id === share.providerItemId) };
   }
   const driver = await externalDriver(env, mount, registry);
+  if (!await driver.isWithin(itemId, share.providerItemId)) throw targetMissing();
   const item = await statExternal(driver, itemId);
   return { mount, driver, item, nativeRow: null, entry: await sharedEntry(env, share, item, item.id === share.providerItemId) };
 }

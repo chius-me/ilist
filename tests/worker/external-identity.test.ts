@@ -55,6 +55,7 @@ describe('external entry identity', () => {
       rootId: 'root',
       capabilities: new Set(['download']),
       list: vi.fn(),
+      isWithin: vi.fn(),
       stat: vi.fn(),
       getDownload: vi.fn(),
       createFolder: vi.fn(),

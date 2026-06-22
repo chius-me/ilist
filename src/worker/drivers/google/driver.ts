@@ -145,6 +145,10 @@ export class GoogleDriveDriver implements StorageDriver {
     return itemId === this.rootId ? { ...mapped, id: this.rootId, parentId: null } : mapped;
   }
 
+  async isWithin(itemId: string, ancestorId: string): Promise<boolean> {
+    return this.isWithinAncestor(itemId, ancestorId);
+  }
+
   async getDownload(itemId: string, request: Request): Promise<DownloadResult> {
     const item = await this.client.stat(itemId);
     await this.assertInScope(itemId, item);
@@ -242,17 +246,44 @@ export class GoogleDriveDriver implements StorageDriver {
   }
 
   private async assertInScope(itemId: string, knownItem?: GoogleFile): Promise<void> {
-    if (this.rootId === 'root' || itemId === this.rootId) return;
-    let item = knownItem ?? await this.client.stat(itemId);
-    const visited = new Set([itemId]);
+    if (await this.isWithinAncestor(itemId, this.rootId, knownItem)) return;
+    throw new HttpError(404, 'STORAGE_ITEM_NOT_FOUND', 'Google Drive item was not found');
+  }
+
+  private async isWithinAncestor(itemId: string, ancestorId: string, knownItem?: GoogleFile): Promise<boolean> {
+    let ancestor: GoogleFile;
+    try {
+      ancestor = itemId === ancestorId && knownItem ? knownItem : await this.client.stat(ancestorId);
+    } catch (error) {
+      if (error instanceof HttpError && error.status === 404) return false;
+      throw error;
+    }
+    const canonicalAncestorId = ancestor.id;
+    if (itemId === ancestorId || knownItem?.id === canonicalAncestorId) return true;
+
+    let item: GoogleFile;
+    try {
+      item = knownItem ?? await this.client.stat(itemId);
+    } catch (error) {
+      if (error instanceof HttpError && error.status === 404) return false;
+      throw error;
+    }
+    if (item.id === canonicalAncestorId) return true;
+    const visited = new Set([item.id]);
     for (let depth = 0; depth < 256; depth += 1) {
       const parentId = item.parents?.[0];
-      if (parentId === this.rootId) return;
-      if (!parentId || visited.has(parentId)) break;
+      if (parentId === canonicalAncestorId) return true;
+      if (!parentId || visited.has(parentId)) return false;
       visited.add(parentId);
-      item = await this.client.stat(parentId);
+      try {
+        item = await this.client.stat(parentId);
+      } catch (error) {
+        if (error instanceof HttpError && error.status === 404) return false;
+        throw error;
+      }
+      if (item.id === canonicalAncestorId) return true;
     }
-    throw new HttpError(404, 'STORAGE_ITEM_NOT_FOUND', 'Google Drive item was not found');
+    return false;
   }
 }
 

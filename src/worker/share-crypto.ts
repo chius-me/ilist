@@ -15,7 +15,9 @@ function base64UrlToBytes(value: string): Uint8Array {
   if (!/^[A-Za-z0-9_-]+$/.test(value)) throw invalidHandle();
   const normalized = value.replace(/-/g, '+').replace(/_/g, '/');
   const binary = atob(normalized.padEnd(Math.ceil(normalized.length / 4) * 4, '='));
-  return Uint8Array.from(binary, (character) => character.charCodeAt(0));
+  const bytes = Uint8Array.from(binary, (character) => character.charCodeAt(0));
+  if (bytesToBase64Url(bytes) !== value) throw invalidHandle();
+  return bytes;
 }
 
 function invalidHandle(): HttpError {
@@ -35,20 +37,25 @@ export function createShareToken(): { token: string; tokenHash: Promise<string> 
   return { token, tokenHash: sha256Hex(token) };
 }
 
-export async function sealShareItem(env: Env, shareId: string, itemId: string): Promise<string> {
+export interface OpenedShareItem {
+  rootItemId: string | null;
+  itemId: string;
+}
+
+export async function sealShareItem(env: Env, shareId: string, rootItemId: string, itemId: string): Promise<string> {
   const iv = crypto.getRandomValues(new Uint8Array(12));
   const ciphertext = await crypto.subtle.encrypt(
     { name: 'AES-GCM', iv, additionalData: encoder.encode(shareId) },
     await itemKey(env),
-    encoder.encode(JSON.stringify({ v: 1, itemId })),
+    encoder.encode(JSON.stringify({ v: 2, rootItemId, itemId })),
   );
-  return `v1.${bytesToBase64Url(iv)}.${bytesToBase64Url(new Uint8Array(ciphertext))}`;
+  return `v2.${bytesToBase64Url(iv)}.${bytesToBase64Url(new Uint8Array(ciphertext))}`;
 }
 
-export async function openShareItem(env: Env, shareId: string, handle: string): Promise<string> {
+export async function openShareItem(env: Env, shareId: string, handle: string): Promise<OpenedShareItem> {
   try {
     const [version, ivValue, ciphertextValue, extra] = handle.split('.');
-    if (version !== 'v1' || !ivValue || !ciphertextValue || extra !== undefined) throw invalidHandle();
+    if ((version !== 'v1' && version !== 'v2') || !ivValue || !ciphertextValue || extra !== undefined) throw invalidHandle();
     const iv = base64UrlToBytes(ivValue);
     if (iv.byteLength !== 12) throw invalidHandle();
     const plaintext = await crypto.subtle.decrypt(
@@ -57,8 +64,12 @@ export async function openShareItem(env: Env, shareId: string, handle: string): 
       base64UrlToBytes(ciphertextValue),
     );
     const payload = JSON.parse(decoder.decode(plaintext)) as Record<string, unknown>;
-    if (payload.v !== 1 || typeof payload.itemId !== 'string' || !payload.itemId) throw invalidHandle();
-    return payload.itemId;
+    if (typeof payload.itemId !== 'string' || !payload.itemId) throw invalidHandle();
+    if (version === 'v1' && payload.v === 1) return { rootItemId: null, itemId: payload.itemId };
+    if (version === 'v2' && payload.v === 2 && typeof payload.rootItemId === 'string' && payload.rootItemId) {
+      return { rootItemId: payload.rootItemId, itemId: payload.itemId };
+    }
+    throw invalidHandle();
   } catch (error) {
     if (error instanceof HttpError && error.code === 'SHARE_ITEM_INVALID') throw error;
     throw invalidHandle();

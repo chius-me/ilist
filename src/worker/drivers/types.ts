@@ -83,6 +83,7 @@ export interface StorageDriver {
   readonly resumableUpload?: ResumableUploadAdapter;
   list(parentId: string, cursor?: string): Promise<ListResult>;
   stat(itemId: string): Promise<StorageItem>;
+  isWithin(itemId: string, ancestorId: string): Promise<boolean>;
   getDownload(itemId: string, request: Request): Promise<DownloadResult>;
   createFolder(parentId: string, name: string): Promise<StorageItem>;
   upload(parentId: string, name: string, body: ReadableStream, contentType: string | null): Promise<StorageItem>;
