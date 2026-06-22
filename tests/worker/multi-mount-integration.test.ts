@@ -267,6 +267,52 @@ describe('multi-mount filesystem integration', () => {
     await expect(response.text()).resolves.toBe('');
   });
 
+  it.each([
+    ['s3', 'cloudflare-r2'],
+    ['google', 'google'],
+  ] as const)('secures streamed %s downloads at the file route', async (driverType, provider) => {
+    const db = (env as unknown as Env).DB;
+    await db.prepare("DELETE FROM mounts WHERE id <> 'native-r2'").run();
+    await createMount(db, {
+      name: `${driverType} streamed`, mountPath: '/streamed', driverType, provider,
+    });
+    const driver = fakeDriver(driverType);
+    driver.getDownload = vi.fn(async () => ({
+      kind: 'stream' as const,
+      response: new Response('provider-body', {
+        status: 206,
+        headers: {
+          'accept-ranges': 'bytes',
+          'content-range': 'bytes 0-12/20',
+          'content-length': '13',
+          'content-type': 'text/html',
+          'content-disposition': 'inline; filename=provider.html',
+          'set-cookie': 'provider=secret',
+          'x-provider-debug': 'private',
+        },
+      }),
+    }));
+    if (driverType === 's3') driverRegistry.s3 = () => driver;
+    else driverRegistry.google = () => driver;
+
+    const listed = await SELF.fetch(`${origin}/api/fs/list?path=/streamed/Docs`);
+    const entry = (await listed.json() as { data: { items: Array<{ id: string }> } }).data.items[0];
+    const response = await SELF.fetch(`${origin}/file/${entry.id}/provider.txt`, {
+      headers: { range: 'bytes=0-12' },
+    });
+
+    expect(response.status).toBe(206);
+    expect(response.headers.get('content-range')).toBe('bytes 0-12/20');
+    expect(response.headers.get('content-length')).toBe('13');
+    expect(response.headers.get('content-type')).toBe('application/octet-stream');
+    expect(response.headers.get('content-disposition')).toMatch(/^attachment;/);
+    expect(response.headers.get('content-security-policy')).toBe("sandbox; default-src 'none'; frame-ancestors 'none'");
+    expect(response.headers.get('x-content-type-options')).toBe('nosniff');
+    expect(response.headers.get('set-cookie')).toBeNull();
+    expect(response.headers.get('x-provider-debug')).toBeNull();
+    await expect(response.text()).resolves.toBe('provider-body');
+  });
+
   it('routes S3-compatible browsing and CRUD through the same mounted filesystem API', async () => {
     const db = (env as unknown as Env).DB;
     await db.prepare("DELETE FROM mounts WHERE id <> 'native-r2'").run();

@@ -18,6 +18,35 @@ describe('preview', () => {
     expect(previewKind({ ...base, name: 'archive.zip', contentType: 'application/zip' })).toBe('fallback');
   });
 
+  it.each([
+    ['IMAGE/JPEG; charset=binary', 'image'],
+    ['video/mp4; codecs="avc1.64001f"', 'video'],
+    ['Audio/Ogg; codecs=opus', 'audio'],
+  ] as const)('normalizes parameterized MIME %s before preview classification', (contentType, kind) => {
+    expect(previewKind({ ...base, name: 'media.bin', contentType })).toBe(kind);
+  });
+
+  it.each([
+    ['video/mp4', 'video'],
+    ['video/webm', 'video'],
+    ['audio/mpeg', 'audio'],
+    ['audio/ogg', 'audio'],
+    ['audio/wav', 'audio'],
+  ] as const)('allows Worker-inline media MIME %s', (contentType, kind) => {
+    expect(previewKind({ ...base, name: 'media.bin', contentType })).toBe(kind);
+  });
+
+  it.each([
+    'image/svg+xml',
+    'image/bmp',
+    'video/quicktime',
+    'video/x-matroska',
+    'audio/flac',
+    'audio/aac',
+  ])('rejects media MIME outside the Worker inline allowlist: %s', (contentType) => {
+    expect(previewKind({ ...base, name: 'media.bin', contentType })).toBe('fallback');
+  });
+
   it('renders an image and closes through the supplied history action', () => {
     const onClose = vi.fn();
     render(<PreviewOverlay entry={base} onClose={onClose} />);
