@@ -140,7 +140,8 @@ describe('entries schema', () => {
   it('stores only privacy-safe authentication rate-limit state', async () => {
     const columns = await db().prepare('PRAGMA table_info(auth_rate_limits)').all<{ name: string }>();
     expect(columns.results?.map((column) => column.name)).toEqual([
-      'key_hash', 'scope', 'window_started_at', 'failure_count', 'blocked_until', 'updated_at',
+      'key_hash', 'scope', 'window_started_at', 'failure_count', 'blocked_until',
+      'reservation_token', 'reservation_expires_at', 'updated_at',
     ]);
     const indexes = await db().prepare('PRAGMA index_list(auth_rate_limits)').all<{ name: string }>();
     expect(indexes.results?.map((index) => index.name)).toContain('idx_auth_rate_limits_updated_at');

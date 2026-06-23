@@ -66,7 +66,7 @@ describe('authentication rate limiter', () => {
     await expect(assertAuthAllowed(workerEnv(), req, 'admin-login', 'admin', policy)).resolves.toBeDefined();
   });
 
-  it('ignores X-Forwarded-For and requires an explicit local fallback when Cloudflare IP is absent', async () => {
+  it('ignores X-Forwarded-For and only permits explicit test dependency injection without a Cloudflare IP', async () => {
     let now = 3_000;
     const policy: AuthRateLimitPolicy = { maxFailures: 5, windowSeconds: 60, now: () => now };
     const first = await assertAuthAllowed(
@@ -81,12 +81,11 @@ describe('authentication rate limiter', () => {
       workerEnv(), request('203.0.113.7', '198.51.100.1'), 'admin-login', 'admin', policy,
     )).resolves.toBeDefined();
 
-    const productionLikeEnv = { ...workerEnv(), AUTH_RATE_LIMIT_TEST_CLIENT_IP: undefined };
     await expect(assertAuthAllowed(
-      productionLikeEnv, request(undefined, '198.51.100.1'), 'admin-login', 'admin', policy,
+      workerEnv(), request(undefined, '198.51.100.1'), 'admin-login', 'admin', policy,
     )).rejects.toMatchObject({ status: 500, code: 'AUTH_CLIENT_IP_UNAVAILABLE' });
     await expect(assertAuthAllowed(
-      workerEnv(), request(), 'admin-login', 'admin', policy,
+      workerEnv(), request(), 'admin-login', 'admin', { ...policy, clientIp: '127.0.0.1' },
     )).resolves.toBeDefined();
     now += 1;
   });
@@ -95,17 +94,63 @@ describe('authentication rate limiter', () => {
     const policy: AuthRateLimitPolicy = { maxFailures: 5, windowSeconds: 60, now: () => 4_000 };
     const req = request('203.0.113.8');
     const context = await assertAuthAllowed(workerEnv(), req, 'admin-login', 'admin', policy);
-    await recordAuthFailure(context);
-    await clearAuthFailures(context);
+    await expect(clearAuthFailures(context)).resolves.toBe(true);
     await expect(assertAuthAllowed(workerEnv(), req, 'admin-login', 'admin', policy)).resolves.toBeDefined();
+  });
+
+  it('atomically grants at most one verification reservation for concurrent attempts', async () => {
+    const policy: AuthRateLimitPolicy = {
+      maxFailures: 5,
+      windowSeconds: 60,
+      now: () => 5_000,
+      clientIp: '203.0.113.9',
+    };
+    const attempts = await Promise.allSettled(Array.from({ length: 12 }, () => assertAuthAllowed(
+      workerEnv(), request(), 'admin-login', 'admin', policy,
+    )));
+    const granted = attempts.filter((result) => result.status === 'fulfilled');
+    const rejected = attempts.filter((result) => result.status === 'rejected');
+
+    expect(granted).toHaveLength(1);
+    expect(rejected).toHaveLength(11);
+    for (const result of rejected) {
+      expect((result as PromiseRejectedResult).reason).toMatchObject({
+        status: 429,
+        code: 'AUTH_RATE_LIMITED',
+        details: { retryAfter: 30 },
+      });
+    }
+    await clearAuthFailures((granted[0] as PromiseFulfilledResult<Awaited<ReturnType<typeof assertAuthAllowed>>>).value);
+  });
+
+  it('recovers expired leases without allowing stale requests to clear or convert a newer reservation', async () => {
+    let now = 6_000;
+    const policy: AuthRateLimitPolicy = {
+      maxFailures: 5,
+      windowSeconds: 60,
+      now: () => now,
+      clientIp: '203.0.113.10',
+    };
+    const stale = await assertAuthAllowed(workerEnv(), request(), 'admin-login', 'admin', policy);
+    now += 31;
+    const current = await assertAuthAllowed(workerEnv(), request(), 'admin-login', 'admin', policy);
+
+    await expect(clearAuthFailures(stale)).resolves.toBe(false);
+    await expect(assertAuthAllowed(workerEnv(), request(), 'admin-login', 'admin', policy))
+      .rejects.toMatchObject({ status: 429, details: { retryAfter: 30 } });
+    await expect(recordAuthFailure(stale)).resolves.toBe(0);
+    await expect(recordAuthFailure(current)).resolves.toBe(1);
+    await expect(assertAuthAllowed(workerEnv(), request(), 'admin-login', 'admin', policy))
+      .rejects.toMatchObject({ status: 429, details: { retryAfter: 1 } });
   });
 
   it('bounds opportunistic cleanup and leaves recent records intact', async () => {
     const db = workerEnv().DB;
     for (const [key, updatedAt] of [['a', 10], ['b', 20], ['c', 30], ['recent', 100]] as const) {
       await db.prepare(`INSERT INTO auth_rate_limits (
-        key_hash, scope, window_started_at, failure_count, blocked_until, updated_at
-      ) VALUES (?, 'admin-login', ?, 1, ?, ?)`).bind(key, updatedAt, updatedAt, updatedAt).run();
+        key_hash, scope, window_started_at, failure_count, blocked_until,
+        reservation_token, reservation_expires_at, updated_at
+      ) VALUES (?, 'admin-login', ?, 1, ?, NULL, 0, ?)`).bind(key, updatedAt, updatedAt, updatedAt).run();
     }
 
     await expect(deleteAuthRateLimitsBefore(db, 50, 2)).resolves.toBe(2);

@@ -109,6 +109,7 @@ export interface RouteRequestOptions {
   legacyObjectMutationReservation?: LegacyObjectMutationReservationTiming;
   passwordAuthentication?: {
     now?: () => number;
+    clientIp?: string;
     verifyPassword?: typeof verifyPassword;
   };
 }
@@ -326,6 +327,7 @@ async function handleLogin(request: Request, env: Env, options: RouteRequestOpti
     maxFailures: 5,
     windowSeconds: 60,
     now: options.passwordAuthentication?.now,
+    clientIp: options.passwordAuthentication?.clientIp,
   };
   const rateLimit = await assertAuthAllowed(env, request, 'admin-login', username, policy);
   const passwordMatches = await (options.passwordAuthentication?.verifyPassword ?? verifyPassword)(
@@ -338,7 +340,9 @@ async function handleLogin(request: Request, env: Env, options: RouteRequestOpti
     throw new HttpError(401, 'Invalid username or password');
   }
 
-  await clearAuthFailures(rateLimit);
+  if (!await clearAuthFailures(rateLimit)) {
+    throw new HttpError(429, 'AUTH_RATE_LIMITED', 'Too many authentication attempts', { retryAfter: 1 });
+  }
   await cleanupExpiredSessions(env);
   const now = Math.floor((options.passwordAuthentication?.now?.() ?? Date.now() / 1000));
   await deleteAuthRateLimitsBefore(env.DB, now - 24 * 60 * 60, 100);

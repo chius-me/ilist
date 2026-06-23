@@ -11,7 +11,7 @@ function workerEnv(): Env {
 async function login(): Promise<string> {
   const response = await SELF.fetch(`${origin}/api/admin/login`, {
     method: 'POST',
-    headers: { origin, 'content-type': 'application/json' },
+    headers: { 'CF-Connecting-IP': '127.0.0.1', origin, 'content-type': 'application/json' },
     body: JSON.stringify({ username: 'admin', password: 'test-password' }),
   });
   expect(response.status).toBe(200);
