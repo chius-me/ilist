@@ -1,4 +1,11 @@
-import { sha256Hex, verifyPassword } from './auth';
+import {
+  hashPassword,
+  sha256Hex,
+  verifyPassword,
+  verifyPasswordDetailed,
+  type PasswordVerification,
+} from './auth';
+import { PASSWORD_MAX_UTF8_BYTES } from '../../scripts/lib/password-policy.mjs';
 import {
   assertAuthAllowed,
   clearAuthFailures,
@@ -11,17 +18,16 @@ import {
   hasShareAuthorization,
   shareAuthorizationCookie,
 } from './share-auth';
-import { getShareByTokenHash } from './share-store';
+import { getShareByTokenHash, upgradeSharePasswordHash } from './share-store';
 import { downloadSharedFile, listSharedFolder, resolveSharedItem } from './share-targets';
 import type { Env, Share } from './types';
 
 const SHARE_AUTH_TTL_SECONDS = 60 * 60;
-const MAX_PASSWORD_BYTES = 256;
-
 export interface SharePublicRouteOptions {
   now?: () => number;
   clientIp?: string;
   verifyPassword?: typeof verifyPassword;
+  verifyPasswordDetailed?: typeof verifyPasswordDetailed;
 }
 
 function methodNotAllowed(): Response {
@@ -80,14 +86,32 @@ async function authenticate(
     throw new HttpError(401, 'SHARE_PASSWORD_INVALID', 'Share password is invalid');
   }
   if (typeof body.password !== 'string'
-    || new TextEncoder().encode(body.password).byteLength > MAX_PASSWORD_BYTES
+    || new TextEncoder().encode(body.password).byteLength > PASSWORD_MAX_UTF8_BYTES
     || share.passwordHash === null) {
     await recordAuthFailure(rateLimit);
     throw new HttpError(401, 'SHARE_PASSWORD_INVALID', 'Share password is invalid');
   }
-  if (!await (options.verifyPassword ?? verifyPassword)(body.password, share.passwordHash)) {
+  let verification: PasswordVerification;
+  if (options.verifyPasswordDetailed) {
+    verification = await options.verifyPasswordDetailed(body.password, share.passwordHash);
+  } else if (options.verifyPassword) {
+    verification = {
+      valid: await options.verifyPassword(body.password, share.passwordHash),
+      needsUpgrade: false,
+    };
+  } else {
+    verification = await verifyPasswordDetailed(body.password, share.passwordHash);
+  }
+  if (!verification.valid) {
     await recordAuthFailure(rateLimit);
     throw new HttpError(401, 'SHARE_PASSWORD_INVALID', 'Share password is invalid');
+  }
+  if (verification.needsUpgrade) {
+    const upgraded = await hashPassword(body.password);
+    if (!await upgradeSharePasswordHash(env.DB, share.id, share.passwordHash, upgraded)) {
+      await clearAuthFailures(rateLimit);
+      throw new HttpError(401, 'SHARE_PASSWORD_INVALID', 'Share password is invalid');
+    }
   }
   if (!await clearAuthFailures(rateLimit)) {
     throw new HttpError(429, 'AUTH_RATE_LIMITED', 'Too many authentication attempts', { retryAfter: 1 });

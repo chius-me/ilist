@@ -92,9 +92,16 @@ The Worker acts as the control plane and streams or redirects file data where po
 5. **Generate the administrator password hash and random keys.**
 
    ```bash
-   npm run hash-password -- "choose-a-strong-password" # ADMIN_PASSWORD_HASH
-   openssl rand -base64 32                              # CREDENTIAL_MASTER_KEY
-   openssl rand -hex 32                                 # SESSION_SECRET
+   npm run hash-password   # ADMIN_PASSWORD_HASH; enter the password at the prompt
+   openssl rand -base64 32 # CREDENTIAL_MASTER_KEY
+   openssl rand -hex 32    # SESSION_SECRET
+   ```
+
+   New hashes use `pbkdf2-sha256:600000`. Legacy `pbkdf2` hashes remain valid for this release, but an administrator hash is a Cloudflare Secret and cannot be upgraded automatically. After a successful legacy login, rotate it with these exact commands:
+
+   ```bash
+   npm run hash-password
+   npx wrangler secret put ADMIN_PASSWORD_HASH
    ```
 
 6. **Store all eight required Worker secrets.** Use the generated values and the provider application values with `npx wrangler secret put`:
@@ -192,7 +199,7 @@ Fill in test-only values before starting Wrangler. It normally serves the applic
 | `npm run test` | Run all tests |
 | `npm run check` | Type-check, build, and run all tests |
 | `npm run deploy` | Build and deploy with Wrangler |
-| `npm run hash-password -- "..."` | Generate an administrator password hash |
+| `npm run hash-password` | Prompt for and generate an administrator password hash |
 | `npm run migrate:objects -- --local` | Import legacy object rows into the entry model locally |
 | `npm run migrate:objects -- --remote` | Import legacy object rows in production |
 

@@ -96,6 +96,23 @@ export async function updateShareRecord(
   return getShareById(db, id);
 }
 
+export async function upgradeSharePasswordHash(
+  db: D1Database,
+  id: string,
+  currentHash: string,
+  upgradedHash: string,
+): Promise<boolean> {
+  const result = await db.prepare(`UPDATE shares
+    SET password_hash = ?, updated_at = ?
+    WHERE id = ? AND password_hash = ?`).bind(
+    upgradedHash,
+    new Date().toISOString(),
+    id,
+    currentHash,
+  ).run();
+  return (result.meta.changes ?? 0) === 1;
+}
+
 export async function deleteShareRecord(db: D1Database, id: string): Promise<boolean> {
   const result = await db.prepare('DELETE FROM shares WHERE id = ?').bind(id).run();
   return (result.meta.changes ?? 0) > 0;

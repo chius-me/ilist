@@ -1,5 +1,13 @@
 import { HttpError } from './http';
 import type { AdminUser, Env } from './types';
+import {
+  formatPasswordHash,
+  parsePasswordHash,
+  passwordFitsPolicy,
+  PBKDF2_SHA256_ITERATIONS,
+  PASSWORD_HASH_BYTES,
+  PASSWORD_SALT_BYTES,
+} from '../../scripts/lib/password-policy.mjs';
 
 const COOKIE_NAME = 'ilist_session';
 const DEFAULT_TTL_SECONDS = 60 * 60 * 24 * 7;
@@ -30,17 +38,17 @@ export async function sha256Hex(value: string): Promise<string> {
 }
 
 export async function hashPassword(password: string): Promise<string> {
-  const iterations = 100000;
-  const salt = crypto.getRandomValues(new Uint8Array(16));
+  if (!passwordFitsPolicy(password)) throw new RangeError('Password exceeds the supported size');
+  const salt = crypto.getRandomValues(new Uint8Array(PASSWORD_SALT_BYTES));
   const keyMaterial = await crypto.subtle.importKey('raw', new TextEncoder().encode(password), 'PBKDF2', false, [
     'deriveBits',
   ]);
   const bits = await crypto.subtle.deriveBits(
-    { name: 'PBKDF2', salt, iterations, hash: 'SHA-256' },
+    { name: 'PBKDF2', salt, iterations: PBKDF2_SHA256_ITERATIONS, hash: 'SHA-256' },
     keyMaterial,
-    256,
+    PASSWORD_HASH_BYTES * 8,
   );
-  return `pbkdf2:${iterations}:${bytesToHex(salt)}:${bytesToHex(bits)}`;
+  return formatPasswordHash(bytesToHex(salt), bytesToHex(bits));
 }
 
 function timingSafeEqualHex(left: string, right: string): boolean {
@@ -52,27 +60,41 @@ function timingSafeEqualHex(left: string, right: string): boolean {
   return result === 0;
 }
 
-export async function verifyPassword(password: string, storedHash: string): Promise<boolean> {
-  const [scheme, iterationsText, saltHex, hashHex] = storedHash.split(':');
-  if (scheme !== 'pbkdf2') throw new HttpError(500, 'Unsupported password hash format');
+export interface PasswordVerification {
+  valid: boolean;
+  needsUpgrade: boolean;
+}
 
-  const iterations = Number(iterationsText);
-  if (!Number.isInteger(iterations) || iterations < 100000) {
-    throw new HttpError(500, 'Invalid password hash parameters');
+const INVALID_PASSWORD_VERIFICATION: PasswordVerification = { valid: false, needsUpgrade: false };
+
+export async function verifyPasswordDetailed(password: string, storedHash: string): Promise<PasswordVerification> {
+  if (!passwordFitsPolicy(password)) return INVALID_PASSWORD_VERIFICATION;
+  const parsed = parsePasswordHash(storedHash);
+  if (!parsed) return INVALID_PASSWORD_VERIFICATION;
+
+  try {
+    const salt = hexToBytes(parsed.saltHex);
+    const keyMaterial = await crypto.subtle.importKey(
+      'raw',
+      new TextEncoder().encode(password),
+      'PBKDF2',
+      false,
+      ['deriveBits'],
+    );
+    const bits = await crypto.subtle.deriveBits(
+      { name: 'PBKDF2', salt, iterations: parsed.iterations, hash: 'SHA-256' },
+      keyMaterial,
+      PASSWORD_HASH_BYTES * 8,
+    );
+    const valid = timingSafeEqualHex(bytesToHex(bits), parsed.hashHex);
+    return { valid, needsUpgrade: valid && parsed.needsUpgrade };
+  } catch {
+    return INVALID_PASSWORD_VERIFICATION;
   }
+}
 
-  const salt = hexToBytes(saltHex);
-  const expectedLength = hashHex.length / 2;
-  const keyMaterial = await crypto.subtle.importKey('raw', new TextEncoder().encode(password), 'PBKDF2', false, [
-    'deriveBits',
-  ]);
-  const bits = await crypto.subtle.deriveBits(
-    { name: 'PBKDF2', salt, iterations, hash: 'SHA-256' },
-    keyMaterial,
-    expectedLength * 8,
-  );
-
-  return timingSafeEqualHex(bytesToHex(bits), hashHex.toLowerCase());
+export async function verifyPassword(password: string, storedHash: string): Promise<boolean> {
+  return (await verifyPasswordDetailed(password, storedHash)).valid;
 }
 
 function getCookie(request: Request, name: string): string | null {

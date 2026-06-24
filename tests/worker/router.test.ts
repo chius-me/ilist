@@ -1,5 +1,5 @@
 import { SELF, env } from 'cloudflare:test';
-import { describe, expect, it } from 'vitest';
+import { describe, expect, it, vi } from 'vitest';
 import { routeRequest } from '../../src/worker/router';
 import type { Env } from '../../src/worker/types';
 
@@ -144,6 +144,30 @@ describe('filesystem API', () => {
     valid = false;
     expect((await attempt()).status).toBe(401);
     expect(verificationCalls).toBe(3);
+  });
+
+  it('warns without secret material after a legacy administrator hash succeeds', async () => {
+    const warning = vi.spyOn(console, 'warn').mockImplementation(() => undefined);
+    const response = await routeRequest(new Request(`${origin}/api/admin/login`, {
+      method: 'POST',
+      headers: {
+        'content-type': 'application/json',
+        origin,
+      },
+      body: JSON.stringify({ username: 'admin', password: 'test-password' }),
+    }), workerEnv(), {
+      passwordAuthentication: {
+        clientIp: '203.0.113.23',
+        verifyPasswordDetailed: async () => ({ valid: true, needsUpgrade: true }),
+      },
+    });
+
+    expect(response.status).toBe(200);
+    expect(warning).toHaveBeenCalledOnce();
+    const message = String(warning.mock.calls[0][0]);
+    expect(message).toContain('rotate');
+    expect(message).not.toContain('test-password');
+    expect(message).not.toContain(workerEnv().ADMIN_PASSWORD_HASH);
   });
 
   it('lists the native R2 mount while stable and legacy file routes still work', async () => {
