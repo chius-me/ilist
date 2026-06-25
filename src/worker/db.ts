@@ -757,6 +757,19 @@ export async function clearAuthRateLimit(db: D1Database, keyHash: string, reserv
   return result.meta.changes === 1;
 }
 
+export async function releaseAuthRateLimitVerification(
+  db: D1Database,
+  keyHash: string,
+  reservationToken: string,
+): Promise<boolean> {
+  const result = await db.prepare(`UPDATE auth_rate_limits
+    SET reservation_token = NULL, reservation_expires_at = 0
+    WHERE key_hash = ? AND reservation_token = ?`)
+    .bind(keyHash, reservationToken)
+    .run();
+  return result.meta.changes === 1;
+}
+
 export async function deleteAuthRateLimitsBefore(
   db: D1Database,
   cutoff: number,

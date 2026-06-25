@@ -1,6 +1,6 @@
 import { pbkdf2Sync, randomBytes } from 'node:crypto';
 import { stdin, stdout, stderr, exit } from 'node:process';
-import { createInterface } from 'node:readline/promises';
+import { readPasswordInput } from './lib/password-input.mjs';
 import {
   formatPasswordHash,
   passwordFitsPolicy,
@@ -10,10 +10,18 @@ import {
   PASSWORD_SALT_BYTES,
 } from './lib/password-policy.mjs';
 
-const rl = createInterface({ input: stdin, output: stderr });
+if (process.argv.length > 2) {
+  stderr.write('Password arguments are not accepted; use the interactive prompt or standard input.\n');
+  exit(1);
+}
 
-const password = process.argv[2] || await rl.question('Admin password: ');
-rl.close();
+let password;
+try {
+  password = await readPasswordInput(stdin, stderr);
+} catch (error) {
+  stderr.write(`${error instanceof Error ? error.message : 'Unable to read password input.'}\n`);
+  exit(1);
+}
 
 if (!password || password.length < 8 || !passwordFitsPolicy(password)) {
   stderr.write(`Password must be at least 8 characters and at most ${PASSWORD_MAX_UTF8_BYTES} UTF-8 bytes.\n`);

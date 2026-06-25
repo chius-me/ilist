@@ -206,6 +206,68 @@ describe('public share routes', () => {
     expect(unchanged?.password_hash).toBe(LEGACY_SHARE_PASSWORD_HASH);
   });
 
+  it('releases the verification lease when a legacy share rehash throws', async () => {
+    const { fileId } = await nativeTree();
+    const { token, id } = await createShare(fileId, { password: 'temporary-password' });
+    await workerEnv().DB.prepare('UPDATE shares SET password_hash = ? WHERE id = ?')
+      .bind(LEGACY_SHARE_PASSWORD_HASH, id).run();
+    const request = () => new Request(`${origin}/s/${token}/auth`, {
+      method: 'POST',
+      headers: { origin, 'content-type': 'application/json' },
+      body: JSON.stringify({ password: 'share-password' }),
+    });
+
+    const failed = await routeRequest(request(), workerEnv(), {
+      passwordAuthentication: {
+        clientIp: '203.0.113.44',
+        verifyPasswordDetailed: async () => ({ valid: true, needsUpgrade: true }),
+        hashPassword: async () => { throw new Error('crypto unavailable'); },
+      },
+    });
+    expect(failed.status).toBe(500);
+
+    const retry = await routeRequest(request(), workerEnv(), {
+      passwordAuthentication: {
+        clientIp: '203.0.113.44',
+        verifyPassword: async () => false,
+      },
+    });
+    expect(retry.status).toBe(401);
+    const unchanged = await workerEnv().DB.prepare('SELECT password_hash FROM shares WHERE id = ?')
+      .bind(id).first<{ password_hash: string }>();
+    expect(unchanged?.password_hash).toBe(LEGACY_SHARE_PASSWORD_HASH);
+  });
+
+  it('releases the verification lease when the legacy share hash CAS throws', async () => {
+    const { fileId } = await nativeTree();
+    const { token, id } = await createShare(fileId, { password: 'temporary-password' });
+    await workerEnv().DB.prepare('UPDATE shares SET password_hash = ? WHERE id = ?')
+      .bind(LEGACY_SHARE_PASSWORD_HASH, id).run();
+    const request = () => new Request(`${origin}/s/${token}/auth`, {
+      method: 'POST',
+      headers: { origin, 'content-type': 'application/json' },
+      body: JSON.stringify({ password: 'share-password' }),
+    });
+
+    const failed = await routeRequest(request(), workerEnv(), {
+      passwordAuthentication: {
+        clientIp: '203.0.113.45',
+        verifyPasswordDetailed: async () => ({ valid: true, needsUpgrade: true }),
+        hashPassword: async () => 'pbkdf2-sha256:600000:00112233445566778899aabbccddeeff:'.concat('00'.repeat(32)),
+        upgradeSharePasswordHash: async () => { throw new Error('D1 unavailable'); },
+      },
+    });
+    expect(failed.status).toBe(500);
+
+    const retry = await routeRequest(request(), workerEnv(), {
+      passwordAuthentication: {
+        clientIp: '203.0.113.45',
+        verifyPassword: async () => false,
+      },
+    });
+    expect(retry.status).toBe(401);
+  });
+
   it('lists a private folder, previews with Range, and enforces direct download policy', async () => {
     const { folderId } = await nativeTree();
     const { token } = await createShare(folderId, { allowDownload: false });

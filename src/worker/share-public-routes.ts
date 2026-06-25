@@ -10,6 +10,7 @@ import {
   assertAuthAllowed,
   clearAuthFailures,
   recordAuthFailure,
+  releaseAuthReservationSafely,
   type AuthRateLimitPolicy,
 } from './auth-rate-limit';
 import { HttpError, ok, readJson, requireSameOriginWhenPresent } from './http';
@@ -28,6 +29,8 @@ export interface SharePublicRouteOptions {
   clientIp?: string;
   verifyPassword?: typeof verifyPassword;
   verifyPasswordDetailed?: typeof verifyPasswordDetailed;
+  hashPassword?: typeof hashPassword;
+  upgradeSharePasswordHash?: typeof upgradeSharePasswordHash;
 }
 
 function methodNotAllowed(): Response {
@@ -78,50 +81,64 @@ async function authenticate(
     clientIp: options.clientIp,
   };
   const rateLimit = await assertAuthAllowed(env, request, 'share-password', share.id, policy);
-  let body: { password?: unknown };
+  let reservationFinalized = false;
   try {
-    body = await readJson<{ password?: unknown }>(request);
-  } catch {
-    await recordAuthFailure(rateLimit);
-    throw new HttpError(401, 'SHARE_PASSWORD_INVALID', 'Share password is invalid');
-  }
-  if (typeof body.password !== 'string'
-    || new TextEncoder().encode(body.password).byteLength > PASSWORD_MAX_UTF8_BYTES
-    || share.passwordHash === null) {
-    await recordAuthFailure(rateLimit);
-    throw new HttpError(401, 'SHARE_PASSWORD_INVALID', 'Share password is invalid');
-  }
-  let verification: PasswordVerification;
-  if (options.verifyPasswordDetailed) {
-    verification = await options.verifyPasswordDetailed(body.password, share.passwordHash);
-  } else if (options.verifyPassword) {
-    verification = {
-      valid: await options.verifyPassword(body.password, share.passwordHash),
-      needsUpgrade: false,
-    };
-  } else {
-    verification = await verifyPasswordDetailed(body.password, share.passwordHash);
-  }
-  if (!verification.valid) {
-    await recordAuthFailure(rateLimit);
-    throw new HttpError(401, 'SHARE_PASSWORD_INVALID', 'Share password is invalid');
-  }
-  if (verification.needsUpgrade) {
-    const upgraded = await hashPassword(body.password);
-    if (!await upgradeSharePasswordHash(env.DB, share.id, share.passwordHash, upgraded)) {
-      await clearAuthFailures(rateLimit);
+    let body: { password?: unknown };
+    try {
+      body = await readJson<{ password?: unknown }>(request);
+    } catch {
+      await recordAuthFailure(rateLimit);
+      reservationFinalized = true;
       throw new HttpError(401, 'SHARE_PASSWORD_INVALID', 'Share password is invalid');
     }
+    if (typeof body.password !== 'string'
+      || new TextEncoder().encode(body.password).byteLength > PASSWORD_MAX_UTF8_BYTES
+      || share.passwordHash === null) {
+      await recordAuthFailure(rateLimit);
+      reservationFinalized = true;
+      throw new HttpError(401, 'SHARE_PASSWORD_INVALID', 'Share password is invalid');
+    }
+    let verification: PasswordVerification;
+    if (options.verifyPasswordDetailed) {
+      verification = await options.verifyPasswordDetailed(body.password, share.passwordHash);
+    } else if (options.verifyPassword) {
+      verification = {
+        valid: await options.verifyPassword(body.password, share.passwordHash),
+        needsUpgrade: false,
+      };
+    } else {
+      verification = await verifyPasswordDetailed(body.password, share.passwordHash);
+    }
+    if (!verification.valid) {
+      await recordAuthFailure(rateLimit);
+      reservationFinalized = true;
+      throw new HttpError(401, 'SHARE_PASSWORD_INVALID', 'Share password is invalid');
+    }
+    if (verification.needsUpgrade) {
+      const upgraded = await (options.hashPassword ?? hashPassword)(body.password);
+      if (!await (options.upgradeSharePasswordHash ?? upgradeSharePasswordHash)(
+        env.DB,
+        share.id,
+        share.passwordHash,
+        upgraded,
+      )) {
+        throw new HttpError(401, 'SHARE_PASSWORD_INVALID', 'Share password is invalid');
+      }
+    }
+    if (!await clearAuthFailures(rateLimit)) {
+      throw new HttpError(429, 'AUTH_RATE_LIMITED', 'Too many authentication attempts', { retryAfter: 1 });
+    }
+    reservationFinalized = true;
+    const now = Math.floor(Date.now() / 1000);
+    const expiresAt = Math.min(now + SHARE_AUTH_TTL_SECONDS, share.expiresAt ?? Number.MAX_SAFE_INTEGER);
+    const authorization = await createShareAuthorization(env, share.id, expiresAt);
+    return privateNoStore(ok({}, {
+      headers: { 'set-cookie': await shareAuthorizationCookie(request, token, authorization, expiresAt, now) },
+    }));
+  } catch (error) {
+    if (!reservationFinalized) await releaseAuthReservationSafely(rateLimit);
+    throw error;
   }
-  if (!await clearAuthFailures(rateLimit)) {
-    throw new HttpError(429, 'AUTH_RATE_LIMITED', 'Too many authentication attempts', { retryAfter: 1 });
-  }
-  const now = Math.floor(Date.now() / 1000);
-  const expiresAt = Math.min(now + SHARE_AUTH_TTL_SECONDS, share.expiresAt ?? Number.MAX_SAFE_INTEGER);
-  const authorization = await createShareAuthorization(env, share.id, expiresAt);
-  return privateNoStore(ok({}, {
-    headers: { 'set-cookie': await shareAuthorizationCookie(request, token, authorization, expiresAt, now) },
-  }));
 }
 
 function decodePathValue(value: string): string {

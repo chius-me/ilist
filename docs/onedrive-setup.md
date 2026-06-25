@@ -24,7 +24,7 @@ The redirect URI must use the same origin as `PUBLIC_ORIGIN`, including scheme a
 Generate secrets locally and keep the output outside Git:
 
 ```bash
-npm run hash-password -- "your-admin-password"
+npm run hash-password
 openssl rand -base64 32
 openssl rand -hex 32
 ```

@@ -1,10 +1,12 @@
-import { describe, expect, it, vi } from 'vitest';
+import { afterEach, describe, expect, it, vi } from 'vitest';
 import { hashPassword, verifyPassword, verifyPasswordDetailed } from '../../src/worker/auth';
 
 const LEGACY_TEST_PASSWORD_HASH =
   'pbkdf2:100000:59f4c454ba32d9dd29cfb537108c4d0b:c5685e17dd3356159b581df88e6580d8db0379a2dc27479d24862bf6f88b7df7';
 
 describe('password hashing policy', () => {
+  afterEach(() => vi.restoreAllMocks());
+
   it('generates and verifies only the current versioned format', async () => {
     const stored = await hashPassword('test-password');
     const second = await hashPassword('test-password');
@@ -15,6 +17,8 @@ describe('password hashing policy', () => {
       valid: true,
       needsUpgrade: false,
     });
+    await expect(verifyPasswordDetailed('test-password', stored.replace('pbkdf2-sha256:', 'pbkdf2:')))
+      .resolves.toEqual({ valid: true, needsUpgrade: true });
     await expect(verifyPassword('wrong-password', stored)).resolves.toBe(false);
   });
 
@@ -51,4 +55,18 @@ describe('password hashing policy', () => {
     await expect(hashPassword(oversized)).rejects.toThrow(RangeError);
     expect(deriveBits).not.toHaveBeenCalled();
   });
+
+  it.each([600_001, Number.MAX_SAFE_INTEGER])(
+    'rejects excessive legacy iterations before deriveBits: %s',
+    async (iterations) => {
+      const deriveBits = vi.spyOn(crypto.subtle, 'deriveBits');
+      const excessive = LEGACY_TEST_PASSWORD_HASH.replace('pbkdf2:100000:', `pbkdf2:${iterations}:`);
+
+      await expect(verifyPasswordDetailed('test-password', excessive)).resolves.toEqual({
+        valid: false,
+        needsUpgrade: false,
+      });
+      expect(deriveBits).not.toHaveBeenCalled();
+    },
+  );
 });
