@@ -62,6 +62,8 @@ export function MountManager(props: MountManagerProps) {
   const [notice, setNotice] = useState<string | null>(null);
   const [openMenuId, setOpenMenuId] = useState<string | null>(null);
   const [pendingPublication, setPendingPublication] = useState<MountInput | null>(null);
+  const publicationSubmitting = useRef(false);
+  const mountSubmitButton = useRef<HTMLButtonElement>(null);
 
   function selectMountAction(event: MouseEvent<HTMLButtonElement>, action: () => void) {
     const details = event.currentTarget.closest('details');
@@ -85,6 +87,9 @@ export function MountManager(props: MountManagerProps) {
   }, [t]);
 
   useEffect(() => { void refresh(); }, [refresh]);
+  useEffect(() => {
+    if (!busy && error && editing !== undefined && !pendingPublication) mountSubmitButton.current?.focus();
+  }, [busy, editing, error, pendingPublication]);
   useEffect(() => {
     const search = new URL(window.location.href).searchParams;
     const oneDrive = search.get('onedrive');
@@ -118,6 +123,7 @@ export function MountManager(props: MountManagerProps) {
 
   function submitMount(input: MountInput) {
     if (input.isPublic && (!editing || !editing.isPublic)) {
+      publicationSubmitting.current = false;
       setPendingPublication(input);
       return;
     }
@@ -125,10 +131,11 @@ export function MountManager(props: MountManagerProps) {
   }
 
   function confirmPublication() {
-    if (!pendingPublication) return;
+    if (!pendingPublication || publicationSubmitting.current) return;
+    publicationSubmitting.current = true;
     const input = pendingPublication;
     setPendingPublication(null);
-    void save(input);
+    void save(input).finally(() => { publicationSubmitting.current = false; });
   }
 
   async function toggle(mount: Mount) {
@@ -214,8 +221,8 @@ export function MountManager(props: MountManagerProps) {
         </td>
       </tr>)}</tbody>
     </table></div> : null}
-    {editing !== undefined ? <MountDialog mount={editing} active={!pendingPublication} busy={busy} error={error} onClose={() => { setEditing(undefined); setPendingPublication(null); setError(null); }} onSubmit={submitMount} /> : null}
-    {pendingPublication ? <PublishMountDialog busy={busy} onCancel={() => setPendingPublication(null)} onConfirm={() => void confirmPublication()} /> : null}
+    {editing !== undefined ? <MountDialog mount={editing} active={!pendingPublication} busy={busy} error={error} submitButtonRef={mountSubmitButton} onClose={() => { setEditing(undefined); setPendingPublication(null); setError(null); }} onSubmit={submitMount} /> : null}
+    {pendingPublication ? <PublishMountDialog busy={busy} restoreFocus={mountSubmitButton.current} onCancel={() => setPendingPublication(null)} onConfirm={() => void confirmPublication()} /> : null}
     {deleting ? <MountConfirmation label={t('mount.deleteDialogTitle')} message={t('mount.deleteDialogMessage', { name: deleting.name })} confirmLabel={t('mount.deleteConfirm')} busy={busy} onClose={() => setDeleting(null)} onConfirm={() => void confirmDelete()} /> : null}
     {disconnecting ? <MountConfirmation label={t(disconnecting.driverType === 'google' ? 'mount.disconnectGoogleDialogTitle' : 'mount.disconnectDialogTitle')} message={t(disconnecting.driverType === 'google' ? 'mount.disconnectGoogleDialogMessage' : 'mount.disconnectDialogMessage', { name: disconnecting.name })} confirmLabel={t('mount.disconnectConfirm')} busy={busy} onClose={() => setDisconnecting(null)} onConfirm={() => void confirmDisconnect()} /> : null}
   </main>;

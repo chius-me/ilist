@@ -103,6 +103,26 @@ describe('mount administration API', () => {
     expect((await response.json() as { data: { isPublic: boolean } }).data.isPublic).toBe(false);
   });
 
+  it.each([
+    ['OneDrive', 'onedrive', 'microsoft-onedrive-personal'],
+    ['native R2', 'native-r2', 'cloudflare-r2'],
+  ] as const)('creates %s mounts as private when the HTTP request omits isPublic', async (name, driverType, provider) => {
+    const response = await adminFetch('/api/admin/mounts', {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({
+        name,
+        mountPath: `/${driverType}`,
+        driverType,
+        provider,
+        config: {},
+      }),
+    });
+
+    expect(response.status).toBe(200);
+    expect((await response.json() as { data: { isPublic: boolean } }).data.isPublic).toBe(false);
+  });
+
   it('creates, reports, and disconnects an independently authorized Google mount', async () => {
     const created = await adminFetch('/api/admin/mounts', {
       method: 'POST',
@@ -117,8 +137,8 @@ describe('mount administration API', () => {
       }),
     });
     expect(created.status).toBe(200);
-    const mount = (await created.json() as { data: { id: string; connected: boolean; rootItemId: string } }).data;
-    expect(mount).toMatchObject({ connected: false, rootItemId: 'folder-root-id' });
+    const mount = (await created.json() as { data: { id: string; connected: boolean; rootItemId: string; isPublic: boolean } }).data;
+    expect(mount).toMatchObject({ connected: false, rootItemId: 'folder-root-id', isPublic: false });
 
     await putCredentials(workerEnv(), mount.id, {
       accessToken: 'access', refreshToken: 'refresh', expiresAt: Date.now() + 60_000,

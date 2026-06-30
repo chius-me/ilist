@@ -1,5 +1,5 @@
 import { X } from 'lucide-react';
-import { useEffect, useMemo, useRef, useState, type FormEvent } from 'react';
+import { useEffect, useMemo, useRef, useState, type FormEvent, type RefObject } from 'react';
 import { useI18n } from '../../i18n/I18nProvider';
 import { useModalFocus } from '../../hooks/useModalFocus';
 import type { Mount, MountInput, S3MountConfig } from '../../types/mounts';
@@ -11,6 +11,7 @@ interface Props {
   error: string | null;
   onClose: () => void;
   onSubmit: (input: MountInput) => Promise<void> | void;
+  submitButtonRef?: RefObject<HTMLButtonElement | null>;
 }
 
 function stringConfig(mount: Mount | null, key: keyof S3MountConfig, fallback = ''): string {
@@ -29,11 +30,15 @@ function initialStorageType(mount: Mount | null): StorageType {
   return 's3';
 }
 
-export function MountDialog({ mount, active = true, busy, error, onClose, onSubmit }: Props) {
+export function MountDialog({ mount, active = true, busy, error, onClose, onSubmit, submitButtonRef }: Props) {
   const { t } = useI18n();
   const nameInput = useRef<HTMLInputElement>(null);
   const backdrop = useRef<HTMLDivElement>(null);
-  useModalFocus({ active, containerRef: backdrop, initialFocusRef: nameInput, onClose });
+  const activated = useRef(false);
+  useModalFocus({ active, containerRef: backdrop, initialFocusRef: nameInput, onClose, focusInitial: !activated.current });
+  useEffect(() => {
+    if (active) activated.current = true;
+  }, [active]);
   const initialEndpoint = stringConfig(mount, 'endpoint');
   const [storageType, setStorageType] = useState<StorageType>(initialStorageType(mount));
   const [name, setName] = useState(mount?.name ?? '');
@@ -103,7 +108,7 @@ export function MountDialog({ mount, active = true, busy, error, onClose, onSubm
         </div>
         <div className="mountSwitches"><label><input type="checkbox" checked={enabled} onChange={(event) => setEnabled(event.target.checked)} />{t('common.enabled')}</label><label><input type="checkbox" checked={isPublic} onChange={(event) => setIsPublic(event.target.checked)} />{t('mount.visibleToGuests')}</label></div>
         {error ? <div className="formError" role="alert">{error}</div> : null}
-        <footer><button className="button" type="button" onClick={onClose}>{t('action.cancel')}</button><button className="button primary" type="submit" disabled={busy}>{mount ? t('mount.saveChanges') : storageType !== 's3' ? t('mount.createAndConnect') : t('mount.createMount')}</button></footer>
+        <footer><button className="button" type="button" onClick={onClose}>{t('action.cancel')}</button><button ref={submitButtonRef} className="button primary" type="submit" disabled={busy}>{mount ? t('mount.saveChanges') : storageType !== 's3' ? t('mount.createAndConnect') : t('mount.createMount')}</button></footer>
       </form>
     </section>
   </div>;

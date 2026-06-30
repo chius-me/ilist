@@ -254,6 +254,15 @@ test('creates a Google Drive mount and enters its OAuth flow', async ({ page }) 
 
 test('storage management publishes a new mount only after confirmation', async ({ page }) => {
   await installApiFixtures(page, { admin: true });
+  await page.route('**/api/admin/mounts', async (route) => {
+    if (route.request().method() !== 'POST') return route.fallback();
+    await new Promise((resolve) => setTimeout(resolve, 250));
+    return route.fulfill({
+      status: 201,
+      contentType: 'application/json',
+      body: JSON.stringify({ ok: true, data: { id: 'published-e2e' } }),
+    });
+  });
   let createRequests = 0;
   page.on('request', (request) => {
     if (new URL(request.url()).pathname === '/api/admin/mounts' && request.method() === 'POST') createRequests += 1;
@@ -273,9 +282,13 @@ test('storage management publishes a new mount only after confirmation', async (
 
   const confirmation = page.getByRole('dialog', { name: 'Publish storage mount' });
   await expect(confirmation).toBeVisible();
+  await expect(confirmation).toHaveAttribute('aria-describedby', 'publish-mount-dialog-description');
   await expect(page.getByRole('button', { name: 'Cancel' })).toBeFocused();
   expect(createRequests).toBe(0);
-  await page.getByRole('button', { name: 'Publish mount' }).click();
+  await page.getByRole('button', { name: 'Publish mount' }).evaluate((button) => {
+    (button as HTMLButtonElement).click();
+    (button as HTMLButtonElement).click();
+  });
   await expect.poll(() => createRequests).toBe(1);
 });
 
