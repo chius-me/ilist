@@ -4,6 +4,7 @@ import { createMount, disconnectMount, googleDriveConnectUrl, listMounts, oneDri
 import { useI18n } from '../../i18n/I18nProvider';
 import type { Mount, MountInput } from '../../types/mounts';
 import { MountDialog } from './MountDialog';
+import { PublishMountDialog } from './PublishMountDialog';
 import { useModalFocus } from '../../hooks/useModalFocus';
 import { localizedApiError } from '../../i18n/apiErrors';
 
@@ -60,6 +61,7 @@ export function MountManager(props: MountManagerProps) {
   const [busy, setBusy] = useState(false);
   const [notice, setNotice] = useState<string | null>(null);
   const [openMenuId, setOpenMenuId] = useState<string | null>(null);
+  const [pendingPublication, setPendingPublication] = useState<MountInput | null>(null);
 
   function selectMountAction(event: MouseEvent<HTMLButtonElement>, action: () => void) {
     const details = event.currentTarget.closest('details');
@@ -112,6 +114,21 @@ export function MountManager(props: MountManagerProps) {
     } finally {
       setBusy(false);
     }
+  }
+
+  function submitMount(input: MountInput) {
+    if (input.isPublic && (!editing || !editing.isPublic)) {
+      setPendingPublication(input);
+      return;
+    }
+    void save(input);
+  }
+
+  function confirmPublication() {
+    if (!pendingPublication) return;
+    const input = pendingPublication;
+    setPendingPublication(null);
+    void save(input);
   }
 
   async function toggle(mount: Mount) {
@@ -197,7 +214,8 @@ export function MountManager(props: MountManagerProps) {
         </td>
       </tr>)}</tbody>
     </table></div> : null}
-    {editing !== undefined ? <MountDialog mount={editing} busy={busy} error={error} onClose={() => { setEditing(undefined); setError(null); }} onSubmit={save} /> : null}
+    {editing !== undefined ? <MountDialog mount={editing} active={!pendingPublication} busy={busy} error={error} onClose={() => { setEditing(undefined); setPendingPublication(null); setError(null); }} onSubmit={submitMount} /> : null}
+    {pendingPublication ? <PublishMountDialog busy={busy} onCancel={() => setPendingPublication(null)} onConfirm={() => void confirmPublication()} /> : null}
     {deleting ? <MountConfirmation label={t('mount.deleteDialogTitle')} message={t('mount.deleteDialogMessage', { name: deleting.name })} confirmLabel={t('mount.deleteConfirm')} busy={busy} onClose={() => setDeleting(null)} onConfirm={() => void confirmDelete()} /> : null}
     {disconnecting ? <MountConfirmation label={t(disconnecting.driverType === 'google' ? 'mount.disconnectGoogleDialogTitle' : 'mount.disconnectDialogTitle')} message={t(disconnecting.driverType === 'google' ? 'mount.disconnectGoogleDialogMessage' : 'mount.disconnectDialogMessage', { name: disconnecting.name })} confirmLabel={t('mount.disconnectConfirm')} busy={busy} onClose={() => setDisconnecting(null)} onConfirm={() => void confirmDisconnect()} /> : null}
   </main>;

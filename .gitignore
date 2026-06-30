@@ -2,8 +2,10 @@ node_modules/
 dist/
 test-results/
 .wrangler/
-.dev.vars
-.env
+.dev.vars*
+.env*
+!.dev.vars.example
+!.env.example
 *.local
 src/worker/env.d.ts
 .superpowers/

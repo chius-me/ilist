@@ -57,7 +57,7 @@ describe('mounts', () => {
       mountPath: '/Photos',
       driverType: 's3',
       enabled: true,
-      isPublic: true,
+      isPublic: false,
       sortOrder: 0,
       config: { bucket: 'photos' },
     });
@@ -72,6 +72,25 @@ describe('mounts', () => {
     });
     await expect(getMount(db(), first.id)).resolves.toMatchObject({ id: first.id, name: 'Images' });
     await expect(updateMount(db(), 'missing', { enabled: false })).resolves.toBeNull();
+  });
+
+  it('defaults an omitted publication setting to private without changing explicit values', async () => {
+    const privateMount = await createMount(db(), {
+      name: 'Private by default',
+      mountPath: '/private-default',
+      driverType: 's3',
+      provider: 'cloudflare-r2',
+    });
+    const publicMount = await createMount(db(), {
+      name: 'Explicit public',
+      mountPath: '/explicit-public',
+      driverType: 's3',
+      provider: 'cloudflare-r2',
+      isPublic: true,
+    });
+
+    expect(privateMount.isPublic).toBe(false);
+    expect(publicMount.isPublic).toBe(true);
   });
 
   it('deletes mount configuration without touching any provider', async () => {

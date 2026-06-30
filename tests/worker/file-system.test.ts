@@ -31,6 +31,7 @@ describe('virtual mount file system', () => {
       mountPath: '/unavailable-public',
       driverType: 's3',
       provider: 'custom',
+      isPublic: true,
       sortOrder: 20,
     });
     await createMount(db(), {
@@ -39,6 +40,7 @@ describe('virtual mount file system', () => {
       driverType: 's3',
       provider: 'custom',
       enabled: false,
+      isPublic: true,
       sortOrder: 30,
     });
     const failingFactory = vi.fn(async () => {

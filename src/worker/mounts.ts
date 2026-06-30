@@ -171,7 +171,7 @@ export async function createMount(db: D1Database, input: CreateMountInput): Prom
         input.driverType,
         provider,
         input.enabled === false ? 0 : 1,
-        input.isPublic === false ? 0 : 1,
+        input.isPublic === true ? 1 : 0,
         sortOrder,
         input.rootItemId ?? null,
         serializeConfig(input.config),
