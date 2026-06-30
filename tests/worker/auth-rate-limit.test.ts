@@ -2,6 +2,7 @@ import { env } from 'cloudflare:test';
 import { describe, expect, it } from 'vitest';
 import {
   assertAuthAllowed,
+  assertAuthAllowedAll,
   clearAuthFailures,
   recordAuthFailure,
   releaseAuthReservation,
@@ -122,6 +123,28 @@ describe('authentication rate limiter', () => {
       });
     }
     await clearAuthFailures((granted[0] as PromiseFulfilledResult<Awaited<ReturnType<typeof assertAuthAllowed>>>).value);
+  });
+
+  it('releases an earlier lease when a later lease cannot be acquired', async () => {
+    const policy: AuthRateLimitPolicy = {
+      maxFailures: 5,
+      windowSeconds: 60,
+      now: () => 5_500,
+      clientIp: '203.0.113.10',
+    };
+    const req = request();
+    const usernameLease = await assertAuthAllowed(workerEnv(), req, 'admin-login', 'admin', policy);
+
+    await expect(assertAuthAllowedAll(workerEnv(), req, [
+      { scope: 'admin-login-ip', subject: 'all-usernames', policy },
+      { scope: 'admin-login', subject: 'admin', policy },
+    ])).rejects.toMatchObject({ status: 429, code: 'AUTH_RATE_LIMITED' });
+
+    const totalLease = await assertAuthAllowed(
+      workerEnv(), req, 'admin-login-ip', 'all-usernames', policy,
+    );
+    await expect(releaseAuthReservation(totalLease)).resolves.toBe(true);
+    await expect(releaseAuthReservation(usernameLease)).resolves.toBe(true);
   });
 
   it('recovers expired leases without allowing stale requests to clear or convert a newer reservation', async () => {

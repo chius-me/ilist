@@ -9,10 +9,10 @@ import {
   verifyPasswordDetailed,
 } from './auth';
 import {
-  assertAuthAllowed,
-  clearAuthFailures,
-  recordAuthFailure,
-  releaseAuthReservationSafely,
+  assertAuthAllowedAll,
+  clearAuthFailureContexts,
+  recordAuthFailures,
+  releaseAuthReservationsSafely,
   type AuthRateLimitPolicy,
 } from './auth-rate-limit';
 import {
@@ -334,7 +334,12 @@ async function handleLogin(request: Request, env: Env, options: RouteRequestOpti
     now: options.passwordAuthentication?.now,
     clientIp: options.passwordAuthentication?.clientIp,
   };
-  const rateLimit = await assertAuthAllowed(env, request, 'admin-login', username, policy);
+  // The total-IP lease is first for every login, preventing arbitrary usernames
+  // from multiplying expensive PBKDF2 work while retaining the user-specific key.
+  const rateLimits = await assertAuthAllowedAll(env, request, [
+    { scope: 'admin-login-ip', subject: 'all-usernames', policy },
+    { scope: 'admin-login', subject: username, policy },
+  ]);
   let reservationFinalized = false;
   try {
     const verification = options.passwordAuthentication?.verifyPasswordDetailed
@@ -347,12 +352,12 @@ async function handleLogin(request: Request, env: Env, options: RouteRequestOpti
         : await verifyPasswordDetailed(password, env.ADMIN_PASSWORD_HASH);
 
     if (username !== expectedUsername || !verification.valid) {
-      await recordAuthFailure(rateLimit);
+      await recordAuthFailures(rateLimits);
       reservationFinalized = true;
       throw new HttpError(401, 'Invalid username or password');
     }
 
-    if (!await clearAuthFailures(rateLimit)) {
+    if (!await clearAuthFailureContexts(rateLimits)) {
       throw new HttpError(429, 'AUTH_RATE_LIMITED', 'Too many authentication attempts', { retryAfter: 1 });
     }
     reservationFinalized = true;
@@ -368,7 +373,7 @@ async function handleLogin(request: Request, env: Env, options: RouteRequestOpti
       { headers: { 'set-cookie': sessionCookie(request, session.token, session.expiresAt) } },
     );
   } catch (error) {
-    if (!reservationFinalized) await releaseAuthReservationSafely(rateLimit);
+    if (!reservationFinalized) await releaseAuthReservationsSafely(rateLimits);
     throw error;
   }
 }

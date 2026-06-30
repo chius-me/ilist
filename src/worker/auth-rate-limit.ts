@@ -27,6 +27,12 @@ export interface AuthRateLimitContext {
   readonly policy: AuthRateLimitPolicy;
 }
 
+export interface AuthRateLimitAttempt {
+  readonly scope: string;
+  readonly subject: string;
+  readonly policy: AuthRateLimitPolicy;
+}
+
 function bytesToHex(bytes: ArrayBuffer): string {
   return [...new Uint8Array(bytes)].map((byte) => byte.toString(16).padStart(2, '0')).join('');
 }
@@ -110,6 +116,29 @@ export async function assertAuthAllowed(
   throw rateLimited(Math.max(1, retryAt - now));
 }
 
+/**
+ * Acquires related verification leases in one stable order. Each reservation is
+ * independent, so a failed later acquisition must release earlier leases.
+ */
+export async function assertAuthAllowedAll(
+  env: Env,
+  request: Request,
+  attempts: readonly AuthRateLimitAttempt[],
+): Promise<AuthRateLimitContext[]> {
+  if (attempts.length === 0) throw new Error('At least one authentication rate-limit attempt is required');
+
+  const contexts: AuthRateLimitContext[] = [];
+  try {
+    for (const attempt of attempts) {
+      contexts.push(await assertAuthAllowed(env, request, attempt.scope, attempt.subject, attempt.policy));
+    }
+    return contexts;
+  } catch (error) {
+    await Promise.all(contexts.map((context) => releaseAuthReservationSafely(context)));
+    throw error;
+  }
+}
+
 export async function recordAuthFailure(context: AuthRateLimitContext): Promise<number> {
   const now = nowSeconds(context.policy);
   return recordAuthRateLimitFailure(
@@ -137,4 +166,30 @@ export async function releaseAuthReservationSafely(context: AuthRateLimitContext
   } catch {
     // Preserve the original authentication error if cleanup storage is unavailable.
   }
+}
+
+export async function recordAuthFailures(contexts: readonly AuthRateLimitContext[]): Promise<void> {
+  let index = 0;
+  try {
+    for (; index < contexts.length; index += 1) await recordAuthFailure(contexts[index]);
+  } catch (error) {
+    await Promise.all(contexts.slice(index).map((context) => releaseAuthReservationSafely(context)));
+    throw error;
+  }
+}
+
+export async function clearAuthFailureContexts(contexts: readonly AuthRateLimitContext[]): Promise<boolean> {
+  let index = 0;
+  try {
+    for (; index < contexts.length; index += 1) {
+      if (!await clearAuthFailures(contexts[index])) return false;
+    }
+    return true;
+  } finally {
+    await Promise.all(contexts.slice(index).map((context) => releaseAuthReservationSafely(context)));
+  }
+}
+
+export async function releaseAuthReservationsSafely(contexts: readonly AuthRateLimitContext[]): Promise<void> {
+  await Promise.all(contexts.map((context) => releaseAuthReservationSafely(context)));
 }
