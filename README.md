@@ -6,7 +6,7 @@
 
 Self-hosted file index and manager for Cloudflare Workers.
 
-[![Release](https://img.shields.io/badge/release-v0.1.6-2ea44f?logo=github)](https://github.com/chius-me/ilist/releases/tag/v0.1.6)
+[![Release](https://img.shields.io/badge/release-v0.1.7-2ea44f?logo=github)](https://github.com/chius-me/ilist/releases/tag/v0.1.7)
 [![License](https://img.shields.io/badge/license-GPL--3.0--only-blue)](https://github.com/chius-me/ilist/blob/main/LICENSE)
 ![Cloudflare Workers](https://img.shields.io/badge/Cloudflare-Workers-f38020?logo=cloudflare&logoColor=white)
 ![TypeScript](https://img.shields.io/badge/TypeScript-5.8-3178c6?logo=typescript&logoColor=white)
@@ -14,7 +14,7 @@ Self-hosted file index and manager for Cloudflare Workers.
 
 </div>
 
-> [v0.1.6](https://github.com/chius-me/ilist/releases/tag/v0.1.6) adds independently authorized Google My Drive mounts, Workspace exports, and resumable uploads. Review [Limitations](#limitations) and back up D1 before upgrading.
+> [v0.1.7](https://github.com/chius-me/ilist/releases/tag/v0.1.7) hardens same-origin file delivery, share-root checks, password authentication, and mount publication defaults. Read the [release guide](docs/releases/v0.1.7.md) before upgrading.
 
 ## Features
 
@@ -83,7 +83,7 @@ The Worker acts as the control plane and streams or redirects file data where po
    npx wrangler r2 bucket create ilist-files
    ```
 
-4. **Configure `wrangler.jsonc` and apply D1 migrations.** Copy the D1 `database_id` returned by Wrangler into `wrangler.jsonc`, confirm the database and bucket names, then run:
+4. **Configure `wrangler.jsonc`, the custom domain, and D1 migrations.** Copy the D1 `database_id` returned by Wrangler into `wrangler.jsonc`, confirm the database and bucket names, and keep the configured `ilist.chius.cc` custom-domain route only when that hostname is in your Cloudflare zone. Then run:
 
    ```bash
    npx wrangler d1 migrations apply ilist-db --remote
@@ -119,7 +119,7 @@ The Worker acts as the control plane and streams or redirects file data where po
    npx wrangler secret put PUBLIC_ORIGIN
    ```
 
-   `PUBLIC_ORIGIN` must be the exact deployed HTTPS origin without a trailing slash, for example `https://ilist.example.com`.
+   The canonical production value is `https://ilist.chius.cc`. `PUBLIC_ORIGIN` must exactly match the deployed HTTPS origin and have no trailing slash.
 
 7. **Run `npm run check` and `npm run deploy`.**
 
@@ -134,9 +134,9 @@ The Worker acts as the control plane and streams or redirects file data where po
 
 Open `/admin/storages` after signing in. Each mount has its own display name, top-level mount path, provider and encrypted credentials, public or private visibility, enabled state, and optional provider root. Deleting or disconnecting a mount removes only ilist configuration and credentials; it does not delete the provider account, bucket, drive, or stored objects.
 
-For OneDrive Personal, follow [docs/onedrive-setup.md](docs/onedrive-setup.md). Use a Microsoft Entra application configured for personal Microsoft accounts only, with the Web redirect URI `https://YOUR_ILIST_ORIGIN/api/admin/oauth/onedrive/callback` and delegated Graph permissions `User.Read` and `Files.ReadWrite`.
+For OneDrive Personal, follow [docs/onedrive-setup.md](docs/onedrive-setup.md). Use a Microsoft Entra application configured for personal Microsoft accounts only, with the Web redirect URI `https://ilist.chius.cc/api/admin/oauth/onedrive/callback` and delegated Graph permissions `User.Read` and `Files.ReadWrite`. Retain the existing `https://ilist.chius.workers.dev/api/admin/oauth/onedrive/callback` URI until the custom-domain authorization flow is verified.
 
-For Google Drive, follow [docs/google-drive-setup.md](docs/google-drive-setup.md). Enable Google Drive API, create a Web OAuth client with redirect URI `https://YOUR_ILIST_ORIGIN/api/admin/oauth/google/callback`, and configure `GOOGLE_CLIENT_ID` and `GOOGLE_CLIENT_SECRET`. ilist requests `https://www.googleapis.com/auth/drive`; keep a development consent screen in testing with explicit test users, or complete Google's production verification requirements before serving other users.
+For Google Drive, follow [docs/google-drive-setup.md](docs/google-drive-setup.md). Enable Google Drive API, create a Web OAuth client with redirect URI `https://ilist.chius.cc/api/admin/oauth/google/callback`, and configure `GOOGLE_CLIENT_ID` and `GOOGLE_CLIENT_SECRET`. Retain the existing `https://ilist.chius.workers.dev/api/admin/oauth/google/callback` URI until the custom-domain authorization flow is verified. ilist requests `https://www.googleapis.com/auth/drive`; keep a development consent screen in testing with explicit test users, or complete Google's production verification requirements before serving other users.
 
 For Cloudflare R2 through S3, use:
 
@@ -161,7 +161,7 @@ Use a bucket-scoped R2 API token with only the permissions ilist requires.
 - The built-in `R2` Worker binding remains compatible with existing deployments but does not implement resumable upload; use an S3-configured R2 mount for multipart uploads.
 - Configure an incomplete multipart upload lifecycle rule on S3-compatible buckets so abandoned provider uploads are removed if Worker cleanup cannot reach them.
 
-OneDrive resumable upload uses the same delegated `Files.ReadWrite` permission documented above. Google Drive uses the full Drive OAuth scope documented above. Apply all D1 migrations, including `0012_upload_sessions.sql`, `0013_upload_terminal_leases.sql`, and `0014_shares.sql`, before deploying v0.1.6.
+OneDrive resumable upload uses the same delegated `Files.ReadWrite` permission documented above. Google Drive uses the full Drive OAuth scope documented above. Apply all D1 migrations, including `0012_upload_sessions.sql`, `0013_upload_terminal_leases.sql`, `0014_shares.sql`, `0015_auth_rate_limits.sql`, and `0016_mounts_private_default.sql`, before deploying v0.1.7.
 
 ## Controlled Shares
 
@@ -215,6 +215,10 @@ Fill in test-only values before starting Wrangler. It normally serves the applic
 - Private mounts rely on ilist authorization; review Cloudflare logs, Access policies, and caching rules for your deployment.
 - Share links are bearer credentials. Send them through an appropriate private channel and add a password for sensitive targets.
 - Existing share URLs cannot be recovered from D1; create a replacement share if the original URL is lost.
+- Same-origin HTML, SVG, XML, PDF, and unknown file types are sent as attachments with a sandboxed file response policy. Only a narrow, exact image/audio/video MIME allowlist is previewed inline.
+- New mounts are private by default. Publishing a mount requires explicit administrator confirmation because unauthenticated visitors can browse it.
+- Share item handles are checked against the live share root on every access. Moving an item outside the shared folder revokes its old handle immediately.
+- Failed administrator and share-password attempts are rate-limited before PBKDF2 verification. Do not put a caching rule in front of share responses.
 
 ## Limitations
 
