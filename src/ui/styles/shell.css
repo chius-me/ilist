@@ -4,8 +4,8 @@
   position: relative;
   z-index: var(--layer-header);
   height: 56px;
-  border-bottom: 1px solid var(--color-border);
-  background: var(--color-surface);
+  border-bottom: 0;
+  background: transparent;
 }
 
 .headerInner {
