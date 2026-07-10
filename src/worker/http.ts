@@ -1,10 +1,18 @@
 export class HttpError extends Error {
-  status: number;
+  public readonly code: string;
+  public readonly details: unknown;
 
-  constructor(status: number, message: string) {
-    super(message);
+  constructor(
+    public readonly status: number,
+    codeOrMessage: string,
+    message?: string,
+    details?: unknown,
+  ) {
+    const legacyCall = message === undefined;
+    super(legacyCall ? codeOrMessage : message);
     this.name = 'HttpError';
-    this.status = status;
+    this.code = legacyCall ? `HTTP_${status}` : codeOrMessage;
+    this.details = details;
   }
 }
 
@@ -18,8 +26,27 @@ export function ok(data: unknown = {}, init: ResponseInit = {}): Response {
   return json({ ok: true, data }, init);
 }
 
-export function fail(status: number, message: string): Response {
-  return json({ ok: false, error: { message } }, { status });
+export function fail(status: number, codeOrMessage: string, message?: string, details?: unknown): Response {
+  const legacyCall = message === undefined;
+  return json(
+    {
+      ok: false,
+      error: {
+        code: legacyCall ? `HTTP_${status}` : codeOrMessage,
+        message: legacyCall ? codeOrMessage : message,
+        ...(details === undefined ? {} : { details }),
+      },
+    },
+    { status },
+  );
+}
+
+export function requireSameOrigin(request: Request): void {
+  const expected = new URL(request.url).origin;
+  const actual = request.headers.get('origin');
+  if (actual !== expected) {
+    throw new HttpError(403, 'ORIGIN_NOT_ALLOWED', 'Request origin is not allowed');
+  }
 }
 
 export async function readJson<T>(request: Request): Promise<T> {
