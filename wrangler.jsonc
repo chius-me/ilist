@@ -1,0 +1,36 @@
+{
+  "$schema": "./node_modules/wrangler/config-schema.json",
+  "name": "ilist",
+  "main": "src/worker/index.ts",
+  "compatibility_date": "2026-07-03",
+  "assets": {
+    "directory": "./dist",
+    "binding": "ASSETS",
+    "not_found_handling": "single-page-application",
+    "run_worker_first": ["/api/*", "/file/*"]
+  },
+  "vars": {
+    "ADMIN_USERNAME": "admin",
+    "SESSION_TTL_SECONDS": "604800"
+  },
+  "secrets": {
+    "required": ["ADMIN_PASSWORD_HASH", "SESSION_SECRET"]
+  },
+  "r2_buckets": [
+    {
+      "binding": "R2_BUCKET",
+      "bucket_name": "ilist-files"
+    }
+  ],
+  "d1_databases": [
+    {
+      "binding": "DB",
+      "database_name": "ilist-db",
+      "database_id": "67579b31-8e64-4442-af87-b92d024860d0",
+      "migrations_dir": "migrations"
+    }
+  ],
+  "observability": {
+    "enabled": true
+  }
+}
