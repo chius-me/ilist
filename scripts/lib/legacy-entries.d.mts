@@ -28,5 +28,13 @@ export interface LegacyEntry {
   updated_at: string;
 }
 
+export interface ExistingEntry {
+  id: string;
+  parent_id: string | null;
+  name: string;
+  storage_key: string | null;
+}
+
 export function buildLegacyEntries(rows: LegacyObjectRow[]): LegacyEntry[];
-export function entriesToSql(entries: LegacyEntry[]): string;
+export function assertExistingEntries(entries: LegacyEntry[], existingEntries: ExistingEntry[]): void;
+export function entriesToSql(entries: LegacyEntry[], migrationToken?: string): string;

@@ -9,6 +9,7 @@ import {
 import {
   deleteObjectIndex,
   getObject,
+  isLegacyObjectMigrationLocked,
   listTree,
   normalizePrefix,
   normalizeStoredKey,
@@ -38,6 +39,12 @@ const JSON_HEADERS = {
 
 function methodNotAllowed(): Response {
   return fail(405, 'Method not allowed');
+}
+
+async function requireLegacyObjectMutationsUnlocked(env: Env): Promise<void> {
+  if (await isLegacyObjectMigrationLocked(env.DB)) {
+    throw new HttpError(503, 'Legacy object migration is in progress');
+  }
 }
 
 async function cleanupExpiredSessions(env: Env): Promise<void> {
@@ -111,6 +118,7 @@ async function handleAdmin(request: Request, env: Env, url: URL): Promise<Respon
     const key = keyFromPath(url.pathname, '/api/admin/objects/');
 
     if (request.method === 'PUT') {
+      await requireLegacyObjectMutationsUnlocked(env);
       const object = await putObject(env, key, request);
       const contentType = request.headers.get('content-type') || object.httpMetadata?.contentType || null;
       const row = await upsertObject(env.DB, {
@@ -123,12 +131,14 @@ async function handleAdmin(request: Request, env: Env, url: URL): Promise<Respon
     }
 
     if (request.method === 'DELETE') {
+      await requireLegacyObjectMutationsUnlocked(env);
       await env.R2_BUCKET.delete(key);
       await deleteObjectIndex(env.DB, key);
       return noContent();
     }
 
     if (request.method === 'PATCH') {
+      await requireLegacyObjectMutationsUnlocked(env);
       const body = await readJson<PatchObjectBody>(request);
       const row = await patchObject(env.DB, key, {
         name: typeof body.name === 'string' ? body.name : undefined,
