@@ -177,7 +177,7 @@ export function assertExistingEntries(entries, existingEntries) {
 }
 
 export function entriesToSql(entries, migrationToken = 'legacy-object-migration') {
-  const statements = ['BEGIN IMMEDIATE;'];
+  const statements = [];
   const markers = [];
   for (const entry of entries) {
     const marker = markerKey(entry, migrationToken);
@@ -191,6 +191,5 @@ export function entriesToSql(entries, migrationToken = 'legacy-object-migration'
   for (const marker of markers) {
     statements.push(`DELETE FROM settings WHERE key = ${sqlValue(marker)};`);
   }
-  statements.push('COMMIT;');
   return statements.join('\n');
 }
