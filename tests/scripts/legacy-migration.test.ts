@@ -1,7 +1,25 @@
 import { describe, expect, it } from 'vitest';
 import { assertExistingEntries, buildLegacyEntries, entriesToSql } from '../../scripts/lib/legacy-entries.mjs';
+import {
+  LOCAL_MIGRATION_LEASE_DURATION_MS,
+  REMOTE_MIGRATION_LEASE_DURATION_MS,
+  migrationLeaseDuration,
+  migrationLeaseValue,
+} from '../../scripts/lib/legacy-migration-lease.mjs';
 
 describe('legacy object migration', () => {
+  it('uses an owner-bound remote lease that covers a complete remote import', () => {
+    const now = 1_000;
+
+    expect(migrationLeaseDuration('--local')).toBe(LOCAL_MIGRATION_LEASE_DURATION_MS);
+    expect(migrationLeaseDuration('--remote')).toBe(REMOTE_MIGRATION_LEASE_DURATION_MS);
+    expect(REMOTE_MIGRATION_LEASE_DURATION_MS).toBeGreaterThan(LOCAL_MIGRATION_LEASE_DURATION_MS);
+    expect(JSON.parse(migrationLeaseValue('migration-owner', now, '--remote'))).toEqual({
+      owner: 'migration-owner',
+      expires_at: now + REMOTE_MIGRATION_LEASE_DURATION_MS,
+    });
+  });
+
   it('creates each folder once and preserves the physical key', () => {
     const rows = [
       {

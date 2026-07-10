@@ -2,6 +2,7 @@ import type { DirectoryEntry, EntryRow, FileEntry, ObjectRow, TreeResponse } fro
 
 export const LEGACY_OBJECT_MIGRATION_LOCK = 'legacy_object_migration_lock';
 export const LEGACY_OBJECT_MUTATION_RESERVATION_PREFIX = 'legacy_object_mutation_reservation_';
+export const LEGACY_OBJECT_MUTATION_LEASE_DURATION_MS = 15 * 60_000;
 
 export interface LegacyObjectMutationReservation {
   key: string;
@@ -130,6 +131,7 @@ export async function reserveLegacyObjectMutation(
   db: D1Database,
   owner: string = crypto.randomUUID(),
   now = Date.now(),
+  leaseDurationMs = LEGACY_OBJECT_MUTATION_LEASE_DURATION_MS,
 ): Promise<LegacyObjectMutationReservation | null> {
   const reservation = { key: `${LEGACY_OBJECT_MUTATION_RESERVATION_PREFIX}${owner}`, owner };
   const result = await db
@@ -141,7 +143,7 @@ export async function reserveLegacyObjectMutation(
          WHERE key = ? AND ${liveLeaseCondition()} > ?
        )`,
     )
-    .bind(reservation.key, owner, LEGACY_OBJECT_MIGRATION_LOCK, now)
+    .bind(reservation.key, leaseValue(owner, now + leaseDurationMs), LEGACY_OBJECT_MIGRATION_LOCK, now)
     .run();
   return result.meta.changes === 1 ? reservation : null;
 }
@@ -150,13 +152,16 @@ export async function releaseLegacyObjectMutationReservation(
   db: D1Database,
   reservation: LegacyObjectMutationReservation,
 ): Promise<void> {
-  await db.prepare('DELETE FROM settings WHERE key = ? AND value = ?').bind(reservation.key, reservation.owner).run();
+  await db
+    .prepare("DELETE FROM settings WHERE key = ? AND json_valid(value) AND json_extract(value, '$.owner') = ?")
+    .bind(reservation.key, reservation.owner)
+    .run();
 }
 
-export async function countLegacyObjectMutationReservations(db: D1Database): Promise<number> {
+export async function countLegacyObjectMutationReservations(db: D1Database, now = Date.now()): Promise<number> {
   const row = await db
-    .prepare('SELECT COUNT(*) AS count FROM settings WHERE key GLOB ?')
-    .bind(`${LEGACY_OBJECT_MUTATION_RESERVATION_PREFIX}*`)
+    .prepare(`SELECT COUNT(*) AS count FROM settings WHERE key GLOB ? AND ${liveLeaseCondition()} > ?`)
+    .bind(`${LEGACY_OBJECT_MUTATION_RESERVATION_PREFIX}*`, now)
     .first<{ count: number }>();
   return row?.count ?? 0;
 }

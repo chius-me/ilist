@@ -4,10 +4,10 @@ import { mkdtempSync, rmSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { tmpdir } from 'node:os';
 import { assertExistingEntries, buildLegacyEntries, entriesToSql } from './lib/legacy-entries.mjs';
+import { migrationLeaseValue } from './lib/legacy-migration-lease.mjs';
 
 const LOCK_KEY = 'legacy_object_migration_lock';
 const RESERVATION_PREFIX = 'legacy_object_mutation_reservation_';
-const LEASE_DURATION_MS = 300_000;
 const LEASE_RENEWAL_INTERVAL_MS = 60_000;
 const DRAIN_TIMEOUT_MS = 300_000;
 
@@ -38,10 +38,6 @@ function sqlValue(value) {
   return `'${String(value).replaceAll("'", "''")}'`;
 }
 
-function leaseValue(owner, expiresAt) {
-  return JSON.stringify({ owner, expires_at: expiresAt });
-}
-
 function liveLeaseCondition(column = 'value') {
   return `CASE
     WHEN json_valid(${column}) THEN COALESCE(CAST(json_extract(${column}, '$.expires_at') AS INTEGER), 0)
@@ -54,13 +50,13 @@ function changed(command) {
 }
 
 function acquireLease(owner, now = Date.now()) {
-  return changed(`INSERT INTO settings (key, value) VALUES (${sqlValue(LOCK_KEY)}, ${sqlValue(leaseValue(owner, now + LEASE_DURATION_MS))})
+  return changed(`INSERT INTO settings (key, value) VALUES (${sqlValue(LOCK_KEY)}, ${sqlValue(migrationLeaseValue(owner, now, mode))})
     ON CONFLICT(key) DO UPDATE SET value = excluded.value
     WHERE ${liveLeaseCondition('settings.value')} <= ${now}`);
 }
 
 function renewLease(owner, now = Date.now()) {
-  return changed(`UPDATE settings SET value = ${sqlValue(leaseValue(owner, now + LEASE_DURATION_MS))}
+  return changed(`UPDATE settings SET value = ${sqlValue(migrationLeaseValue(owner, now, mode))}
     WHERE key = ${sqlValue(LOCK_KEY)}
       AND json_valid(value)
       AND json_extract(value, '$.owner') = ${sqlValue(owner)}
@@ -74,8 +70,12 @@ function releaseLease(owner) {
       AND json_extract(value, '$.owner') = ${sqlValue(owner)}`);
 }
 
-function reservationCount() {
-  return lastRows(executeJson(`SELECT COUNT(*) AS count FROM settings WHERE key GLOB ${sqlValue(`${RESERVATION_PREFIX}*`)}`))[0]?.count ?? 0;
+function reservationCount(now = Date.now()) {
+  return lastRows(
+    executeJson(`SELECT COUNT(*) AS count FROM settings
+      WHERE key GLOB ${sqlValue(`${RESERVATION_PREFIX}*`)}
+        AND ${liveLeaseCondition()} > ${now}`),
+  )[0]?.count ?? 0;
 }
 
 function wait(ms) {
@@ -111,6 +111,11 @@ function executeImport(file) {
 }
 
 async function importWithLeaseRenewal(file, owner) {
+  if (mode === '--remote') {
+    await executeImport(file);
+    return;
+  }
+
   let renewalFailure;
   let renewing = Promise.resolve();
   const timer = setInterval(() => {

@@ -4,6 +4,7 @@ import { createSession } from '../../src/worker/auth';
 import {
   acquireLegacyObjectMigrationLease,
   countLegacyObjectMutationReservations,
+  LEGACY_OBJECT_MUTATION_LEASE_DURATION_MS,
   releaseLegacyObjectMigrationLease,
   releaseLegacyObjectMutationReservation,
   reserveLegacyObjectMutation,
@@ -20,6 +21,7 @@ describe('legacy object migration lock', () => {
       .prepare("DELETE FROM settings WHERE key = 'legacy_object_migration_lock' OR key LIKE 'legacy_object_mutation_reservation_%'")
       .run();
     await db().prepare("DELETE FROM objects WHERE key = 'locked.txt'").run();
+    await db().prepare("DELETE FROM objects WHERE key = 'triggered.txt'").run();
   });
 
   it('blocks an authenticated legacy PATCH while the migration lock is held', async () => {
@@ -45,17 +47,47 @@ describe('legacy object migration lock', () => {
     await expect(db().prepare("SELECT description FROM objects WHERE key = 'locked.txt'").first()).resolves.toMatchObject({ description: '' });
   });
 
-  it('rejects direct legacy object writes while the migration lock is held', async () => {
-    await db().prepare("INSERT INTO settings (key, value) VALUES ('legacy_object_migration_lock', 'migration-token')").run();
-
-    await expect(
+  it('blocks direct writes only for live JSON migration and reservation leases', async () => {
+    const now = (await db().prepare("SELECT CAST(unixepoch() * 1000 AS INTEGER) AS now").first<{ now: number }>())!.now;
+    const insert = () =>
       db()
         .prepare(
           `INSERT INTO objects (key, name, size, content_type, etag, updated_at, is_public, sort_order, description)
-           VALUES ('locked.txt', 'locked.txt', 1, 'text/plain', 'etag', '2026-07-10T00:00:00.000Z', 1, 0, '')`,
+           VALUES ('triggered.txt', 'triggered.txt', 1, 'text/plain', 'etag', '2026-07-10T00:00:00.000Z', 1, 0, '')`,
         )
-        .run(),
-    ).rejects.toThrow('legacy object migration');
+        .run();
+
+    await db()
+      .prepare("INSERT INTO settings (key, value) VALUES ('legacy_object_migration_lock', ?)")
+      .bind(JSON.stringify({ owner: 'live-migration', expires_at: now + 60_000 }))
+      .run();
+
+    await expect(insert()).rejects.toThrow('legacy object migration');
+    await db().prepare("DELETE FROM settings WHERE key = 'legacy_object_migration_lock'").run();
+
+    await db()
+      .prepare("INSERT INTO settings (key, value) VALUES ('legacy_object_migration_lock', ?)")
+      .bind(JSON.stringify({ owner: 'expired-migration', expires_at: now - 1 }))
+      .run();
+    await expect(insert()).resolves.toMatchObject({ success: true });
+    await db().prepare("DELETE FROM objects WHERE key = 'triggered.txt'").run();
+    await db().prepare("UPDATE settings SET value = 'legacy-migration-token' WHERE key = 'legacy_object_migration_lock'").run();
+    await expect(insert()).resolves.toMatchObject({ success: true });
+    await db().prepare("DELETE FROM objects WHERE key = 'triggered.txt'").run();
+
+    await db()
+      .prepare("UPDATE settings SET value = ? WHERE key = 'legacy_object_migration_lock'")
+      .bind(JSON.stringify({ owner: 'live-migration', expires_at: now + 60_000 }))
+      .run();
+    await db()
+      .prepare("INSERT INTO settings (key, value) VALUES ('legacy_object_mutation_reservation_expired', ?)")
+      .bind(JSON.stringify({ owner: 'expired-reservation', expires_at: now - 1 }))
+      .run();
+    await expect(insert()).rejects.toThrow('legacy object migration');
+    await db().prepare("UPDATE settings SET value = ? WHERE key = 'legacy_object_mutation_reservation_expired'")
+      .bind(JSON.stringify({ owner: 'live-reservation', expires_at: now + 60_000 }))
+      .run();
+    await expect(insert()).resolves.toMatchObject({ success: true });
   });
 
   it('blocks a new reservation after migration has claimed the lock and drains an earlier reservation', async () => {
@@ -63,10 +95,10 @@ describe('legacy object migration lock', () => {
     expect(reservation).not.toBeNull();
     expect(await acquireLegacyObjectMigrationLease(db(), 'migration-owner', 1_000, 1_000)).toBe(true);
     expect(await reserveLegacyObjectMutation(db(), 'later-mutation', 1_001)).toBeNull();
-    expect(await countLegacyObjectMutationReservations(db())).toBe(1);
+    expect(await countLegacyObjectMutationReservations(db(), 1_000)).toBe(1);
 
     await releaseLegacyObjectMutationReservation(db(), reservation!);
-    expect(await countLegacyObjectMutationReservations(db())).toBe(0);
+    expect(await countLegacyObjectMutationReservations(db(), 1_000)).toBe(0);
     await releaseLegacyObjectMigrationLease(db(), 'migration-owner');
   });
 
@@ -82,6 +114,24 @@ describe('legacy object migration lock', () => {
 
     expect(response.status).toBe(400);
     expect(await countLegacyObjectMutationReservations(db())).toBe(0);
+  });
+
+  it('counts only live mutation reservation leases and keeps their owner-bound release safe', async () => {
+    const reservation = await reserveLegacyObjectMutation(db(), 'reservation-owner', 1_000, 100);
+    expect(reservation).not.toBeNull();
+    await expect(
+      db().prepare('SELECT value FROM settings WHERE key = ?').bind(reservation!.key).first<{ value: string }>(),
+    ).resolves.toMatchObject({ value: JSON.stringify({ owner: 'reservation-owner', expires_at: 1_100 }) });
+    expect(await countLegacyObjectMutationReservations(db(), 1_050)).toBe(1);
+
+    await releaseLegacyObjectMutationReservation(db(), { ...reservation!, owner: 'different-owner' });
+    expect(await countLegacyObjectMutationReservations(db(), 1_050)).toBe(1);
+    expect(await countLegacyObjectMutationReservations(db(), 1_101)).toBe(0);
+    expect(await acquireLegacyObjectMigrationLease(db(), 'migration-owner', 1_101, 100)).toBe(true);
+  });
+
+  it('uses a mutation lease duration that covers normal R2 work', () => {
+    expect(LEGACY_OBJECT_MUTATION_LEASE_DURATION_MS).toBeGreaterThanOrEqual(15 * 60_000);
   });
 
   it('recovers an expired migration lease but refuses to steal a live lease', async () => {
