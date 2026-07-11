@@ -7,6 +7,7 @@ import {
   LEGACY_OBJECT_MUTATION_LEASE_DURATION_MS,
   releaseLegacyObjectMigrationLease,
   releaseLegacyObjectMutationReservation,
+  renewLegacyObjectMutationReservation,
   reserveLegacyObjectMutation,
 } from '../../src/worker/db';
 import { routeRequest } from '../../src/worker/router';
@@ -22,6 +23,7 @@ describe('legacy object migration lock', () => {
       .run();
     await db().prepare("DELETE FROM objects WHERE key = 'locked.txt'").run();
     await db().prepare("DELETE FROM objects WHERE key = 'triggered.txt'").run();
+    await db().prepare('DROP TABLE IF EXISTS heartbeat_audit').run();
   });
 
   it('blocks an authenticated legacy PATCH while the migration lock is held', async () => {
@@ -116,6 +118,107 @@ describe('legacy object migration lock', () => {
     expect(await countLegacyObjectMutationReservations(db())).toBe(0);
   });
 
+  it('keeps a streamed PUT reservation live past its initial lease and renews before the index write', async () => {
+    let now = 1_000;
+    let heartbeat: (() => void) | undefined;
+    let requestBody: ReadableStream | null = null;
+
+    await db().prepare('CREATE TABLE heartbeat_audit (reservation_value TEXT NOT NULL)').run();
+    await db()
+      .prepare(`CREATE TRIGGER record_put_reservation BEFORE INSERT ON objects
+        WHEN NEW.key = 'heartbeat.txt'
+        BEGIN
+          INSERT INTO heartbeat_audit (reservation_value)
+          SELECT value FROM settings WHERE key GLOB 'legacy_object_mutation_reservation_*';
+        END`)
+      .run();
+
+    const timedEnv = Object.create(workerEnv()) as Env;
+    timedEnv.R2_BUCKET = {
+      put: async (_key: string, body: ReadableStream) => {
+        requestBody = body;
+        now = 1_050;
+        await heartbeat!();
+        now = 1_125;
+        await heartbeat!();
+        expect(await countLegacyObjectMutationReservations(db(), now)).toBe(1);
+        now = 1_130;
+        return { size: 4, etag: 'heartbeat-etag', httpEtag: 'heartbeat-etag' } as R2Object;
+      },
+    } as unknown as R2Bucket;
+
+    const stream = new ReadableStream({
+      start(controller) {
+        controller.enqueue(new Uint8Array([1, 2, 3, 4]));
+        controller.close();
+      },
+    });
+    const session = await createSession(workerEnv());
+    const response = await routeRequest(
+      new Request('https://ilist.example/api/admin/objects/heartbeat.txt', {
+        method: 'PUT',
+        headers: { cookie: `ilist_session=${session.token}`, 'content-type': 'application/octet-stream' },
+        body: stream,
+      }),
+      timedEnv,
+      {
+        legacyObjectMutationReservation: {
+          now: () => now,
+          leaseDurationMs: 100,
+          heartbeatIntervalMs: 25,
+          setInterval: (callback) => {
+            heartbeat = callback;
+            return 1;
+          },
+          clearInterval: () => undefined,
+        },
+      },
+    );
+
+    expect(response.status).toBe(200);
+    expect(requestBody).toBe(stream);
+    await expect(db().prepare('SELECT reservation_value FROM heartbeat_audit').first<{ reservation_value: string }>()).resolves.toEqual({
+      reservation_value: expect.stringContaining('"expires_at":1230'),
+    });
+    expect(await countLegacyObjectMutationReservations(db(), now)).toBe(0);
+    await heartbeat!();
+    expect(await countLegacyObjectMutationReservations(db(), now)).toBe(0);
+  });
+
+  it('does not write the index or release another owner after PUT ownership is lost', async () => {
+    const now = 1_000;
+    const timedEnv = Object.create(workerEnv()) as Env;
+    timedEnv.R2_BUCKET = {
+      put: async () => {
+        const reservation = await db()
+          .prepare("SELECT key FROM settings WHERE key GLOB 'legacy_object_mutation_reservation_*'")
+          .first<{ key: string }>();
+        await db()
+          .prepare('UPDATE settings SET value = ? WHERE key = ?')
+          .bind(JSON.stringify({ owner: 'replacement-owner', expires_at: now + 100 }), reservation!.key)
+          .run();
+        return { size: 4, etag: 'lost-etag', httpEtag: 'lost-etag' } as R2Object;
+      },
+    } as unknown as R2Bucket;
+    const session = await createSession(workerEnv());
+
+    const response = await routeRequest(
+      new Request('https://ilist.example/api/admin/objects/lost.txt', {
+        method: 'PUT',
+        headers: { cookie: `ilist_session=${session.token}` },
+        body: new ReadableStream(),
+      }),
+      timedEnv,
+      { legacyObjectMutationReservation: { now: () => now, leaseDurationMs: 100 } },
+    );
+
+    expect(response.status).toBe(503);
+    await expect(db().prepare("SELECT key FROM objects WHERE key = 'lost.txt'").first()).resolves.toBeNull();
+    await expect(
+      db().prepare("SELECT value FROM settings WHERE key GLOB 'legacy_object_mutation_reservation_*'").first<{ value: string }>(),
+    ).resolves.toMatchObject({ value: expect.stringContaining('replacement-owner') });
+  });
+
   it('counts only live mutation reservation leases and keeps their owner-bound release safe', async () => {
     const reservation = await reserveLegacyObjectMutation(db(), 'reservation-owner', 1_000, 100);
     expect(reservation).not.toBeNull();
@@ -128,6 +231,21 @@ describe('legacy object migration lock', () => {
     expect(await countLegacyObjectMutationReservations(db(), 1_050)).toBe(1);
     expect(await countLegacyObjectMutationReservations(db(), 1_101)).toBe(0);
     expect(await acquireLegacyObjectMigrationLease(db(), 'migration-owner', 1_101, 100)).toBe(true);
+  });
+
+  it('renews only a live reservation held by its current owner', async () => {
+    const reservation = await reserveLegacyObjectMutation(db(), 'reservation-owner', 1_000, 100);
+    expect(reservation).not.toBeNull();
+
+    expect(await renewLegacyObjectMutationReservation(db(), reservation!, 1_050, 100)).toBe(true);
+    await expect(
+      db().prepare('SELECT value FROM settings WHERE key = ?').bind(reservation!.key).first<{ value: string }>(),
+    ).resolves.toMatchObject({ value: JSON.stringify({ owner: 'reservation-owner', expires_at: 1_150 }) });
+
+    expect(
+      await renewLegacyObjectMutationReservation(db(), { ...reservation!, owner: 'different-owner' }, 1_075, 100),
+    ).toBe(false);
+    expect(await renewLegacyObjectMutationReservation(db(), reservation!, 1_151, 100)).toBe(false);
   });
 
   it('uses a mutation lease duration that covers normal R2 work', () => {
