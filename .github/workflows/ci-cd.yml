@@ -26,8 +26,12 @@ jobs:
       - name: Setup Node.js
         uses: actions/setup-node@v4
         with:
-          node-version: "22.12"
+          # jsdom@29 requires ^22.13 (not 22.12). Use npm 11 for package-lock peer resolution.
+          node-version: "22.13"
           cache: npm
+
+      - name: Use npm 11
+        run: npm install -g npm@11
 
       - name: Install dependencies
         run: npm ci
@@ -63,8 +67,11 @@ jobs:
       - name: Setup Node.js
         uses: actions/setup-node@v4
         with:
-          node-version: "22.12"
+          node-version: "22.13"
           cache: npm
+
+      - name: Use npm 11
+        run: npm install -g npm@11
 
       - name: Install dependencies
         run: npm ci
