@@ -374,10 +374,11 @@ export async function finalizeUploadedEntry(
   db: D1Database,
   id: string,
   metadata: { size: number; contentType: string | null; etag: string | null },
-): Promise<void> {
-  await db.prepare(`UPDATE entries SET size = ?, content_type = ?, etag = ?, status = 'ready', updated_at = ? WHERE id = ?`)
+): Promise<boolean> {
+  const result = await db.prepare(`UPDATE entries SET size = ?, content_type = ?, etag = ?, status = 'ready', updated_at = ? WHERE id = ? AND status = 'uploading'`)
     .bind(metadata.size, metadata.contentType, metadata.etag, new Date().toISOString(), id)
     .run();
+  return result.meta.changes === 1;
 }
 
 export async function updateEntryFields(
@@ -406,4 +407,8 @@ export async function updateEntryFields(
 
 export async function deleteEntryRow(db: D1Database, id: string): Promise<void> {
   await db.prepare('DELETE FROM entries WHERE id = ?').bind(id).run();
+}
+
+export async function deleteUploadingEntry(db: D1Database, id: string): Promise<void> {
+  await db.prepare("DELETE FROM entries WHERE id = ? AND status = 'uploading'").bind(id).run();
 }
