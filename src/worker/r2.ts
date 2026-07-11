@@ -123,6 +123,15 @@ function preconditionStatus(request: Request, object: R2Object): 304 | 412 | nul
   return null;
 }
 
+function ifRangeMatches(request: Request, object: R2Object): boolean {
+  const ifRange = request.headers.get('if-range');
+  if (ifRange === null) return true;
+  if (ifRange.startsWith('W/')) return false;
+  if (ifRange.startsWith('"')) return ifRange === object.httpEtag;
+  const date = validHttpDate(ifRange);
+  return date !== null && Math.floor(object.uploaded.getTime() / 1000) <= Math.floor(date / 1000);
+}
+
 function objectHeaders(object: R2Object, row: EntryRow, options: { download: boolean; publicFile: boolean }): Headers {
   const headers = new Headers();
   object.writeHttpMetadata(headers);
@@ -149,7 +158,9 @@ export async function streamEntryObject(
   const conditional = preconditionStatus(request, metadata);
   if (conditional !== null) return new Response(null, { status: conditional, headers });
 
-  const requestedRange = parseByteRange(request.headers.get('range'), metadata.size);
+  const requestedRange = ifRangeMatches(request, metadata)
+    ? parseByteRange(request.headers.get('range'), metadata.size)
+    : null;
   if (requestedRange === 'invalid') {
     headers.set('content-range', `bytes */${metadata.size}`);
     return new Response(null, { status: 416, headers });

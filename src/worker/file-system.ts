@@ -1,12 +1,14 @@
 import {
+  claimEntryTreeForDeletion,
   deleteEntryRow,
   deleteUploadingEntry,
   finalizeUploadedEntry,
   getChildByName,
   getEntryById,
-  insertEntry,
+  insertEntryUnderReadyParent,
   listAncestorRows,
   listDescendantRows,
+  restoreDeletingEntryTree,
   updateEntryFields,
 } from './db';
 import { storageKeyForEntry, validateEntryName } from './entry-domain';
@@ -79,7 +81,9 @@ export async function createFolder(db: D1Database, input: { parentId: string; na
     is_public: parent.is_public, sort_order: 0, description: '', created_at: now, updated_at: now,
   };
   try {
-    await insertEntry(db, row);
+    if (!await insertEntryUnderReadyParent(db, row)) {
+      throw new HttpError(404, 'ENTRY_NOT_FOUND', 'Folder not found');
+    }
   } catch (error) {
     throw entryNameConflict(error, name) ?? error;
   }
@@ -179,7 +183,9 @@ export async function uploadFile(
   };
 
   try {
-    await insertEntry(env.DB, row);
+    if (!await insertEntryUnderReadyParent(env.DB, row)) {
+      throw new HttpError(404, 'ENTRY_NOT_FOUND', 'Folder not found');
+    }
   } catch (error) {
     if (entryIdConflict(error)) {
       const concurrent = await getEntryById(env.DB, id);
@@ -223,19 +229,28 @@ export async function deleteEntryTrees(
   const result: BatchResult = { succeeded: [], failed: [] };
 
   for (const id of [...new Set(ids)]) {
+    let claimed = false;
     try {
       const target = await getEntryById(env.DB, id);
-      if (!target || target.id === 'root' || !['ready', 'deleting'].includes(target.status)) {
+      if (!target || target.id === 'root' || target.status !== 'ready') {
+        if (target?.status === 'deleting') {
+          throw new HttpError(409, 'ENTRY_DELETE_IN_PROGRESS', 'Entry deletion is already in progress');
+        }
+        throw new HttpError(404, 'ENTRY_NOT_FOUND', 'Entry not found');
+      }
+
+      claimed = await claimEntryTreeForDeletion(env.DB, id);
+      if (!claimed) {
+        const current = await getEntryById(env.DB, id);
+        if (current?.status === 'deleting' || current?.status === 'ready') {
+          throw new HttpError(409, 'ENTRY_DELETE_IN_PROGRESS', 'Entry deletion is already in progress');
+        }
         throw new HttpError(404, 'ENTRY_NOT_FOUND', 'Entry not found');
       }
 
       const rows = await listDescendantRows(env.DB, id);
       if (rows.length > maxEntries) {
         throw new HttpError(409, 'OPERATION_LIMIT_EXCEEDED', 'Delete contains too many entries');
-      }
-
-      for (const row of rows) {
-        if (row.status === 'ready') await updateEntryFields(env.DB, row.id, { status: 'deleting' });
       }
 
       const failedFiles = new Set<string>();
@@ -262,6 +277,7 @@ export async function deleteEntryTrees(
       }
       result.succeeded.push(id);
     } catch (error) {
+      if (claimed) await restoreDeletingEntryTree(env.DB, id).catch(() => undefined);
       const known = error instanceof HttpError ? error : new HttpError(500, 'DELETE_FAILED', 'Delete failed');
       result.failed.push({ id, code: known.code, message: known.message });
     }
