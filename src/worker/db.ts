@@ -371,20 +371,23 @@ export async function updateEntryFields(
   id: string,
   fields: { parentId?: string; name?: string; description?: string; sortOrder?: number; isPublic?: boolean; status?: EntryStatus },
 ): Promise<void> {
-  const row = await getEntryById(db, id);
-  if (!row) throw new HttpError(404, 'ENTRY_NOT_FOUND', 'Entry not found');
-  await db.prepare(`UPDATE entries SET parent_id = ?, name = ?, description = ?, sort_order = ?, is_public = ?, status = ?, updated_at = ? WHERE id = ?`)
-    .bind(
-      fields.parentId ?? row.parent_id,
-      fields.name ?? row.name,
-      fields.description ?? row.description,
-      fields.sortOrder ?? row.sort_order,
-      fields.isPublic === undefined ? row.is_public : fields.isPublic ? 1 : 0,
-      fields.status ?? row.status,
-      new Date().toISOString(),
-      id,
-    )
-    .run();
+  const assignments: string[] = [];
+  const values: unknown[] = [];
+  const add = (column: string, value: unknown) => {
+    assignments.push(`${column} = ?`);
+    values.push(value);
+  };
+
+  if (fields.parentId !== undefined) add('parent_id', fields.parentId);
+  if (fields.name !== undefined) add('name', fields.name);
+  if (fields.description !== undefined) add('description', fields.description);
+  if (fields.sortOrder !== undefined) add('sort_order', fields.sortOrder);
+  if (fields.isPublic !== undefined) add('is_public', fields.isPublic ? 1 : 0);
+  if (fields.status !== undefined) add('status', fields.status);
+  add('updated_at', new Date().toISOString());
+
+  const result = await db.prepare(`UPDATE entries SET ${assignments.join(', ')} WHERE id = ?`).bind(...values, id).run();
+  if (result.meta.changes === 0) throw new HttpError(404, 'ENTRY_NOT_FOUND', 'Entry not found');
 }
 
 export async function deleteEntryRow(db: D1Database, id: string): Promise<void> {

@@ -37,4 +37,91 @@ describe('file system mutations', () => {
     expect(result.succeeded).toEqual([one.id, two.id]);
     expect((await getEntryById(db(), one.id))?.is_public).toBe(0);
   });
+
+  it.each(['api', 'file', 'admin'])('rejects moving the reserved nested name %s to root', async (name) => {
+    const parent = await createFolder(db(), { parentId: 'root', name: `Nested ${name}` });
+    const entry = await createFolder(db(), { parentId: parent.id, name });
+
+    await expect(moveEntries(db(), [entry.id], 'root')).resolves.toEqual({
+      succeeded: [],
+      failed: [{ id: entry.id, code: 'INVALID_ENTRY_NAME', message: 'Invalid entry name' }],
+    });
+    expect(await getEntryById(db(), entry.id)).toMatchObject({ parent_id: parent.id, name });
+  });
+
+  it('moves a legal nested entry to root', async () => {
+    const parent = await createFolder(db(), { parentId: 'root', name: 'Nested' });
+    const entry = await createFolder(db(), { parentId: parent.id, name: 'readme.txt' });
+
+    await expect(moveEntries(db(), [entry.id], 'root')).resolves.toEqual({ succeeded: [entry.id], failed: [] });
+    expect(await getEntryById(db(), entry.id)).toMatchObject({ parent_id: 'root', name: 'readme.txt' });
+  });
+
+  it('preserves concurrent changes to independent metadata fields', async () => {
+    const entry = await createFolder(db(), { parentId: 'root', name: 'Concurrent' });
+
+    await Promise.all([
+      patchEntry(db(), entry.id, { description: 'Updated description' }),
+      patchEntry(db(), entry.id, { sortOrder: 7 }),
+      setEntriesVisibility(db(), [entry.id], false),
+    ]);
+
+    expect(await getEntryById(db(), entry.id)).toMatchObject({
+      description: 'Updated description',
+      sort_order: 7,
+      is_public: 0,
+    });
+  });
+
+  it('returns a structured name conflict when concurrent moves target the same sibling name', async () => {
+    const left = await createFolder(db(), { parentId: 'root', name: 'Concurrent Left' });
+    const right = await createFolder(db(), { parentId: 'root', name: 'Concurrent Right' });
+    const destination = await createFolder(db(), { parentId: 'root', name: 'Concurrent Destination' });
+    const first = await createFolder(db(), { parentId: left.id, name: 'Concurrent Duplicate' });
+    const second = await createFolder(db(), { parentId: right.id, name: 'Concurrent Duplicate' });
+
+    const results = await Promise.all([
+      moveEntries(db(), [first.id], destination.id),
+      moveEntries(db(), [second.id], destination.id),
+    ]);
+    const failed = results.flatMap((result) => result.failed);
+
+    expect(results.flatMap((result) => result.succeeded)).toHaveLength(1);
+    expect(failed).toEqual([{ id: expect.any(String), code: 'ENTRY_NAME_CONFLICT', message: 'Current folder already contains that name' }]);
+  });
+
+  it('returns a structured name conflict when concurrent renames use the same sibling name', async () => {
+    const first = await createFolder(db(), { parentId: 'root', name: 'Rename First' });
+    const second = await createFolder(db(), { parentId: 'root', name: 'Rename Second' });
+
+    const results = await Promise.allSettled([
+      patchEntry(db(), first.id, { name: 'Concurrent Rename' }),
+      patchEntry(db(), second.id, { name: 'Concurrent Rename' }),
+    ]);
+    const failures = results.filter((result): result is PromiseRejectedResult => result.status === 'rejected');
+
+    expect(results.filter((result) => result.status === 'fulfilled')).toHaveLength(1);
+    expect(failures).toHaveLength(1);
+    expect(failures[0].reason).toMatchObject({
+      status: 409,
+      code: 'ENTRY_NAME_CONFLICT',
+      message: 'Current folder already contains that name',
+    });
+  });
+
+  it('returns a structured name conflict when concurrent folder creation uses the same sibling name', async () => {
+    const results = await Promise.allSettled([
+      createFolder(db(), { parentId: 'root', name: 'Concurrent Create' }),
+      createFolder(db(), { parentId: 'root', name: 'Concurrent Create' }),
+    ]);
+    const failures = results.filter((result): result is PromiseRejectedResult => result.status === 'rejected');
+
+    expect(results.filter((result) => result.status === 'fulfilled')).toHaveLength(1);
+    expect(failures).toHaveLength(1);
+    expect(failures[0].reason).toMatchObject({
+      status: 409,
+      code: 'ENTRY_NAME_CONFLICT',
+      message: 'Current folder already contains that name',
+    });
+  });
 });

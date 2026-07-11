@@ -4,6 +4,26 @@ import { entryToApi, isEffectivelyPublic } from './entries';
 import { HttpError } from './http';
 import type { BatchResult, Entry } from './types';
 
+const ENTRY_NAME_UNIQUE_CONSTRAINT = 'UNIQUE constraint failed: entries.parent_id, entries.name';
+
+function isEntryNameUniqueConstraint(error: unknown): boolean {
+  const seen = new Set<object>();
+  let current = error;
+  while (current && typeof current === 'object' && !seen.has(current)) {
+    seen.add(current);
+    const value = current as { message?: unknown; cause?: unknown };
+    if (typeof value.message === 'string' && value.message.includes(ENTRY_NAME_UNIQUE_CONSTRAINT)) return true;
+    current = value.cause;
+  }
+  return false;
+}
+
+function entryNameConflict(error: unknown, name: string): HttpError | null {
+  return isEntryNameUniqueConstraint(error)
+    ? new HttpError(409, 'ENTRY_NAME_CONFLICT', 'Current folder already contains that name', { name })
+    : null;
+}
+
 export async function requireFolder(db: D1Database, id: string) {
   const row = await getEntryById(db, id);
   if (!row || row.kind !== 'folder' || row.status !== 'ready') {
@@ -36,7 +56,11 @@ export async function createFolder(db: D1Database, input: { parentId: string; na
     storage_key: null, size: 0, content_type: null, etag: null, status: 'ready' as const,
     is_public: parent.is_public, sort_order: 0, description: '', created_at: now, updated_at: now,
   };
-  await insertEntry(db, row);
+  try {
+    await insertEntry(db, row);
+  } catch (error) {
+    throw entryNameConflict(error, name) ?? error;
+  }
   return entryToApi(row, true, await isEffectivelyPublic(db, row.id));
 }
 
@@ -48,7 +72,11 @@ export async function patchEntry(
   const row = await requireMutable(db, id);
   const name = patch.name === undefined ? undefined : validateEntryName(patch.name, row.parent_id === 'root');
   if (name) await ensureNameAvailable(db, row.parent_id!, name, row.id);
-  await updateEntryFields(db, id, { ...patch, name });
+  try {
+    await updateEntryFields(db, id, { ...patch, ...(name === undefined ? {} : { name }) });
+  } catch (error) {
+    throw entryNameConflict(error, name ?? row.name) ?? error;
+  }
   const updated = (await getEntryById(db, id))!;
   return entryToApi(updated, true, await isEffectivelyPublic(db, id));
 }
@@ -57,17 +85,19 @@ export async function moveEntries(db: D1Database, ids: string[], destinationId: 
   const destination = await requireFolder(db, destinationId);
   const result: BatchResult = { succeeded: [], failed: [] };
   for (const id of [...new Set(ids)]) {
+    let name = '';
     try {
       const row = await requireMutable(db, id);
+      name = validateEntryName(row.name, destination.id === 'root');
       if (row.kind === 'folder') {
         const ancestorIds = new Set((await listAncestorRows(db, destination.id)).map((entry) => entry.id));
         if (ancestorIds.has(row.id)) throw new HttpError(400, 'INVALID_MOVE_TARGET', 'Folder cannot move into itself or a descendant');
       }
-      await ensureNameAvailable(db, destination.id, row.name, row.id);
+      await ensureNameAvailable(db, destination.id, name, row.id);
       await updateEntryFields(db, row.id, { parentId: destination.id });
       result.succeeded.push(row.id);
     } catch (error) {
-      const known = error instanceof HttpError ? error : new HttpError(500, 'MOVE_FAILED', 'Move failed');
+      const known = error instanceof HttpError ? error : entryNameConflict(error, name) ?? new HttpError(500, 'MOVE_FAILED', 'Move failed');
       result.failed.push({ id, code: known.code, message: known.message });
     }
   }
