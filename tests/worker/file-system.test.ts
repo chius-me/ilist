@@ -15,7 +15,9 @@ describe('file system mutations', () => {
 
   it('renames metadata without changing a file storage key', async () => {
     const now = new Date().toISOString();
-    await db().prepare(`INSERT INTO entries VALUES (?, 'root', ?, 'file', ?, 4, 'text/plain', 'e', 'ready', 1, 0, '', ?, ?)`).bind(
+    await db().prepare(`INSERT INTO entries (
+      id, parent_id, name, kind, storage_key, size, content_type, etag, status, is_public, sort_order, description, created_at, updated_at
+    ) VALUES (?, 'root', ?, 'file', ?, 4, 'text/plain', 'e', 'ready', 1, 0, '', ?, ?)`).bind(
       'file-a', 'a.txt', 'blobs/file-a', now, now,
     ).run();
     await patchEntry(db(), 'file-a', { name: 'b.txt' });

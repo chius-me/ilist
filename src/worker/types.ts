@@ -62,9 +62,30 @@ export interface EntryRow {
   content_type: string | null;
   etag: string | null;
   status: EntryStatus;
+  lifecycle_owner: string | null;
   is_public: number;
   sort_order: number;
   description: string;
+  created_at: string;
+  updated_at: string;
+}
+
+export type StorageRecoveryOperationKind = 'upload_cleanup' | 'delete_tree';
+export type StorageRecoveryOperationState = 'held' | 'pending' | 'running' | 'retry' | 'completed';
+
+export interface StorageRecoveryOperationRow {
+  id: string;
+  entry_id: string;
+  operation_kind: StorageRecoveryOperationKind;
+  storage_key: string | null;
+  attempt_owner: string;
+  phase: string;
+  payload: string;
+  state: StorageRecoveryOperationState;
+  claim_owner: string | null;
+  claim_expires_at: number | null;
+  attempts: number;
+  last_error: string | null;
   created_at: string;
   updated_at: string;
 }

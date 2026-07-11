@@ -1,7 +1,14 @@
 import { env } from 'cloudflare:test';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
-import { findEntryByStorageKey, getEntryById } from '../../src/worker/db';
-import { createFolder, deleteEntryTrees, uploadFile } from '../../src/worker/file-system';
+import { findEntryByStorageKey, getEntryById, listStorageRecoveryOperations } from '../../src/worker/db';
+import {
+  createFolder,
+  deleteEntryTrees,
+  moveEntries,
+  patchEntry,
+  reconcileStorageRecovery,
+  uploadFile,
+} from '../../src/worker/file-system';
 import { streamEntryObject } from '../../src/worker/r2';
 import type { Entry, Env } from '../../src/worker/types';
 
@@ -40,6 +47,37 @@ function bucketWith(overrides: Record<string, unknown>): R2Bucket {
       return typeof value === 'function' ? value.bind(target) : value;
     },
   }) as R2Bucket;
+}
+
+function dbWithFailure(shouldFail: (sql: string) => boolean): D1Database {
+  let failed = false;
+  const wrap = (statement: D1PreparedStatement, sql: string): D1PreparedStatement => new Proxy(statement, {
+    get(statementTarget, statementProperty) {
+      if (statementProperty === 'bind') return (...values: unknown[]) => wrap(statementTarget.bind(...values), sql);
+      if (statementProperty === 'run') {
+        return async <T>() => {
+          if (!failed && shouldFail(sql)) {
+            failed = true;
+            throw new Error('injected D1 failure');
+          }
+          return await statementTarget.run<T>();
+        };
+      }
+      const value = Reflect.get(statementTarget, statementProperty, statementTarget);
+      return typeof value === 'function' ? value.bind(statementTarget) : value;
+    },
+  }) as D1PreparedStatement;
+  return new Proxy(workerEnv.DB, {
+    get(target, property) {
+      if (property !== 'prepare') {
+        const value = Reflect.get(target, property, target);
+        return typeof value === 'function' ? value.bind(target) : value;
+      }
+      return (sql: string) => {
+        return wrap(target.prepare(sql), sql);
+      };
+    },
+  }) as D1Database;
 }
 
 function pausedEntryInsert() {
@@ -107,6 +145,9 @@ beforeEach(() => {
 
 afterEach(async () => {
   if (fixtureKeys.length) await workerEnv.R2_BUCKET.delete([...new Set(fixtureKeys)]);
+  for (const id of fixtureIds) {
+    await workerEnv.DB.prepare('DELETE FROM storage_recovery_operations WHERE entry_id = ?').bind(id).run();
+  }
   for (const id of fixtureIds.reverse()) {
     await workerEnv.DB.prepare('DELETE FROM entries WHERE id = ?').bind(id).run();
   }
@@ -121,6 +162,38 @@ describe('R2 file lifecycle', () => {
       status: 'ready', storage_key: `blobs/${entry.id}`,
     });
     expect(await findEntryByStorageKey(workerEnv.DB, `blobs/${entry.id}`)).toMatchObject({ id: entry.id });
+  });
+
+  it('passes the request stream directly to R2 without buffering it', async () => {
+    const id = fileId('stream');
+    fixtureIds.push(id);
+    fixtureKeys.push(`blobs/${id}`);
+    const body = new ReadableStream<Uint8Array>({
+      start(controller) {
+        controller.enqueue(new TextEncoder().encode('streamed body'));
+        controller.close();
+      },
+    });
+    let received: ReadableStream | null = null;
+    const streamingEnv = {
+      ...workerEnv,
+      R2_BUCKET: bucketWith({
+        put: async (key: string, value: ReadableStream, options?: R2PutOptions) => {
+          received = value;
+          return await workerEnv.R2_BUCKET.put(key, value, options);
+        },
+      }),
+    };
+
+    const request = new Request('https://ilist.example/upload', {
+      method: 'PUT', headers: { 'content-type': 'text/plain' }, body,
+    });
+    const requestBody = request.body!;
+    await uploadFile(streamingEnv, request, {
+      id, parentId: 'root', name: `${fixture}-stream.txt`,
+    });
+
+    expect(received).toBe(requestBody);
   });
 
   it('sets full and ranged GET and HEAD response lengths from the R2 object', async () => {
@@ -360,6 +433,30 @@ describe('R2 file lifecycle', () => {
     expect(await getEntryById(workerEnv.DB, parent.id)).toBeNull();
   });
 
+  it('returns mutation conflicts when delete claims a file before move or patch commits', async () => {
+    const source = await folder('mutation-race-source');
+    const destination = await folder('mutation-race-destination');
+    const id = fileId('mutation-race-file');
+    fixtureIds.push(id);
+    fixtureKeys.push(`blobs/${id}`);
+    await uploadFile(workerEnv, new Request('https://ilist.example/upload', { method: 'PUT', body: 'x' }), {
+      id, parentId: source.id, name: `${fixture}-x.txt`,
+    });
+    const gate = deletionGate();
+    const deletion = deleteEntryTrees(workerEnv, [id], { deleteBlob: gate.deleteBlob });
+
+    await gate.deleteStarted;
+    await expect(patchEntry(workerEnv.DB, id, { description: 'too late' })).rejects.toMatchObject({
+      status: 409, code: 'ENTRY_MUTATION_CONFLICT',
+    });
+    await expect(moveEntries(workerEnv.DB, [id], destination.id)).resolves.toEqual({
+      succeeded: [],
+      failed: [{ id, code: 'ENTRY_MUTATION_CONFLICT', message: 'Entry changed or deletion was claimed' }],
+    });
+    gate.release();
+    await expect(deletion).resolves.toEqual({ succeeded: [id], failed: [] });
+  });
+
   it('recursively deletes a folder and its blobs', async () => {
     const parent = await folder('delete');
     const id = fileId('delete');
@@ -376,7 +473,7 @@ describe('R2 file lifecycle', () => {
     expect(await workerEnv.R2_BUCKET.get(`blobs/${id}`)).toBeNull();
   });
 
-  it('restores a failed file and its folder while deleting successful siblings', async () => {
+  it('keeps a failed tree deleting with durable retry state instead of restoring ready rows', async () => {
     const parent = await folder('partial');
     const successId = fileId('success');
     const failureId = fileId('failure');
@@ -400,8 +497,139 @@ describe('R2 file lifecycle', () => {
       succeeded: [],
       failed: [{ id: parent.id, code: 'STORAGE_OPERATION_FAILED' }],
     });
-    expect(await getEntryById(workerEnv.DB, successId)).toBeNull();
-    expect(await getEntryById(workerEnv.DB, failureId)).toMatchObject({ status: 'ready' });
-    expect(await getEntryById(workerEnv.DB, parent.id)).toMatchObject({ status: 'ready' });
+    expect(await getEntryById(workerEnv.DB, successId)).toMatchObject({ status: 'deleting' });
+    expect(await getEntryById(workerEnv.DB, failureId)).toMatchObject({ status: 'deleting' });
+    expect(await getEntryById(workerEnv.DB, parent.id)).toMatchObject({ status: 'deleting' });
+    expect(await listStorageRecoveryOperations(workerEnv.DB, parent.id)).toMatchObject([
+      { operation_kind: 'delete_tree', state: 'retry' },
+    ]);
+  });
+
+  it('retains a deleting tree when D1 fails after its blob was removed and finalizes it on replay', async () => {
+    const id = fileId('metadata-failure');
+    fixtureIds.push(id);
+    fixtureKeys.push(`blobs/${id}`);
+    await uploadFile(workerEnv, new Request('https://ilist.example/upload', { method: 'PUT', body: 'x' }), {
+      id, parentId: 'root', name: `${fixture}-metadata.txt`,
+    });
+    const failingEnv = {
+      ...workerEnv,
+      DB: dbWithFailure((sql) => sql.startsWith("DELETE FROM entries WHERE id = ? AND status = 'deleting'")),
+    };
+
+    await expect(deleteEntryTrees(failingEnv, [id])).resolves.toMatchObject({
+      failed: [{ id, code: 'STORAGE_OPERATION_FAILED' }],
+    });
+    expect(await workerEnv.R2_BUCKET.get(`blobs/${id}`)).toBeNull();
+    expect(await getEntryById(workerEnv.DB, id)).toMatchObject({ status: 'deleting' });
+
+    await reconcileStorageRecovery(workerEnv);
+    expect(await getEntryById(workerEnv.DB, id)).toBeNull();
+  });
+
+  it('keeps a failed upload cleanup durable when R2 deletion fails', async () => {
+    const id = fileId('upload-cleanup');
+    fixtureIds.push(id);
+    fixtureKeys.push(`blobs/${id}`);
+    const failingEnv = {
+      ...workerEnv,
+      DB: dbWithFailure((sql) => sql.startsWith('UPDATE entries SET size =')),
+      R2_BUCKET: bucketWith({ delete: async () => { throw new Error('R2 delete failed'); } }),
+    };
+
+    await expect(uploadFile(failingEnv, new Request('https://ilist.example/upload', { method: 'PUT', body: 'x' }), {
+      id, parentId: 'root', name: `${fixture}-upload-cleanup.txt`,
+    })).rejects.toMatchObject({ status: 502, code: 'STORAGE_OPERATION_FAILED' });
+    expect(await getEntryById(workerEnv.DB, id)).toMatchObject({ status: 'uploading', lifecycle_owner: expect.any(String) });
+    expect(await workerEnv.R2_BUCKET.get(`blobs/${id}`)).not.toBeNull();
+    expect(await listStorageRecoveryOperations(workerEnv.DB, id)).toMatchObject([
+      { operation_kind: 'upload_cleanup', state: 'retry' },
+    ]);
+
+    await reconcileStorageRecovery(workerEnv);
+    expect(await getEntryById(workerEnv.DB, id)).toBeNull();
+    expect(await workerEnv.R2_BUCKET.get(`blobs/${id}`)).toBeNull();
+  });
+
+  it('claims a recovery operation once when reconciliation is invoked concurrently', async () => {
+    const id = fileId('duplicate-reconcile');
+    fixtureIds.push(id);
+    fixtureKeys.push(`blobs/${id}`);
+    const seedFailure = {
+      ...workerEnv,
+      DB: dbWithFailure((sql) => sql.startsWith('UPDATE entries SET size =')),
+      R2_BUCKET: bucketWith({ delete: async () => { throw new Error('R2 delete failed'); } }),
+    };
+    await expect(uploadFile(seedFailure, new Request('https://ilist.example/upload', { method: 'PUT', body: 'x' }), {
+      id, parentId: 'root', name: `${fixture}-duplicate.txt`,
+    })).rejects.toMatchObject({ status: 502 });
+    let deletes = 0;
+    const countingEnv = {
+      ...workerEnv,
+      R2_BUCKET: bucketWith({
+        delete: async (key: string) => {
+          deletes += 1;
+          await workerEnv.R2_BUCKET.delete(key);
+        },
+      }),
+    };
+
+    await Promise.all([reconcileStorageRecovery(countingEnv), reconcileStorageRecovery(countingEnv)]);
+    expect(deletes).toBe(1);
+    expect(await getEntryById(workerEnv.DB, id)).toBeNull();
+  });
+
+  it('replays a delete after an unknown R2 outcome without restoring metadata', async () => {
+    const id = fileId('crash-replay');
+    fixtureIds.push(id);
+    fixtureKeys.push(`blobs/${id}`);
+    await uploadFile(workerEnv, new Request('https://ilist.example/upload', { method: 'PUT', body: 'x' }), {
+      id, parentId: 'root', name: `${fixture}-crash.txt`,
+    });
+    let deletes = 0;
+    const crashEnv = {
+      ...workerEnv,
+      R2_BUCKET: bucketWith({
+        delete: async (key: string) => {
+          deletes += 1;
+          await workerEnv.R2_BUCKET.delete(key);
+          if (deletes === 1) throw new Error('worker stopped after R2 delete');
+        },
+      }),
+    };
+
+    await expect(deleteEntryTrees(crashEnv, [id])).resolves.toMatchObject({ failed: [{ id, code: 'STORAGE_OPERATION_FAILED' }] });
+    expect(await getEntryById(workerEnv.DB, id)).toMatchObject({ status: 'deleting' });
+    await reconcileStorageRecovery(crashEnv);
+    expect(deletes).toBe(2);
+    expect(await getEntryById(workerEnv.DB, id)).toBeNull();
+  });
+
+  it('does not delete a replacement upload owned by a different attempt', async () => {
+    const id = fileId('owner-replacement');
+    const key = `blobs/${id}`;
+    fixtureIds.push(id);
+    fixtureKeys.push(key);
+    const seedFailure = {
+      ...workerEnv,
+      DB: dbWithFailure((sql) => sql.startsWith('UPDATE entries SET size =')),
+      R2_BUCKET: bucketWith({ delete: async () => { throw new Error('R2 delete failed'); } }),
+    };
+    await expect(uploadFile(seedFailure, new Request('https://ilist.example/upload', { method: 'PUT', body: 'old' }), {
+      id, parentId: 'root', name: `${fixture}-old.txt`,
+    })).rejects.toMatchObject({ status: 502 });
+
+    await workerEnv.DB.prepare('DELETE FROM entries WHERE id = ?').bind(id).run();
+    const now = new Date().toISOString();
+    await workerEnv.DB.prepare(`INSERT INTO entries (
+      id, parent_id, name, kind, storage_key, size, content_type, etag, status, lifecycle_owner, is_public, sort_order, description, created_at, updated_at
+    ) VALUES (?, 'root', ?, 'file', ?, 0, NULL, NULL, 'uploading', 'replacement-owner', 1, 0, '', ?, ?)`).bind(
+      id, `${fixture}-replacement.txt`, key, now, now,
+    ).run();
+    await workerEnv.R2_BUCKET.put(key, 'replacement');
+
+    await reconcileStorageRecovery(workerEnv);
+    expect(await workerEnv.R2_BUCKET.get(key)).not.toBeNull();
+    expect(await getEntryById(workerEnv.DB, id)).toMatchObject({ lifecycle_owner: 'replacement-owner' });
   });
 });
