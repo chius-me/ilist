@@ -1,8 +1,17 @@
-import { getChildByName, getEntryById, insertEntry, listAncestorRows, updateEntryFields } from './db';
-import { validateEntryName } from './entry-domain';
+import {
+  deleteEntryRow,
+  finalizeUploadedEntry,
+  getChildByName,
+  getEntryById,
+  insertEntry,
+  listAncestorRows,
+  listDescendantRows,
+  updateEntryFields,
+} from './db';
+import { storageKeyForEntry, validateEntryName } from './entry-domain';
 import { entryToApi, isEffectivelyPublic } from './entries';
 import { HttpError } from './http';
-import type { BatchResult, Entry } from './types';
+import type { BatchResult, Entry, EntryRow, Env } from './types';
 
 const ENTRY_NAME_UNIQUE_CONSTRAINT = 'UNIQUE constraint failed: entries.parent_id, entries.name';
 
@@ -22,6 +31,13 @@ function entryNameConflict(error: unknown, name: string): HttpError | null {
   return isEntryNameUniqueConstraint(error)
     ? new HttpError(409, 'ENTRY_NAME_CONFLICT', 'Current folder already contains that name', { name })
     : null;
+}
+
+function validateClientEntryId(id: string): string {
+  if (!/^[A-Za-z0-9_-]{8,80}$/.test(id)) {
+    throw new HttpError(400, 'INVALID_ENTRY_ID', 'Invalid entry ID');
+  }
+  return id;
 }
 
 export async function requireFolder(db: D1Database, id: string) {
@@ -116,5 +132,122 @@ export async function setEntriesVisibility(db: D1Database, ids: string[], isPubl
       result.failed.push({ id, code: known.code, message: known.message });
     }
   }
+  return result;
+}
+
+export async function uploadFile(
+  env: Env,
+  request: Request,
+  input: { id: string; parentId: string; name: string },
+): Promise<Entry> {
+  if (!request.body) throw new HttpError(400, 'UPLOAD_BODY_MISSING', 'Upload body is missing');
+
+  const id = validateClientEntryId(input.id);
+  const parent = await requireFolder(env.DB, input.parentId);
+  const name = validateEntryName(input.name, parent.id === 'root');
+  const existing = await getEntryById(env.DB, id);
+  if (existing && (
+    existing.status !== 'uploading'
+    || existing.parent_id !== parent.id
+    || existing.name !== name
+    || existing.storage_key !== storageKeyForEntry(id)
+  )) {
+    throw new HttpError(409, 'ENTRY_ID_CONFLICT', 'Upload ID already exists');
+  }
+
+  await ensureNameAvailable(env.DB, parent.id, name, existing?.id);
+  const now = new Date().toISOString();
+  const row: EntryRow = existing ?? {
+    id,
+    parent_id: parent.id,
+    name,
+    kind: 'file',
+    storage_key: storageKeyForEntry(id),
+    size: 0,
+    content_type: request.headers.get('content-type'),
+    etag: null,
+    status: 'uploading',
+    is_public: parent.is_public,
+    sort_order: 0,
+    description: '',
+    created_at: now,
+    updated_at: now,
+  };
+
+  if (!existing) await insertEntry(env.DB, row);
+
+  try {
+    const object = await env.R2_BUCKET.put(row.storage_key!, request.body, {
+      httpMetadata: { contentType: request.headers.get('content-type') ?? 'application/octet-stream' },
+    });
+    await finalizeUploadedEntry(env.DB, id, {
+      size: object.size,
+      contentType: object.httpMetadata?.contentType ?? request.headers.get('content-type'),
+      etag: object.httpEtag || object.etag,
+    });
+    const ready = (await getEntryById(env.DB, id))!;
+    return entryToApi(ready, true, await isEffectivelyPublic(env.DB, id));
+  } catch (error) {
+    await env.R2_BUCKET.delete(row.storage_key!).catch(() => undefined);
+    await deleteEntryRow(env.DB, id).catch(() => undefined);
+    if (error instanceof HttpError) throw error;
+    throw new HttpError(502, 'STORAGE_OPERATION_FAILED', 'Upload failed');
+  }
+}
+
+export async function deleteEntryTrees(
+  env: Env,
+  ids: string[],
+  options: { maxEntries?: number; deleteBlob?: (key: string) => Promise<void> } = {},
+): Promise<BatchResult> {
+  const maxEntries = options.maxEntries ?? 1000;
+  const deleteBlob = options.deleteBlob ?? ((key) => env.R2_BUCKET.delete(key));
+  const result: BatchResult = { succeeded: [], failed: [] };
+
+  for (const id of [...new Set(ids)]) {
+    try {
+      const target = await getEntryById(env.DB, id);
+      if (!target || target.id === 'root' || !['ready', 'deleting'].includes(target.status)) {
+        throw new HttpError(404, 'ENTRY_NOT_FOUND', 'Entry not found');
+      }
+
+      const rows = await listDescendantRows(env.DB, id);
+      if (rows.length > maxEntries) {
+        throw new HttpError(409, 'OPERATION_LIMIT_EXCEEDED', 'Delete contains too many entries');
+      }
+
+      for (const row of rows) {
+        if (row.status === 'ready') await updateEntryFields(env.DB, row.id, { status: 'deleting' });
+      }
+
+      const failedFiles = new Set<string>();
+      for (const row of rows.filter((entry) => entry.kind === 'file')) {
+        try {
+          await deleteBlob(row.storage_key!);
+        } catch {
+          failedFiles.add(row.id);
+        }
+      }
+
+      const keep = new Set<string>(failedFiles);
+      for (const failedId of failedFiles) {
+        for (const ancestor of await listAncestorRows(env.DB, failedId)) keep.add(ancestor.id);
+      }
+
+      for (const row of [...rows].reverse()) {
+        if (keep.has(row.id)) await updateEntryFields(env.DB, row.id, { status: 'ready' });
+        else await deleteEntryRow(env.DB, row.id);
+      }
+
+      if (failedFiles.size) {
+        throw new HttpError(502, 'STORAGE_OPERATION_FAILED', 'Some file contents could not be deleted');
+      }
+      result.succeeded.push(id);
+    } catch (error) {
+      const known = error instanceof HttpError ? error : new HttpError(500, 'DELETE_FAILED', 'Delete failed');
+      result.failed.push({ id, code: known.code, message: known.message });
+    }
+  }
+
   return result;
 }
