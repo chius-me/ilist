@@ -1,4 +1,5 @@
-import type { DirectoryEntry, EntryRow, FileEntry, ObjectRow, TreeResponse } from './types';
+import { HttpError } from './http';
+import type { DirectoryEntry, EntryRow, EntryStatus, FileEntry, ObjectRow, TreeResponse } from './types';
 
 export const LEGACY_OBJECT_MIGRATION_LOCK = 'legacy_object_migration_lock';
 export const LEGACY_OBJECT_MUTATION_RESERVATION_PREFIX = 'legacy_object_mutation_reservation_';
@@ -350,4 +351,42 @@ export async function listDescendantRows(db: D1Database, id: string): Promise<En
     .bind(id)
     .all<EntryRow>();
   return result.results ?? [];
+}
+
+export async function insertEntry(db: D1Database, row: EntryRow): Promise<void> {
+  await db.prepare(`INSERT INTO entries (
+    id, parent_id, name, kind, storage_key, size, content_type, etag,
+    status, is_public, sort_order, description, created_at, updated_at
+  ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`)
+    .bind(
+      row.id, row.parent_id, row.name, row.kind, row.storage_key, row.size,
+      row.content_type, row.etag, row.status, row.is_public, row.sort_order,
+      row.description, row.created_at, row.updated_at,
+    )
+    .run();
+}
+
+export async function updateEntryFields(
+  db: D1Database,
+  id: string,
+  fields: { parentId?: string; name?: string; description?: string; sortOrder?: number; isPublic?: boolean; status?: EntryStatus },
+): Promise<void> {
+  const row = await getEntryById(db, id);
+  if (!row) throw new HttpError(404, 'ENTRY_NOT_FOUND', 'Entry not found');
+  await db.prepare(`UPDATE entries SET parent_id = ?, name = ?, description = ?, sort_order = ?, is_public = ?, status = ?, updated_at = ? WHERE id = ?`)
+    .bind(
+      fields.parentId ?? row.parent_id,
+      fields.name ?? row.name,
+      fields.description ?? row.description,
+      fields.sortOrder ?? row.sort_order,
+      fields.isPublic === undefined ? row.is_public : fields.isPublic ? 1 : 0,
+      fields.status ?? row.status,
+      new Date().toISOString(),
+      id,
+    )
+    .run();
+}
+
+export async function deleteEntryRow(db: D1Database, id: string): Promise<void> {
+  await db.prepare('DELETE FROM entries WHERE id = ?').bind(id).run();
 }
