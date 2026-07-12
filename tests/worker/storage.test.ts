@@ -74,7 +74,7 @@ function dbWithFailure(shouldFail: (sql: string) => boolean): D1Database {
         return typeof value === 'function' ? value.bind(target) : value;
       }
       return (sql: string) => {
-        return wrap(target.prepare(sql), sql);
+        return wrap(target.prepare(sql), sql.replace(/\s+/g, ' ').trim());
       };
     },
   }) as D1Database;
@@ -168,12 +168,6 @@ describe('R2 file lifecycle', () => {
     const id = fileId('stream');
     fixtureIds.push(id);
     fixtureKeys.push(`blobs/${id}`);
-    const body = new ReadableStream<Uint8Array>({
-      start(controller) {
-        controller.enqueue(new TextEncoder().encode('streamed body'));
-        controller.close();
-      },
-    });
     let received: ReadableStream | null = null;
     const streamingEnv = {
       ...workerEnv,
@@ -186,7 +180,7 @@ describe('R2 file lifecycle', () => {
     };
 
     const request = new Request('https://ilist.example/upload', {
-      method: 'PUT', headers: { 'content-type': 'text/plain' }, body,
+      method: 'PUT', headers: { 'content-type': 'text/plain' }, body: 'streamed body',
     });
     const requestBody = request.body!;
     await uploadFile(streamingEnv, request, {
