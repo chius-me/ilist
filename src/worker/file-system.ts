@@ -16,6 +16,7 @@ import {
   listStorageRecoveryOperations,
   moveReadyEntry,
   retryStorageRecoveryOperation,
+  touchHeldStorageRecoveryOperation,
   updateClaimedStorageRecoveryOperation,
   updateReadyEntryFields,
 } from './db';
@@ -26,6 +27,62 @@ import type { BatchResult, Entry, EntryRow, Env, StorageRecoveryOperationRow } f
 
 const ENTRY_NAME_UNIQUE_CONSTRAINT = 'UNIQUE constraint failed: entries.parent_id, entries.name';
 const ENTRY_ID_UNIQUE_CONSTRAINT = 'UNIQUE constraint failed: entries.id';
+const UPLOAD_HEARTBEAT_INTERVAL_MS = 60_000;
+
+interface UploadRecoveryHeartbeatOptions {
+  now?: () => number;
+  heartbeatIntervalMs?: number;
+  setInterval?: (callback: () => Promise<void>, delay: number) => unknown;
+  clearInterval?: (interval: unknown) => void;
+}
+
+interface UploadFileOptions {
+  recoveryHeartbeat?: UploadRecoveryHeartbeatOptions;
+}
+
+function startUploadRecoveryHeartbeat(
+  db: D1Database,
+  operationId: string,
+  attemptOwner: string,
+  options: UploadRecoveryHeartbeatOptions = {},
+): { stop: () => void; touch: () => Promise<void>; ownershipLost: () => boolean } {
+  let active = true;
+  let stopped = false;
+  let lostOwnership = false;
+  const now = options.now ?? Date.now;
+  const setHeartbeatInterval = options.setInterval
+    ?? ((callback: () => Promise<void>, delay: number) => globalThis.setInterval(() => { void callback(); }, delay));
+  const clearHeartbeatInterval = options.clearInterval
+    ?? ((interval: unknown) => globalThis.clearInterval(interval as number));
+  let interval: unknown;
+  let intervalStarted = false;
+  const stop = () => {
+    if (stopped) return;
+    stopped = true;
+    active = false;
+    if (intervalStarted) clearHeartbeatInterval(interval);
+  };
+  const touch = async () => {
+    if (!active) return;
+    try {
+      if (!await touchHeldStorageRecoveryOperation(db, operationId, attemptOwner, now())) {
+        lostOwnership = true;
+        stop();
+      }
+    } catch {
+      // A failed heartbeat leaves the held operation recoverable once it becomes stale.
+    }
+  };
+  interval = setHeartbeatInterval(touch, options.heartbeatIntervalMs ?? UPLOAD_HEARTBEAT_INTERVAL_MS);
+  intervalStarted = true;
+  if (stopped) clearHeartbeatInterval(interval);
+
+  return {
+    stop,
+    touch,
+    ownershipLost: () => lostOwnership,
+  };
+}
 
 function hasUniqueConstraint(error: unknown, constraint: string): boolean {
   const seen = new Set<object>();
@@ -165,6 +222,7 @@ export async function uploadFile(
   env: Env,
   request: Request,
   input: { id: string; parentId: string; name: string },
+  options: UploadFileOptions = {},
 ): Promise<Entry> {
   if (!request.body) throw new HttpError(400, 'UPLOAD_BODY_MISSING', 'Upload body is missing');
 
@@ -229,27 +287,34 @@ export async function uploadFile(
     throw entryNameConflict(error, name) ?? error;
   }
 
+  const heartbeat = startUploadRecoveryHeartbeat(env.DB, operationId, owner, options.recoveryHeartbeat);
   try {
-    const object = await env.R2_BUCKET.put(row.storage_key!, request.body, {
-      httpMetadata: { contentType: request.headers.get('content-type') ?? 'application/octet-stream' },
-    });
-    const finalized = await finalizeUploadedEntry(env.DB, id, owner, {
-      size: object.size,
-      contentType: object.httpMetadata?.contentType ?? request.headers.get('content-type'),
-      etag: object.httpEtag || object.etag,
-    });
-    if (!finalized) throw new Error('Upload entry was not available for finalization');
-    await activateStorageRecoveryOperation(env.DB, operationId, 'completed').catch(() => undefined);
-    const completed = await listStorageRecoveryOperations(env.DB, id);
-    const completedOperation = completed.find((operation) => operation.id === operationId);
-    if (completedOperation?.state === 'pending') {
-      await reconcileStorageRecovery(env, { limit: 1 });
+    try {
+      const object = await env.R2_BUCKET.put(row.storage_key!, request.body, {
+        httpMetadata: { contentType: request.headers.get('content-type') ?? 'application/octet-stream' },
+      });
+      await heartbeat.touch();
+      if (heartbeat.ownershipLost()) throw new Error('Upload recovery ownership was lost');
+      const finalized = await finalizeUploadedEntry(env.DB, id, owner, {
+        size: object.size,
+        contentType: object.httpMetadata?.contentType ?? request.headers.get('content-type'),
+        etag: object.httpEtag || object.etag,
+      });
+      if (!finalized) throw new Error('Upload entry was not available for finalization');
+      await activateStorageRecoveryOperation(env.DB, operationId, 'completed').catch(() => undefined);
+      const completed = await listStorageRecoveryOperations(env.DB, id);
+      const completedOperation = completed.find((operation) => operation.id === operationId);
+      if (completedOperation?.state === 'pending') {
+        await reconcileStorageRecovery(env, { limit: 1 });
+      }
+    } catch (error) {
+      await activateStorageRecoveryOperation(env.DB, operationId, 'cleanup_blob').catch(() => undefined);
+      await reconcileStorageRecovery(env, { limit: 1 }).catch(() => undefined);
+      if (error instanceof HttpError) throw error;
+      throw new HttpError(502, 'STORAGE_OPERATION_FAILED', 'Upload failed');
     }
-  } catch (error) {
-    await activateStorageRecoveryOperation(env.DB, operationId, 'cleanup_blob').catch(() => undefined);
-    await reconcileStorageRecovery(env, { limit: 1 }).catch(() => undefined);
-    if (error instanceof HttpError) throw error;
-    throw new HttpError(502, 'STORAGE_OPERATION_FAILED', 'Upload failed');
+  } finally {
+    heartbeat.stop();
   }
 
   const ready = await getEntryById(env.DB, id);
@@ -368,14 +433,21 @@ async function recoverDeleteTree(
 
 export async function reconcileStorageRecovery(
   env: Env,
-  options: { limit?: number; maxBlobDeletes?: number; workerOwner?: string; deleteBlob?: (key: string) => Promise<void> } = {},
+  options: {
+    limit?: number;
+    maxBlobDeletes?: number;
+    workerOwner?: string;
+    deleteBlob?: (key: string) => Promise<void>;
+    now?: () => number;
+  } = {},
 ): Promise<RecoveryResult> {
   const result: RecoveryResult = { processed: 0, completed: 0, retried: 0 };
   const workerOwner = options.workerOwner ?? crypto.randomUUID();
   const deleteBlob = options.deleteBlob ?? ((key: string) => env.R2_BUCKET.delete(key));
-  const operations = await listStorageRecoveryOperations(env.DB, undefined, options.limit ?? 20);
+  const now = (options.now ?? Date.now)();
+  const operations = await listStorageRecoveryOperations(env.DB, undefined, options.limit ?? 20, now);
   for (const candidate of operations) {
-    const operation = await claimStorageRecoveryOperation(env.DB, candidate.id, workerOwner);
+    const operation = await claimStorageRecoveryOperation(env.DB, candidate.id, workerOwner, 30_000, now);
     if (!operation) continue;
     result.processed += 1;
     const outcome = operation.operation_kind === 'upload_cleanup'

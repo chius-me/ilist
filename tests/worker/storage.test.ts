@@ -1,6 +1,12 @@
 import { env } from 'cloudflare:test';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
-import { findEntryByStorageKey, getEntryById, listStorageRecoveryOperations } from '../../src/worker/db';
+import {
+  enqueueStorageRecoveryOperation,
+  findEntryByStorageKey,
+  getEntryById,
+  listStorageRecoveryOperations,
+  touchHeldStorageRecoveryOperation,
+} from '../../src/worker/db';
 import {
   createFolder,
   deleteEntryTrees,
@@ -188,6 +194,150 @@ describe('R2 file lifecycle', () => {
     });
 
     expect(received).toBe(requestBody);
+  });
+
+  it('touches a held upload recovery operation only for its matching attempt', async () => {
+    const id = fileId('held-touch');
+    fixtureIds.push(id);
+    const operationId = `upload:${id}:attempt-owner`;
+    await enqueueStorageRecoveryOperation(workerEnv.DB, {
+      id: operationId,
+      entryId: id,
+      operationKind: 'upload_cleanup',
+      storageKey: `blobs/${id}`,
+      attemptOwner: 'attempt-owner',
+      phase: 'uploading',
+      state: 'held',
+    });
+    const before = (await listStorageRecoveryOperations(workerEnv.DB, id))[0]!;
+    const touchedAt = Date.parse(before.updated_at) + 60_000;
+
+    await expect(touchHeldStorageRecoveryOperation(workerEnv.DB, operationId, 'other-attempt', touchedAt)).resolves.toBe(false);
+    expect((await listStorageRecoveryOperations(workerEnv.DB, id))[0]!.updated_at).toBe(before.updated_at);
+    await expect(touchHeldStorageRecoveryOperation(workerEnv.DB, operationId, 'attempt-owner', touchedAt)).resolves.toBe(true);
+    expect((await listStorageRecoveryOperations(workerEnv.DB, id))[0]!.updated_at).toBe(new Date(touchedAt).toISOString());
+  });
+
+  it('heartbeats a held upload through a stalled R2 PUT so recovery cannot claim it', async () => {
+    const id = fileId('upload-heartbeat');
+    fixtureIds.push(id);
+    fixtureKeys.push(`blobs/${id}`);
+    let startPut!: () => void;
+    let releasePut!: () => void;
+    const putStarted = new Promise<void>((resolve) => { startPut = resolve; });
+    const release = new Promise<void>((resolve) => { releasePut = resolve; });
+    let heartbeat!: () => void;
+    let cleared = 0;
+    let now = Date.now();
+    const heartbeatEnv = {
+      ...workerEnv,
+      R2_BUCKET: bucketWith({
+        put: async (...args: Parameters<R2Bucket['put']>) => {
+          startPut();
+          await release;
+          return await workerEnv.R2_BUCKET.put(...args);
+        },
+      }),
+    };
+
+    const uploadAttempt = uploadFile(heartbeatEnv, new Request('https://ilist.example/upload', {
+      method: 'PUT', body: 'streamed body',
+    }), { id, parentId: 'root', name: `${fixture}-heartbeat.txt` }, {
+      recoveryHeartbeat: {
+        now: () => now,
+        heartbeatIntervalMs: 60_000,
+        setInterval: (callback) => {
+          heartbeat = callback;
+          return 'heartbeat-timer';
+        },
+        clearInterval: (interval) => {
+          expect(interval).toBe('heartbeat-timer');
+          cleared += 1;
+        },
+      },
+    });
+
+    await putStarted;
+    const held = (await listStorageRecoveryOperations(workerEnv.DB, id))[0]!;
+    now = Date.parse(held.updated_at) + 4 * 60_000;
+    await heartbeat();
+    now += 4 * 60_000;
+    await heartbeat();
+
+    await expect(reconcileStorageRecovery(workerEnv, { now: () => now })).resolves.toEqual({
+      processed: 0, completed: 0, retried: 0,
+    });
+    expect((await listStorageRecoveryOperations(workerEnv.DB, id))[0]).toMatchObject({
+      state: 'held', updated_at: new Date(now).toISOString(),
+    });
+
+    releasePut();
+    await expect(uploadAttempt).resolves.toMatchObject({ id });
+    expect(cleared).toBe(1);
+    await heartbeat();
+    expect(cleared).toBe(1);
+  });
+
+  it('stops a held upload heartbeat when R2 PUT fails', async () => {
+    const id = fileId('heartbeat-put-failure');
+    fixtureIds.push(id);
+    fixtureKeys.push(`blobs/${id}`);
+    let heartbeat!: () => void;
+    let cleared = 0;
+    const failingEnv = {
+      ...workerEnv,
+      R2_BUCKET: bucketWith({ put: async () => { throw new Error('R2 PUT failed'); } }),
+    };
+
+    await expect(uploadFile(failingEnv, new Request('https://ilist.example/upload', { method: 'PUT', body: 'x' }), {
+      id, parentId: 'root', name: `${fixture}-heartbeat-failure.txt`,
+    }, {
+      recoveryHeartbeat: {
+        setInterval: (callback) => {
+          heartbeat = callback;
+          return 'heartbeat-timer';
+        },
+        clearInterval: () => { cleared += 1; },
+      },
+    })).rejects.toMatchObject({ status: 502, code: 'STORAGE_OPERATION_FAILED' });
+
+    expect(cleared).toBe(1);
+    await heartbeat();
+    expect(cleared).toBe(1);
+  });
+
+  it('reclaims a stale held upload recovery operation with no heartbeat', async () => {
+    const id = fileId('stale-held-upload');
+    const key = `blobs/${id}`;
+    fixtureIds.push(id);
+    fixtureKeys.push(key);
+    const owner = 'crashed-upload-owner';
+    const operationId = `upload:${id}:${owner}`;
+    const staleAt = Date.now() - 6 * 60_000;
+    const timestamp = new Date(staleAt).toISOString();
+    await workerEnv.DB.prepare(`INSERT INTO entries (
+      id, parent_id, name, kind, storage_key, size, content_type, etag, status, lifecycle_owner, is_public, sort_order, description, created_at, updated_at
+    ) VALUES (?, 'root', ?, 'file', ?, 0, NULL, NULL, 'uploading', ?, 1, 0, '', ?, ?)`).bind(
+      id, `${fixture}-stale.txt`, key, owner, timestamp, timestamp,
+    ).run();
+    await enqueueStorageRecoveryOperation(workerEnv.DB, {
+      id: operationId,
+      entryId: id,
+      operationKind: 'upload_cleanup',
+      storageKey: key,
+      attemptOwner: owner,
+      phase: 'uploading',
+      state: 'held',
+    });
+    await workerEnv.DB.prepare('UPDATE storage_recovery_operations SET updated_at = ? WHERE id = ?')
+      .bind(timestamp, operationId).run();
+    await workerEnv.R2_BUCKET.put(key, 'orphaned body');
+
+    await expect(reconcileStorageRecovery(workerEnv, { now: () => Date.now() })).resolves.toEqual({
+      processed: 1, completed: 1, retried: 0,
+    });
+    expect(await getEntryById(workerEnv.DB, id)).toBeNull();
+    expect(await workerEnv.R2_BUCKET.get(key)).toBeNull();
   });
 
   it('sets full and ranged GET and HEAD response lengths from the R2 object', async () => {
