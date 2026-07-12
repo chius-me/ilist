@@ -248,7 +248,8 @@ button:focus-visible, a:focus-visible, input:focus-visible, select:focus-visible
 .entryRow:hover { background: #f8fbf9; }
 .entryRow.isSelected { background: var(--accent-soft); box-shadow: inset 3px 0 0 var(--accent); }
 
-.entrySelect { display: grid; place-items: center; height: 52px; }
+.entrySelect { display: grid; place-items: center; height: 52px; opacity: 0; }
+.entryRow:hover .entrySelect, .entryRow:focus-within .entrySelect, .entryRow.isSelected .entrySelect { opacity: 1; }
 .entrySelect input, .gridSelect { width: 16px; height: 16px; margin: 0; accent-color: var(--accent); }
 
 .entryPrimary {
@@ -296,7 +297,8 @@ button:focus-visible, a:focus-visible, input:focus-visible, select:focus-visible
 .gridIcon { display: grid; width: 48px; height: 48px; place-items: center; border-radius: var(--radius); }
 .gridPrimary strong { width: 100%; overflow: hidden; color: var(--text); font-size: 14px; text-overflow: ellipsis; white-space: nowrap; }
 .gridPrimary small { width: 100%; overflow: hidden; color: var(--muted); font-size: 12px; text-overflow: ellipsis; white-space: nowrap; }
-.gridSelect { position: absolute; top: 10px; right: 10px; z-index: 1; }
+.gridSelect { position: absolute; top: 10px; right: 10px; z-index: 1; opacity: 0; }
+.fileCard:hover .gridSelect, .fileCard:focus-within .gridSelect, .fileCard.isSelected .gridSelect { opacity: 1; }
 .gridMenu { position: absolute; right: 8px; bottom: 8px; }
 
 .emptyState, .errorState {
@@ -345,6 +347,35 @@ button:focus-visible, a:focus-visible, input:focus-visible, select:focus-visible
 .button:hover:not(:disabled) { border-color: #8fa69e; background: #f0f6f3; }
 .button.primary { border-color: var(--accent); background: var(--accent); color: #fff; }
 .button.primary:hover:not(:disabled) { border-color: var(--accent-strong); background: var(--accent-strong); }
+.button.danger { border-color: #c87582; background: var(--danger-soft); color: var(--danger); }
+.button.danger:hover:not(:disabled) { border-color: var(--danger); background: #ffe0e5; }
+
+.selectionToolbar { display: flex; align-items: center; justify-content: space-between; min-height: 56px; gap: 10px; border-top: 1px solid var(--line); border-bottom: 1px solid var(--line); background: var(--accent-soft); padding: 8px 10px; }
+.selectionToolbar strong { font-size: 14px; white-space: nowrap; }
+.selectionActions { display: flex; align-items: center; justify-content: flex-end; gap: 6px; }
+.operationNotice { border-bottom: 1px solid #bed8d0; background: var(--accent-soft); color: var(--accent-strong); padding: 8px 12px; font-size: 13px; }
+
+.actionMenu { position: fixed; z-index: 25; right: max(16px, calc((100vw - 1080px) / 2)); top: 112px; display: grid; min-width: 190px; border: 1px solid var(--line-strong); border-radius: var(--radius); background: #fff; box-shadow: 0 12px 30px rgba(26, 39, 34, 0.18); padding: 4px; }
+.actionMenu button, .actionMenu a { display: flex; align-items: center; min-height: 34px; gap: 8px; border: 0; border-radius: 4px; background: transparent; padding: 6px 8px; color: var(--text); font-size: 13px; text-align: left; text-decoration: none; }
+.actionMenu button:hover, .actionMenu a:hover { background: #eff5f2; }
+.actionMenu .destructive { margin-top: 4px; border-top: 1px solid var(--line); color: var(--danger); }
+
+.operationDialog { width: min(100%, 440px); border: 1px solid var(--line-strong); border-radius: var(--radius); background: #fff; box-shadow: 0 18px 48px rgba(26, 39, 34, 0.2); }
+.operationDialog form, .dialogBody { display: grid; gap: 14px; padding: 16px; }
+.operationDialog label { display: grid; gap: 6px; color: var(--text); font-size: 13px; font-weight: 650; }
+.operationDialog input, .operationDialog textarea { width: 100%; border: 1px solid var(--line-strong); border-radius: var(--radius); background: #fff; padding: 8px 9px; color: var(--text); }
+.operationDialog input { height: 38px; }
+.operationDialog textarea { min-height: 84px; resize: vertical; }
+.operationDialog .checkboxLabel { display: flex; align-items: center; gap: 8px; }
+.operationDialog .checkboxLabel input { width: 16px; height: 16px; }
+.dialogBody p { margin: 0; color: var(--muted); font-size: 13px; line-height: 1.45; }
+.dialogButtons { display: flex; justify-content: flex-end; gap: 8px; }
+.pickerBreadcrumbs { display: flex; min-height: 28px; overflow-x: auto; }
+.pickerBreadcrumbs button { display: inline-flex; align-items: center; flex: 0 0 auto; border: 0; background: transparent; color: var(--accent-strong); padding: 3px 2px; font-size: 13px; }
+.folderPicker { display: grid; max-height: 220px; overflow: auto; border: 1px solid var(--line); border-radius: var(--radius); }
+.folderPicker button { display: flex; align-items: center; min-height: 38px; gap: 8px; border: 0; border-bottom: 1px solid #e7ece9; background: #fff; padding: 7px 10px; text-align: left; }
+.folderPicker button:hover:not(:disabled) { background: #f0f6f3; }
+.folderPicker span { padding: 12px; color: var(--muted); font-size: 13px; }
 
 .dialogBackdrop { position: fixed; inset: 0; z-index: 20; display: grid; place-items: center; background: rgba(21, 32, 30, 0.32); padding: 16px; }
 .loginDialog { width: min(100%, 360px); border: 1px solid var(--line-strong); border-radius: var(--radius); background: #fff; box-shadow: 0 18px 48px rgba(26, 39, 34, 0.2); }
@@ -382,6 +413,9 @@ button:focus-visible, a:focus-visible, input:focus-visible, select:focus-visible
   .explorerToolbar { align-items: stretch; flex-wrap: wrap; }
   .searchControl { flex-basis: 100%; max-width: none; }
   .toolbarActions { width: 100%; justify-content: flex-start; }
+  .selectionToolbar { align-items: flex-start; flex-direction: column; }
+  .selectionActions { width: 100%; justify-content: flex-start; flex-wrap: wrap; }
+  .actionMenu { right: 12px; top: auto; bottom: 12px; width: min(100% - 24px, 360px); }
   .entryPrimary { grid-template-columns: 32px minmax(0, 1fr) 60px; }
   .entryType, .entryDate { display: none; }
   .entryActions { width: 38px; margin-right: 4px; }
@@ -393,6 +427,7 @@ button:focus-visible, a:focus-visible, input:focus-visible, select:focus-visible
 @media (max-width: 420px) {
   .sessionIndicator { display: none; }
   .toolbarActions { gap: 5px; }
+  .selectionActions .button { flex: 1 1 auto; }
   .sortControl { flex: 1 1 auto; }
   .sortControl select { width: 100%; }
   .entryPrimary { grid-template-columns: 32px minmax(0, 1fr); gap: 8px; padding-left: 8px; padding-right: 6px; }

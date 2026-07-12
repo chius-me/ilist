@@ -91,7 +91,7 @@ export function ExplorerToolbar({
             <button className="iconButton" type="button" title="Upload is coming soon" aria-label="Upload files" disabled onClick={onUpload}>
               <Upload aria-hidden="true" size={17} />
             </button>
-            <button className="iconButton" type="button" title="New folder is coming soon" aria-label="Create folder" disabled onClick={onCreateFolder}>
+            <button className="iconButton" type="button" title="Create folder" aria-label="Create folder" onClick={onCreateFolder}>
               <Plus aria-hidden="true" size={17} />
             </button>
             {selectionCount > 0 ? <span className="selectionCount">{selectionCount} selected</span> : null}

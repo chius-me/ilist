@@ -44,7 +44,7 @@ export function EntryRow({
   const activate = () => (isFolder ? onOpen(entry) : onPreview(entry));
 
   return (
-    <li className={`entryRow ${selected ? 'isSelected' : ''}`}>
+    <li className={`entryRow ${selected ? 'isSelected' : ''}`} onContextMenu={(event) => { if (admin) { event.preventDefault(); onMenu(entry); } }}>
       {admin ? (
         <label className="entrySelect">
           <span className="srOnly">Select {entry.name}</span>
@@ -64,7 +64,7 @@ export function EntryRow({
       <span className="entryActions">
         {entry.capabilities.download ? <a className="iconButton" href={`/file/${encodeURIComponent(entry.id)}/${encodeURIComponent(entry.name)}?download=1`} title={`Download ${entry.name}`} aria-label={`Download ${entry.name}`}><Download aria-hidden="true" size={16} /></a> : null}
         {admin ? (
-          <button className="iconButton" type="button" title="More actions are coming soon" aria-label={`More actions for ${entry.name}`} disabled onClick={() => onMenu(entry)}>
+          <button className="iconButton" type="button" title={`Actions for ${entry.name}`} aria-label={`Actions for ${entry.name}`} onClick={() => onMenu(entry)}>
             <MoreHorizontal aria-hidden="true" size={17} />
           </button>
         ) : null}
