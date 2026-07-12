@@ -1,6 +1,6 @@
 import { AlertCircle, Folder, LoaderCircle, RefreshCw } from 'lucide-react';
 import { useEffect, useMemo, useRef, useState } from 'react';
-import { childPath } from '../api/entries';
+import { childPath, getEntry } from '../api/entries';
 import { useDirectory } from '../hooks/useDirectory';
 import { useExplorerLocation } from '../hooks/useExplorerLocation';
 import { useSelection } from '../hooks/useSelection';
@@ -12,6 +12,7 @@ import { FileGrid } from '../features/explorer/FileGrid';
 import { FileList } from '../features/explorer/FileList';
 import { ExplorerToolbar, type ExplorerSort, type ExplorerView } from '../features/explorer/ExplorerToolbar';
 import { LoginDialog } from '../features/explorer/LoginDialog';
+import { PreviewOverlay } from '../features/preview/PreviewOverlay';
 
 const VIEW_MODE_KEY = 'ilist.explorer.view';
 
@@ -49,7 +50,7 @@ function LoadingRows() {
 }
 
 export function ExplorerApp() {
-  const { path, previewId, openPath, openPreview } = useExplorerLocation();
+  const { path, previewId, openPath, openPreview, closePreview } = useExplorerLocation();
   const session = useSession();
   const lastNonAdminPath = useRef('/');
   const explorerPath = path === '/admin' ? lastNonAdminPath.current : path;
@@ -60,6 +61,9 @@ export function ExplorerApp() {
   const [view, setView] = useState<ExplorerView>(storedViewMode);
   const [loginBusy, setLoginBusy] = useState(false);
   const [loginError, setLoginError] = useState<string | null>(null);
+  const [previewEntry, setPreviewEntry] = useState<Entry | null>(null);
+  const [previewLoading, setPreviewLoading] = useState(false);
+  const [previewError, setPreviewError] = useState<Error | null>(null);
 
   useEffect(() => {
     if (path !== '/admin') lastNonAdminPath.current = path;
@@ -68,6 +72,25 @@ export function ExplorerApp() {
   useEffect(() => {
     persistViewMode(view);
   }, [view]);
+
+  useEffect(() => {
+    if (!previewId) {
+      setPreviewEntry(null);
+      setPreviewLoading(false);
+      setPreviewError(null);
+      return;
+    }
+    const controller = new AbortController();
+    setPreviewEntry(null);
+    setPreviewError(null);
+    setPreviewLoading(true);
+    void getEntry(previewId, controller.signal).then(setPreviewEntry).catch((error: unknown) => {
+      if (!(error instanceof DOMException && error.name === 'AbortError')) setPreviewError(error instanceof Error ? error : new Error('Unable to load preview'));
+    }).finally(() => {
+      if (!controller.signal.aborted) setPreviewLoading(false);
+    });
+    return () => controller.abort();
+  }, [previewId]);
 
   useEffect(() => {
     selection.clear();
@@ -154,6 +177,7 @@ export function ExplorerApp() {
         </section>
       </main>
       <LoginDialog open={path === '/admin' && session.status !== 'admin'} busy={loginBusy} error={loginError} onClose={closeLogin} onSubmit={submitLogin} />
+      {previewId ? <PreviewOverlay entry={previewEntry} loading={previewLoading} error={previewError} onClose={closePreview} /> : null}
     </>
   );
 }
