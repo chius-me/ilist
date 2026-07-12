@@ -205,6 +205,21 @@ npm run dev
 | `npm run migrate:objects -- --local` | 在本地将旧版对象行导入条目模型 |
 | `npm run migrate:objects -- --remote` | 在生产环境导入旧版对象行 |
 
+## 持续部署
+
+[`.github/workflows/ci-cd.yml`](.github/workflows/ci-cd.yml) 会在每个 Pull Request 以及每次推送到 `main` 时运行 `npm run check`。
+
+`main` 上检查通过后（或手动 `workflow_dispatch`），同一 workflow 会应用待执行的远程 D1 迁移，再用 Wrangler 部署 Worker 与 Assets。通过 `wrangler secret put` 写入的 Worker secret 保留在 Cloudflare，不会由 CI 重新上传。
+
+首次自动部署前，请在仓库 **Settings → Secrets and variables → Actions** 配置以下 **repository secrets**：
+
+| Secret | 用途 |
+| --- | --- |
+| `CLOUDFLARE_API_TOKEN` | 具备本账户 Workers、Workers Routes / Custom Domains 与 D1 编辑权限的 API token |
+| `CLOUDFLARE_ACCOUNT_ID` | 拥有 `ilist` Worker、`ilist-db` D1 与 `ilist-files` R2 的 Cloudflare 账户 ID |
+
+不要把 `ADMIN_PASSWORD_HASH`、`CREDENTIAL_MASTER_KEY`、OAuth client secret 或其他 Worker secret 放进 GitHub；它们只应作为 Cloudflare Worker secret 保存。
+
 ## 安全
 
 - 保持 `CREDENTIAL_MASTER_KEY` 稳定。未经重新加密迁移就修改它，会使已存储的提供商凭据无法读取。
