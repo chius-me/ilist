@@ -3,6 +3,7 @@ import {
   claimStorageRecoveryOperation,
   claimEntryTreeForDeletion,
   completeStorageRecoveryOperation,
+  countDescendantRows,
   deleteDeletingEntry,
   deleteUploadingEntry,
   enqueueStorageRecoveryOperation,
@@ -15,6 +16,7 @@ import {
   listDescendantRows,
   listStorageRecoveryOperations,
   moveReadyEntry,
+  renewStorageRecoveryOperation,
   retryStorageRecoveryOperation,
   touchHeldStorageRecoveryOperation,
   updateClaimedStorageRecoveryOperation,
@@ -38,6 +40,19 @@ interface UploadRecoveryHeartbeatOptions {
 
 interface UploadFileOptions {
   recoveryHeartbeat?: UploadRecoveryHeartbeatOptions;
+}
+
+interface RecoveryClaimHeartbeatOptions {
+  now?: () => number;
+  heartbeatIntervalMs?: number;
+  setInterval?: (callback: () => Promise<void>, delay: number) => unknown;
+  clearInterval?: (interval: unknown) => void;
+}
+
+interface RecoveryClaimHeartbeat {
+  stop: () => void;
+  touch: () => Promise<void>;
+  ownershipLost: () => boolean;
 }
 
 function startUploadRecoveryHeartbeat(
@@ -82,6 +97,47 @@ function startUploadRecoveryHeartbeat(
     touch,
     ownershipLost: () => lostOwnership,
   };
+}
+
+function startRecoveryClaimHeartbeat(
+  db: D1Database,
+  operationId: string,
+  claimOwner: string,
+  leaseDurationMs: number,
+  options: RecoveryClaimHeartbeatOptions = {},
+): RecoveryClaimHeartbeat {
+  let active = true;
+  let stopped = false;
+  let lostOwnership = false;
+  const now = options.now ?? Date.now;
+  const setHeartbeatInterval = options.setInterval
+    ?? ((callback: () => Promise<void>, delay: number) => globalThis.setInterval(() => { void callback(); }, delay));
+  const clearHeartbeatInterval = options.clearInterval
+    ?? ((interval: unknown) => globalThis.clearInterval(interval as number));
+  let interval: unknown;
+  let intervalStarted = false;
+  const stop = () => {
+    if (stopped) return;
+    stopped = true;
+    active = false;
+    if (intervalStarted) clearHeartbeatInterval(interval);
+  };
+  const touch = async () => {
+    if (!active) return;
+    try {
+      if (!await renewStorageRecoveryOperation(db, operationId, claimOwner, leaseDurationMs, now())) {
+        lostOwnership = true;
+        stop();
+      }
+    } catch {
+      // A failed heartbeat leaves the operation recoverable once its lease expires.
+    }
+  };
+  interval = setHeartbeatInterval(touch, options.heartbeatIntervalMs ?? Math.max(1, Math.floor(leaseDurationMs / 3)));
+  intervalStarted = true;
+  if (stopped) clearHeartbeatInterval(interval);
+
+  return { stop, touch, ownershipLost: () => lostOwnership };
 }
 
 function hasUniqueConstraint(error: unknown, constraint: string): boolean {
@@ -246,7 +302,7 @@ export async function uploadFile(
     parent_id: parent.id,
     name,
     kind: 'file',
-    storage_key: storageKeyForEntry(id),
+    storage_key: storageKeyForEntry(id, owner),
     size: 0,
     content_type: request.headers.get('content-type'),
     etag: null,
@@ -342,30 +398,41 @@ async function recoverUploadCleanup(
   operation: StorageRecoveryOperationRow,
   claimOwner: string,
   deleteBlob: (key: string) => Promise<void>,
+  heartbeat: RecoveryClaimHeartbeat,
 ): Promise<'completed' | 'retried'> {
+  const storageKey = operation.storage_key;
+  if (!storageKey) {
+    await heartbeat.touch();
+    if (heartbeat.ownershipLost()) return 'retried';
+    await completeStorageRecoveryOperation(env.DB, operation.id, claimOwner);
+    return 'completed';
+  }
   const row = await getEntryById(env.DB, operation.entry_id);
-  if (!row) {
-    const currentOwner = operation.storage_key ? await findEntryByStorageKey(env.DB, operation.storage_key) : null;
-    if (currentOwner || !operation.storage_key) {
+  if (!row || row.status !== 'uploading' || row.lifecycle_owner !== operation.attempt_owner) {
+    const currentOwner = await findEntryByStorageKey(env.DB, storageKey);
+    if (currentOwner) {
+      await heartbeat.touch();
+      if (heartbeat.ownershipLost()) return 'retried';
       await completeStorageRecoveryOperation(env.DB, operation.id, claimOwner);
       return 'completed';
     }
     try {
-      await deleteBlob(operation.storage_key);
+      await deleteBlob(storageKey);
+      await heartbeat.touch();
+      if (heartbeat.ownershipLost()) return 'retried';
       await completeStorageRecoveryOperation(env.DB, operation.id, claimOwner);
       return 'completed';
     } catch (error) {
+      if (heartbeat.ownershipLost()) return 'retried';
       await retryStorageRecoveryOperation(env.DB, operation.id, claimOwner, error);
       return 'retried';
     }
   }
-  if (row.status !== 'uploading' || row.lifecycle_owner !== operation.attempt_owner) {
-    await completeStorageRecoveryOperation(env.DB, operation.id, claimOwner);
-    return 'completed';
-  }
   try {
-    await deleteBlob(row.storage_key!);
-    if (!await updateClaimedStorageRecoveryOperation(env.DB, operation.id, claimOwner, 'delete_metadata', { deletedKeys: [row.storage_key] })) {
+    await deleteBlob(storageKey);
+    await heartbeat.touch();
+    if (heartbeat.ownershipLost()) return 'retried';
+    if (!await updateClaimedStorageRecoveryOperation(env.DB, operation.id, claimOwner, 'delete_metadata', { deletedKeys: [storageKey] })) {
       await retryStorageRecoveryOperation(env.DB, operation.id, claimOwner, new Error('Recovery claim was lost'));
       return 'retried';
     }
@@ -373,6 +440,7 @@ async function recoverUploadCleanup(
     await completeStorageRecoveryOperation(env.DB, operation.id, claimOwner);
     return 'completed';
   } catch (error) {
+    if (heartbeat.ownershipLost()) return 'retried';
     await retryStorageRecoveryOperation(env.DB, operation.id, claimOwner, error);
     return 'retried';
   }
@@ -384,9 +452,12 @@ async function recoverDeleteTree(
   claimOwner: string,
   maxBlobDeletes: number,
   deleteBlob: (key: string) => Promise<void>,
+  heartbeat: RecoveryClaimHeartbeat,
 ): Promise<'completed' | 'retried'> {
   const rows = await listDescendantRows(env.DB, operation.entry_id);
   if (!rows.length || rows.some((row) => row.status !== 'deleting' || row.lifecycle_owner !== operation.attempt_owner)) {
+    await heartbeat.touch();
+    if (heartbeat.ownershipLost()) return 'retried';
     await completeStorageRecoveryOperation(env.DB, operation.id, claimOwner);
     return 'completed';
   }
@@ -398,6 +469,8 @@ async function recoverDeleteTree(
     for (const row of files.slice(0, maxBlobDeletes)) {
       await deleteBlob(row.storage_key!);
       deleted.add(row.storage_key!);
+      await heartbeat.touch();
+      if (heartbeat.ownershipLost()) return 'retried';
       if (!await updateClaimedStorageRecoveryOperation(env.DB, operation.id, claimOwner, 'delete_blobs', {
         deletedKeys: [...deleted],
       })) {
@@ -406,9 +479,13 @@ async function recoverDeleteTree(
       }
     }
     if (files.length > maxBlobDeletes) {
+      await heartbeat.touch();
+      if (heartbeat.ownershipLost()) return 'retried';
       await retryStorageRecoveryOperation(env.DB, operation.id, claimOwner, new Error('Delete tree has remaining blobs'));
       return 'retried';
     }
+    await heartbeat.touch();
+    if (heartbeat.ownershipLost()) return 'retried';
     if (!await updateClaimedStorageRecoveryOperation(env.DB, operation.id, claimOwner, 'delete_metadata', { deletedKeys: [...deleted] })) {
       await retryStorageRecoveryOperation(env.DB, operation.id, claimOwner, new Error('Recovery claim was lost'));
       return 'retried';
@@ -426,6 +503,7 @@ async function recoverDeleteTree(
     await completeStorageRecoveryOperation(env.DB, operation.id, claimOwner);
     return 'completed';
   } catch (error) {
+    if (heartbeat.ownershipLost()) return 'retried';
     await retryStorageRecoveryOperation(env.DB, operation.id, claimOwner, error);
     return 'retried';
   }
@@ -439,20 +517,31 @@ export async function reconcileStorageRecovery(
     workerOwner?: string;
     deleteBlob?: (key: string) => Promise<void>;
     now?: () => number;
+    recoveryHeartbeat?: RecoveryClaimHeartbeatOptions;
   } = {},
 ): Promise<RecoveryResult> {
   const result: RecoveryResult = { processed: 0, completed: 0, retried: 0 };
   const workerOwner = options.workerOwner ?? crypto.randomUUID();
   const deleteBlob = options.deleteBlob ?? ((key: string) => env.R2_BUCKET.delete(key));
-  const now = (options.now ?? Date.now)();
-  const operations = await listStorageRecoveryOperations(env.DB, undefined, options.limit ?? 20, now);
+  const now = options.now ?? Date.now;
+  const leaseDurationMs = 30_000;
+  const operations = await listStorageRecoveryOperations(env.DB, undefined, options.limit ?? 20, now());
   for (const candidate of operations) {
-    const operation = await claimStorageRecoveryOperation(env.DB, candidate.id, workerOwner, 30_000, now);
+    const operation = await claimStorageRecoveryOperation(env.DB, candidate.id, workerOwner, leaseDurationMs, now());
     if (!operation) continue;
     result.processed += 1;
-    const outcome = operation.operation_kind === 'upload_cleanup'
-      ? await recoverUploadCleanup(env, operation, workerOwner, deleteBlob)
-      : await recoverDeleteTree(env, operation, workerOwner, options.maxBlobDeletes ?? 100, deleteBlob);
+    const heartbeat = startRecoveryClaimHeartbeat(env.DB, operation.id, workerOwner, leaseDurationMs, {
+      ...options.recoveryHeartbeat,
+      now,
+    });
+    let outcome: 'completed' | 'retried';
+    try {
+      outcome = operation.operation_kind === 'upload_cleanup'
+        ? await recoverUploadCleanup(env, operation, workerOwner, deleteBlob, heartbeat)
+        : await recoverDeleteTree(env, operation, workerOwner, options.maxBlobDeletes ?? 100, deleteBlob, heartbeat);
+    } finally {
+      heartbeat.stop();
+    }
     if (outcome === 'completed') result.completed += 1;
     else result.retried += 1;
   }
@@ -475,6 +564,9 @@ export async function deleteEntryTrees(
           throw new HttpError(409, 'ENTRY_DELETE_IN_PROGRESS', 'Entry deletion is already in progress');
         }
         throw new HttpError(404, 'ENTRY_NOT_FOUND', 'Entry not found');
+      }
+      if (await countDescendantRows(env.DB, id) > maxEntries) {
+        throw new HttpError(409, 'OPERATION_LIMIT_EXCEEDED', 'Delete contains too many entries');
       }
 
       const owner = crypto.randomUUID();
