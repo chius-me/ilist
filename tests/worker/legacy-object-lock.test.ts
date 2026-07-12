@@ -39,7 +39,7 @@ describe('legacy object migration lock', () => {
     const response = await routeRequest(
       new Request('https://ilist.example/api/admin/objects/locked.txt', {
         method: 'PATCH',
-        headers: { cookie: `ilist_session=${session.token}`, 'content-type': 'application/json' },
+        headers: { cookie: `ilist_session=${session.token}`, 'content-type': 'application/json', origin: 'https://ilist.example' },
         body: JSON.stringify({ description: 'must not apply' }),
       }),
       workerEnv(),
@@ -109,7 +109,7 @@ describe('legacy object migration lock', () => {
     const response = await routeRequest(
       new Request('https://ilist.example/api/admin/objects/failure.txt', {
         method: 'PUT',
-        headers: { cookie: `ilist_session=${session.token}` },
+        headers: { cookie: `ilist_session=${session.token}`, origin: 'https://ilist.example' },
       }),
       workerEnv(),
     );
@@ -157,7 +157,7 @@ describe('legacy object migration lock', () => {
     const response = await routeRequest(
       new Request('https://ilist.example/api/admin/objects/heartbeat.txt', {
         method: 'PUT',
-        headers: { cookie: `ilist_session=${session.token}`, 'content-type': 'application/octet-stream' },
+        headers: { cookie: `ilist_session=${session.token}`, 'content-type': 'application/octet-stream', origin: 'https://ilist.example' },
         body: stream,
       }),
       timedEnv,
@@ -205,7 +205,7 @@ describe('legacy object migration lock', () => {
     const response = await routeRequest(
       new Request('https://ilist.example/api/admin/objects/lost.txt', {
         method: 'PUT',
-        headers: { cookie: `ilist_session=${session.token}` },
+        headers: { cookie: `ilist_session=${session.token}`, origin: 'https://ilist.example' },
         body: new ReadableStream(),
       }),
       timedEnv,

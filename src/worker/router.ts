@@ -1,6 +1,7 @@
 import {
   clearSessionCookie,
   createSession,
+  currentUser,
   deleteSession,
   requireAdmin,
   sessionCookie,
@@ -8,7 +9,9 @@ import {
 } from './auth';
 import {
   deleteObjectIndex,
+  findEntryByStorageKey,
   getObject,
+  getEntryById,
   LEGACY_OBJECT_MUTATION_LEASE_DURATION_MS,
   listTree,
   normalizePrefix,
@@ -20,8 +23,18 @@ import {
   reserveLegacyObjectMutation,
   upsertObject,
 } from './db';
-import { fail, HttpError, noContent, ok, readJson } from './http';
-import { keyFromPath, putObject, streamObject } from './r2';
+import { entryToApi, isEffectivelyPublic, listDirectory } from './entries';
+import {
+  createFolder,
+  deleteEntryTrees,
+  moveEntries,
+  patchEntry,
+  reconcileStorageRecovery,
+  setEntriesVisibility,
+  uploadFile,
+} from './file-system';
+import { fail, HttpError, noContent, ok, readJson, requireSameOrigin, requireSameOriginWhenPresent } from './http';
+import { keyFromPath, putObject, streamEntryObject } from './r2';
 import type { Env } from './types';
 
 interface LoginBody {
@@ -34,6 +47,32 @@ interface PatchObjectBody {
   description?: string;
   isPublic?: boolean;
   sortOrder?: number;
+}
+
+interface FolderBody {
+  parentId?: unknown;
+  name?: unknown;
+}
+
+interface PatchEntryBody {
+  name?: unknown;
+  description?: unknown;
+  sortOrder?: unknown;
+  isPublic?: unknown;
+}
+
+interface MoveEntriesBody {
+  ids?: unknown;
+  destinationId?: unknown;
+}
+
+interface DeleteEntriesBody {
+  ids?: unknown;
+}
+
+interface VisibilityBody {
+  ids?: unknown;
+  isPublic?: unknown;
 }
 
 const JSON_HEADERS = {
@@ -145,8 +184,60 @@ async function handlePublic(request: Request, env: Env, url: URL): Promise<Respo
   throw new HttpError(404, 'Not found');
 }
 
+function invalidRequest(): never {
+  throw new HttpError(400, 'INVALID_REQUEST', 'Invalid request body');
+}
+
+function stringArray(value: unknown): string[] {
+  if (!Array.isArray(value) || value.some((item) => typeof item !== 'string')) invalidRequest();
+  return value;
+}
+
+async function authorizeEntry(env: Env, id: string, admin: boolean) {
+  const entry = await getEntryById(env.DB, id);
+  if (!entry || entry.status !== 'ready') throw new HttpError(404, 'ENTRY_NOT_FOUND', 'Entry not found');
+  const effectivePublic = await isEffectivelyPublic(env.DB, entry.id);
+  if (!admin && !effectivePublic) throw new HttpError(404, 'ENTRY_NOT_FOUND', 'Entry not found');
+  return { entry, effectivePublic };
+}
+
+async function reconcileAfterStorageFailure(env: Env, operation: () => Promise<Response>): Promise<Response> {
+  try {
+    return await operation();
+  } catch (error) {
+    if (error instanceof HttpError && error.code === 'STORAGE_OPERATION_FAILED') {
+      await reconcileStorageRecovery(env, { limit: 1 }).catch(() => undefined);
+    }
+    throw error;
+  }
+}
+
+async function handleFilesystem(request: Request, env: Env, url: URL): Promise<Response> {
+  if (request.method !== 'GET') return methodNotAllowed();
+  const admin = Boolean(await currentUser(env, request));
+
+  if (url.pathname === '/api/fs/list') {
+    return ok(await listDirectory(env.DB, url.searchParams.get('path') ?? '/', admin));
+  }
+
+  const match = /^\/api\/fs\/entries\/(.+)$/.exec(url.pathname);
+  if (match) {
+    let id: string;
+    try {
+      id = decodeURIComponent(match[1]);
+    } catch {
+      throw new HttpError(404, 'ENTRY_NOT_FOUND', 'Entry not found');
+    }
+    const { entry, effectivePublic } = await authorizeEntry(env, id, admin);
+    return ok(entryToApi(entry, admin, effectivePublic));
+  }
+
+  throw new HttpError(404, 'Not found');
+}
+
 async function handleLogin(request: Request, env: Env): Promise<Response> {
   if (request.method !== 'POST') return methodNotAllowed();
+  requireSameOriginWhenPresent(request);
 
   const body = await readJson<LoginBody>(request);
   const username = body.username || '';
@@ -167,6 +258,7 @@ async function handleLogin(request: Request, env: Env): Promise<Response> {
 
 async function handleLogout(request: Request, env: Env): Promise<Response> {
   if (request.method !== 'POST') return methodNotAllowed();
+  requireSameOriginWhenPresent(request);
   await deleteSession(env, request);
   return ok({}, { headers: { 'set-cookie': clearSessionCookie(request) } });
 }
@@ -176,6 +268,7 @@ async function handleAdmin(request: Request, env: Env, url: URL, options: RouteR
   if (url.pathname === '/api/admin/logout') return handleLogout(request, env);
 
   const user = await requireAdmin(env, request);
+  if (request.method !== 'GET') requireSameOrigin(request);
 
   if (url.pathname === '/api/admin/me') {
     if (request.method !== 'GET') return methodNotAllowed();
@@ -186,6 +279,66 @@ async function handleAdmin(request: Request, env: Env, url: URL, options: RouteR
     if (request.method !== 'GET') return methodNotAllowed();
     const prefix = normalizePrefix(url.searchParams.get('prefix'));
     return ok(await listTree(env.DB, prefix, false));
+  }
+
+  if (url.pathname === '/api/admin/folders') {
+    if (request.method !== 'POST') return methodNotAllowed();
+    const body = await readJson<FolderBody>(request);
+    if (typeof body.parentId !== 'string' || typeof body.name !== 'string') invalidRequest();
+    return ok(await createFolder(env.DB, { parentId: body.parentId, name: body.name }));
+  }
+
+  const uploadMatch = /^\/api\/admin\/files\/([^/]+)$/.exec(url.pathname);
+  if (uploadMatch) {
+    if (request.method !== 'PUT') return methodNotAllowed();
+    let id: string;
+    try {
+      id = decodeURIComponent(uploadMatch[1]);
+    } catch {
+      throw new HttpError(400, 'INVALID_REQUEST', 'Invalid request body');
+    }
+    const parentId = url.searchParams.get('parentId');
+    const name = url.searchParams.get('name');
+    if (parentId === null || name === null) invalidRequest();
+    return reconcileAfterStorageFailure(env, async () => ok(await uploadFile(env, request, { id, parentId, name })));
+  }
+
+  if (url.pathname === '/api/admin/entries/move') {
+    if (request.method !== 'POST') return methodNotAllowed();
+    const body = await readJson<MoveEntriesBody>(request);
+    if (typeof body.destinationId !== 'string') invalidRequest();
+    return ok(await moveEntries(env.DB, stringArray(body.ids), body.destinationId));
+  }
+
+  if (url.pathname === '/api/admin/entries/delete') {
+    if (request.method !== 'POST') return methodNotAllowed();
+    const body = await readJson<DeleteEntriesBody>(request);
+    return reconcileAfterStorageFailure(env, async () => ok(await deleteEntryTrees(env, stringArray(body.ids))));
+  }
+
+  if (url.pathname === '/api/admin/entries/visibility') {
+    if (request.method !== 'POST') return methodNotAllowed();
+    const body = await readJson<VisibilityBody>(request);
+    if (typeof body.isPublic !== 'boolean') invalidRequest();
+    return ok(await setEntriesVisibility(env.DB, stringArray(body.ids), body.isPublic));
+  }
+
+  const patchMatch = /^\/api\/admin\/entries\/([^/]+)$/.exec(url.pathname);
+  if (patchMatch) {
+    if (request.method !== 'PATCH') return methodNotAllowed();
+    const body = await readJson<PatchEntryBody>(request);
+    if (
+      (body.name !== undefined && typeof body.name !== 'string')
+      || (body.description !== undefined && typeof body.description !== 'string')
+      || (body.sortOrder !== undefined && typeof body.sortOrder !== 'number')
+      || (body.isPublic !== undefined && typeof body.isPublic !== 'boolean')
+    ) invalidRequest();
+    return ok(await patchEntry(env.DB, decodeURIComponent(patchMatch[1]), {
+      ...(typeof body.name === 'string' ? { name: body.name } : {}),
+      ...(typeof body.description === 'string' ? { description: body.description } : {}),
+      ...(typeof body.sortOrder === 'number' ? { sortOrder: body.sortOrder } : {}),
+      ...(typeof body.isPublic === 'boolean' ? { isPublic: body.isPublic } : {}),
+    }));
   }
 
   if (url.pathname.startsWith('/api/admin/objects/')) {
@@ -239,15 +392,29 @@ async function handleAdmin(request: Request, env: Env, url: URL, options: RouteR
 async function handleFile(request: Request, env: Env, url: URL): Promise<Response> {
   if (request.method !== 'GET' && request.method !== 'HEAD') return methodNotAllowed();
 
-  const key = keyFromPath(url.pathname, '/file/');
-  const row = await getObject(env.DB, key, true);
-  if (!row) throw new HttpError(404, 'File not found');
-
-  const response = await streamObject(env, row, request);
-  if (request.method === 'HEAD') {
-    return new Response(null, { status: response.status, headers: response.headers });
+  let suffix: string;
+  try {
+    suffix = decodeURIComponent(url.pathname.slice('/file/'.length));
+  } catch {
+    throw new HttpError(404, 'ENTRY_NOT_FOUND', 'Entry not found');
   }
-  return response;
+  const [candidateId] = suffix.split('/');
+  const admin = Boolean(await currentUser(env, request));
+  if (/^[A-Za-z0-9_-]{8,80}$/.test(candidateId) && await getEntryById(env.DB, candidateId)) {
+    const { entry, effectivePublic } = await authorizeEntry(env, candidateId, admin);
+    return streamEntryObject(env.R2_BUCKET, entry, request, {
+      download: url.searchParams.get('download') === '1',
+      publicFile: effectivePublic,
+    });
+  }
+
+  const key = keyFromPath(url.pathname, '/file/');
+  const legacy = await getObject(env.DB, key, false);
+  if (!legacy) throw new HttpError(404, 'ENTRY_NOT_FOUND', 'Entry not found');
+  const entry = await findEntryByStorageKey(env.DB, legacy.key);
+  if (!entry) throw new HttpError(404, 'ENTRY_NOT_FOUND', 'Entry not found');
+  await authorizeEntry(env, entry.id, admin);
+  return new Response(null, { status: 302, headers: { location: `/file/${entry.id}/${encodeURIComponent(entry.name)}` } });
 }
 
 function withSecurityHeaders(response: Response): Response {
@@ -272,6 +439,9 @@ export async function routeRequest(request: Request, env: Env, options: RouteReq
     if (url.pathname.startsWith('/api/public/')) {
       return withSecurityHeaders(await handlePublic(request, env, url));
     }
+    if (url.pathname.startsWith('/api/fs/')) {
+      return withSecurityHeaders(await handleFilesystem(request, env, url));
+    }
     if (url.pathname.startsWith('/api/admin/')) {
       return withSecurityHeaders(await handleAdmin(request, env, url, options));
     }
@@ -282,7 +452,7 @@ export async function routeRequest(request: Request, env: Env, options: RouteReq
     return await env.ASSETS.fetch(request);
   } catch (error) {
     if (error instanceof HttpError) {
-      return withSecurityHeaders(fail(error.status, error.message));
+      return withSecurityHeaders(fail(error.status, error.code, error.message, error.details));
     }
     console.error(error);
     return withSecurityHeaders(fail(500, 'Internal server error'));
