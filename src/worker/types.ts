@@ -137,3 +137,35 @@ export interface BatchResult {
   succeeded: string[];
   failed: BatchFailure[];
 }
+
+export type MountDriverType = 's3' | 'onedrive' | 'native-r2';
+
+export interface MountRow {
+  id: string;
+  name: string;
+  mount_path: string;
+  driver_type: MountDriverType;
+  provider: string;
+  enabled: number;
+  is_public: number;
+  sort_order: number;
+  root_item_id: string | null;
+  config_json: string;
+  created_at: string;
+  updated_at: string;
+}
+
+export interface Mount {
+  id: string;
+  name: string;
+  mountPath: string;
+  driverType: MountDriverType;
+  provider: string;
+  enabled: boolean;
+  isPublic: boolean;
+  sortOrder: number;
+  rootItemId: string | null;
+  config: unknown;
+  createdAt: string;
+  updatedAt: string;
+}
