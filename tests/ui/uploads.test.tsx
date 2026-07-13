@@ -34,8 +34,8 @@ describe('upload queue', () => {
     const { result } = renderHook(() => useUploadQueue({ transport, onCompleted: () => undefined }));
     act(() => result.current.enqueue('root', [new File([''], '   '), new File(['a'], 'same.txt'), new File(['b'], 'same.txt')]));
     await waitFor(() => expect(result.current.tasks).toHaveLength(3));
+    await waitFor(() => expect(result.current.tasks.map((task) => task.status)).toEqual(['failed', 'completed', 'failed']));
     expect(transport).toHaveBeenCalledTimes(1);
-    expect(result.current.tasks.map((task) => task.status)).toEqual(['failed', 'completed', 'failed']);
     expect(result.current.tasks.map((task) => task.error)).toEqual(['Invalid file name', undefined, 'Another queued file already has this name']);
   });
 });

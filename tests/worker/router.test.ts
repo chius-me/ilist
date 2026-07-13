@@ -49,6 +49,7 @@ describe('filesystem API', () => {
       body: JSON.stringify({ parentId: 'root', name: 'Docs' }),
     });
     expect(unauthenticated.status).toBe(401);
+    expect((await unauthenticated.json() as { error: { code: string } }).error.code).toBe('AUTH_REQUIRED');
 
     const cookie = await login();
     const response = await SELF.fetch(`${origin}/api/admin/folders`, {
