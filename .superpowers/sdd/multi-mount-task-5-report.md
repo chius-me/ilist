@@ -144,3 +144,62 @@ Observed result: passed with exit code 0. TypeScript and the production build pa
 ### Fix Commit
 
 `fix: address virtual mount review findings` (hash reported in the task handoff).
+
+## P2 Fix Review
+
+### Finding Resolved
+
+- `FolderPickerDialog` now derives destination eligibility from the current folder's `move`, `upload`, and `createFolder` capabilities. A folder is eligible when at least one of those write capabilities is available.
+- The `Move here` control is disabled at the virtual root and at any other current folder where all three capabilities are false.
+- The submit handler enforces the same capability check, so a read-only destination cannot be submitted by bypassing the disabled control.
+- Navigation into mount entries remains available. After entering a writable mount, `Move here` becomes enabled and submits the mounted folder's entry ID.
+
+### RED Evidence
+
+Command:
+
+```sh
+npm run test:ui -- tests/ui/operations.test.tsx
+```
+
+Observed result before the fix: failed with exit code 1. The production-shaped response used `current.id = 'virtual-root'` with `move`, `upload`, and `createFolder` all false, but the `Move here` button was still enabled.
+
+### GREEN Evidence
+
+Focused command:
+
+```sh
+npm run test:ui -- tests/ui/operations.test.tsx
+```
+
+Observed result: passed with exit code 0; 1 UI file with 5 tests passed. The new test confirms no submission at the read-only virtual root, then enters `/archive`, enables the destination action, and submits `archive-root`.
+
+Full UI command:
+
+```sh
+npm run test:ui
+```
+
+Observed result: passed with exit code 0; 7 UI files with 26 tests passed.
+
+Full verification:
+
+```sh
+npm run check
+git diff --check
+```
+
+Observed result: passed with exit code 0. TypeScript and the production build passed; 14 Worker files with 115 tests passed; 7 UI files with 26 tests passed; and the whitespace check reported no errors.
+
+### P2 Fix Files
+
+- `src/ui/features/operations/FolderPickerDialog.tsx`: applies capability-derived destination eligibility to both the action state and submit guard.
+- `tests/ui/operations.test.tsx`: covers the read-only virtual-root response and successful navigation into a writable `/archive` mount.
+
+### P2 Fix Concerns
+
+- Test runners retain the existing non-failing process-secret and Node localStorage warnings.
+
+### P2 Fix Commit
+
+`fix: guard virtual move destinations` (hash reported in the task handoff).
