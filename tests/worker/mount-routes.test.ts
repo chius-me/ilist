@@ -1,4 +1,4 @@
-import { beforeEach, describe, expect, it, vi } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { SELF, env } from 'cloudflare:test';
 import { getCredentials } from '../../src/worker/credentials';
 import { driverRegistry } from '../../src/worker/drivers/registry';
@@ -53,14 +53,23 @@ async function createS3Mount(): Promise<string> {
   return (await response.json() as { data: { id: string } }).data.id;
 }
 
+async function dropFailureTriggers(): Promise<void> {
+  await workerEnv().DB.prepare('DROP TRIGGER IF EXISTS fail_credential_write').run();
+  await workerEnv().DB.prepare('DROP TRIGGER IF EXISTS fail_credential_delete').run();
+  await workerEnv().DB.prepare('DROP TRIGGER IF EXISTS fail_mount_delete').run();
+}
+
 describe('mount administration API', () => {
   beforeEach(async () => {
+    await dropFailureTriggers();
     delete driverRegistry.s3;
     delete driverRegistry.onedrive;
     delete driverRegistry['native-r2'];
     await workerEnv().DB.prepare('DELETE FROM storage_credentials').run();
     await workerEnv().DB.prepare('DELETE FROM mounts').run();
   });
+
+  afterEach(dropFailureTriggers);
 
   it('never returns stored credentials', async () => {
     await createS3Mount();
@@ -127,6 +136,23 @@ describe('mount administration API', () => {
     expect((await collision.json() as { error: { code: string } }).error.code).toBe('MOUNT_PATH_CONFLICT');
   });
 
+  it('allows an IPv6 localhost S3 endpoint for local development', async () => {
+    const response = await adminFetch('/api/admin/mounts', {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({
+        name: 'IPv6 local',
+        mountPath: '/ipv6-local',
+        driverType: 's3',
+        provider: 'custom',
+        config: { ...s3Config, endpoint: 'http://[::1]:9000' },
+        credentials: { accessKeyId: 'key', secretAccessKey: 'secret' },
+      }),
+    });
+
+    expect(response.status).toBe(200);
+  });
+
   it('tests the selected mount through its registered driver', async () => {
     const mountId = await createS3Mount();
     const list = vi.fn().mockResolvedValue({ items: [], nextCursor: null });
@@ -150,5 +176,67 @@ describe('mount administration API', () => {
     expect(remove.status).toBe(204);
     await expect(getMount(workerEnv().DB, mountId)).resolves.toBeNull();
     await expect(getCredentials(workerEnv(), mountId)).resolves.toBeNull();
+  });
+
+  it('rolls back configuration and credential changes when the credential write fails', async () => {
+    const mountId = await createS3Mount();
+    await workerEnv().DB.prepare(
+      `CREATE TRIGGER fail_credential_write BEFORE INSERT ON storage_credentials
+       BEGIN SELECT RAISE(ABORT, 'forced credential write failure'); END`,
+    ).run();
+
+    const response = await adminFetch(`/api/admin/mounts/${mountId}`, {
+      method: 'PATCH',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({
+        config: { ...s3Config, rootPrefix: 'changed/' },
+        credentials: { accessKeyId: 'changed-key', secretAccessKey: 'changed-secret' },
+      }),
+    });
+
+    expect(response.status).toBe(500);
+    await expect(getMount(workerEnv().DB, mountId)).resolves.toMatchObject({ config: s3Config });
+    await expect(getCredentials(workerEnv(), mountId)).resolves.toEqual({
+      accessKeyId: 'initial-key',
+      secretAccessKey: 'initial-secret',
+    });
+  });
+
+  it('rolls back driver and configuration changes when credential deletion fails', async () => {
+    const mountId = await createS3Mount();
+    await workerEnv().DB.prepare(
+      `CREATE TRIGGER fail_credential_delete BEFORE DELETE ON storage_credentials
+       BEGIN SELECT RAISE(ABORT, 'forced credential delete failure'); END`,
+    ).run();
+
+    const response = await adminFetch(`/api/admin/mounts/${mountId}`, {
+      method: 'PATCH',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ driverType: 'native-r2', config: {} }),
+    });
+
+    expect(response.status).toBe(500);
+    await expect(getMount(workerEnv().DB, mountId)).resolves.toMatchObject({ driverType: 's3', config: s3Config });
+    await expect(getCredentials(workerEnv(), mountId)).resolves.toEqual({
+      accessKeyId: 'initial-key',
+      secretAccessKey: 'initial-secret',
+    });
+  });
+
+  it('leaves both local records unchanged when mount deletion fails', async () => {
+    const mountId = await createS3Mount();
+    await workerEnv().DB.prepare(
+      `CREATE TRIGGER fail_mount_delete BEFORE DELETE ON mounts
+       BEGIN SELECT RAISE(ABORT, 'forced mount delete failure'); END`,
+    ).run();
+
+    const response = await adminFetch(`/api/admin/mounts/${mountId}`, { method: 'DELETE' });
+
+    expect(response.status).toBe(500);
+    await expect(getMount(workerEnv().DB, mountId)).resolves.not.toBeNull();
+    await expect(getCredentials(workerEnv(), mountId)).resolves.toEqual({
+      accessKeyId: 'initial-key',
+      secretAccessKey: 'initial-secret',
+    });
   });
 });

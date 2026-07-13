@@ -28,6 +28,13 @@ export interface UpdateMountInput {
   config?: unknown;
 }
 
+export interface PreparedMountUpdate {
+  statement: D1PreparedStatement;
+  id: string;
+  name: string;
+  mountPath: string;
+}
+
 export function normalizeMountPath(input: string): string {
   let path: string;
   try {
@@ -185,7 +192,11 @@ export async function createMount(db: D1Database, input: CreateMountInput): Prom
   return mount;
 }
 
-export async function updateMount(db: D1Database, id: string, input: UpdateMountInput): Promise<Mount | null> {
+export async function prepareMountUpdate(
+  db: D1Database,
+  id: string,
+  input: UpdateMountInput,
+): Promise<PreparedMountUpdate | null> {
   const current = await findMountRow(db, id);
   if (!current) return null;
 
@@ -196,39 +207,57 @@ export async function updateMount(db: D1Database, id: string, input: UpdateMount
   const configJson = input.config === undefined ? current.config_json : serializeConfig(input.config);
 
   await assertNoConflict(db, name, mountPath, id);
+  const statement = db
+    .prepare(
+      `UPDATE mounts
+       SET name = ?, mount_path = ?, driver_type = ?, provider = ?, enabled = ?, is_public = ?,
+           sort_order = ?, root_item_id = ?, config_json = ?, updated_at = ?
+       WHERE id = ?`,
+    )
+    .bind(
+      name,
+      mountPath,
+      input.driverType ?? current.driver_type,
+      provider,
+      input.enabled === undefined ? current.enabled : input.enabled ? 1 : 0,
+      input.isPublic === undefined ? current.is_public : input.isPublic ? 1 : 0,
+      sortOrder,
+      input.rootItemId === undefined ? current.root_item_id : input.rootItemId,
+      configJson,
+      new Date().toISOString(),
+      id,
+    );
+  return { statement, id, name, mountPath };
+}
+
+export async function rethrowMountWriteError(
+  db: D1Database,
+  error: unknown,
+  update: PreparedMountUpdate,
+): Promise<never> {
+  if (uniqueConstraint(error)) {
+    await assertNoConflict(db, update.name, update.mountPath, update.id);
+    throw new HttpError(409, 'MOUNT_PATH_CONFLICT', 'Mount path is already in use', { mountPath: update.mountPath });
+  }
+  throw error;
+}
+
+export async function updateMount(db: D1Database, id: string, input: UpdateMountInput): Promise<Mount | null> {
+  const update = await prepareMountUpdate(db, id, input);
+  if (!update) return null;
   try {
-    await db
-      .prepare(
-        `UPDATE mounts
-         SET name = ?, mount_path = ?, driver_type = ?, provider = ?, enabled = ?, is_public = ?,
-             sort_order = ?, root_item_id = ?, config_json = ?, updated_at = ?
-         WHERE id = ?`,
-      )
-      .bind(
-        name,
-        mountPath,
-        input.driverType ?? current.driver_type,
-        provider,
-        input.enabled === undefined ? current.enabled : input.enabled ? 1 : 0,
-        input.isPublic === undefined ? current.is_public : input.isPublic ? 1 : 0,
-        sortOrder,
-        input.rootItemId === undefined ? current.root_item_id : input.rootItemId,
-        configJson,
-        new Date().toISOString(),
-        id,
-      )
-      .run();
+    await update.statement.run();
   } catch (error) {
-    if (uniqueConstraint(error)) {
-      await assertNoConflict(db, name, mountPath, id);
-      throw new HttpError(409, 'MOUNT_PATH_CONFLICT', 'Mount path is already in use', { mountPath });
-    }
-    throw error;
+    await rethrowMountWriteError(db, error, update);
   }
 
   return getMount(db, id);
 }
 
+export function prepareMountDelete(db: D1Database, id: string): D1PreparedStatement {
+  return db.prepare('DELETE FROM mounts WHERE id = ?').bind(id);
+}
+
 export async function deleteMount(db: D1Database, id: string): Promise<void> {
-  await db.prepare('DELETE FROM mounts WHERE id = ?').bind(id).run();
+  await prepareMountDelete(db, id).run();
 }
