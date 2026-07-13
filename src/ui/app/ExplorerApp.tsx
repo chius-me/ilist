@@ -1,5 +1,5 @@
 import { AlertCircle, Folder, LoaderCircle, RefreshCw } from 'lucide-react';
-import { useEffect, useMemo, useRef, useState } from 'react';
+import { useEffect, useMemo, useRef, useState, type DragEvent } from 'react';
 import { childPath, createFolder, deleteEntries, getEntry, moveEntries, patchEntry, setVisibility } from '../api/entries';
 import { useDirectory } from '../hooks/useDirectory';
 import { useExplorerLocation } from '../hooks/useExplorerLocation';
@@ -19,6 +19,8 @@ import { FolderPickerDialog } from '../features/operations/FolderPickerDialog';
 import { PropertiesDialog } from '../features/operations/PropertiesDialog';
 import { RenameDialog } from '../features/operations/RenameDialog';
 import { PreviewOverlay } from '../features/preview/PreviewOverlay';
+import { UploadPanel } from '../features/uploads/UploadPanel';
+import { useUploadQueue } from '../features/uploads/useUploadQueue';
 
 const VIEW_MODE_KEY = 'ilist.explorer.view';
 
@@ -74,6 +76,8 @@ export function ExplorerApp() {
   const [dialog, setDialog] = useState<{ type: 'rename' | 'create' | 'move' | 'delete' | 'properties'; entries: Entry[] } | null>(null);
   const [operationPending, setOperationPending] = useState(false);
   const [operationNotice, setOperationNotice] = useState<string | null>(null);
+  const [dragOver, setDragOver] = useState(false);
+  const dragDepth = useRef(0);
 
   useEffect(() => {
     if (path !== '/admin') lastNonAdminPath.current = path;
@@ -116,6 +120,13 @@ export function ExplorerApp() {
   }, [directory.data, query, sort]);
 
   const admin = session.status === 'admin';
+  const uploads = useUploadQueue({
+    canUpload: admin,
+    existingNames: directory.data?.items.map((entry) => entry.name) ?? [],
+    onCompleted: (parentId) => {
+      if (directory.data?.current.id === parentId) directory.refresh();
+    },
+  });
   const handlers = {
     onOpen: (entry: Entry) => openPath(childPath(explorerPath, entry.name)),
     onPreview: (entry: Entry) => openPreview(entry.id),
@@ -124,6 +135,39 @@ export function ExplorerApp() {
   };
 
   const selectedEntries = entries.filter((entry) => selection.selectedIds.has(entry.id));
+
+  function enqueueFiles(files: File[]) {
+    if (directory.data) uploads.enqueue(directory.data.current.id, files);
+  }
+
+  function acceptsFiles(event: DragEvent<HTMLElement>): boolean {
+    return admin && Array.from(event.dataTransfer.types).includes('Files');
+  }
+
+  function onDragEnter(event: DragEvent<HTMLElement>) {
+    if (!acceptsFiles(event)) return;
+    event.preventDefault();
+    dragDepth.current += 1;
+    setDragOver(true);
+  }
+
+  function onDragOver(event: DragEvent<HTMLElement>) {
+    if (acceptsFiles(event)) event.preventDefault();
+  }
+
+  function onDragLeave(event: DragEvent<HTMLElement>) {
+    if (!acceptsFiles(event)) return;
+    dragDepth.current = Math.max(0, dragDepth.current - 1);
+    if (!dragDepth.current) setDragOver(false);
+  }
+
+  function onDrop(event: DragEvent<HTMLElement>) {
+    if (!acceptsFiles(event)) return;
+    event.preventDefault();
+    dragDepth.current = 0;
+    setDragOver(false);
+    enqueueFiles(Array.from(event.dataTransfer.files));
+  }
   async function runBatch(operation: () => Promise<{ succeeded: string[]; failed: { id: string }[] }>) {
     setOperationPending(true); setOperationNotice(null);
     try {
@@ -183,10 +227,10 @@ export function ExplorerApp() {
           onSort={setSort}
           onView={setView}
           onLogin={() => openPath('/admin')}
-          onUpload={() => undefined}
+          onUpload={enqueueFiles}
           onCreateFolder={() => setDialog({ type: 'create', entries: [] })}
         />}
-        <section className="explorerContent" aria-label={previewId ? `Files with preview ${previewId} selected` : 'Files'}>
+        <section className={`explorerContent${dragOver ? ' isDragOver' : ''}`} aria-label={previewId ? `Files with preview ${previewId} selected` : 'Files'} onDragEnter={onDragEnter} onDragOver={onDragOver} onDragLeave={onDragLeave} onDrop={onDrop}>
           {directory.error && directory.data ? (
             <div className="retryBanner" role="alert">
               <AlertCircle aria-hidden="true" size={18} />
@@ -209,6 +253,7 @@ export function ExplorerApp() {
           {directory.loading && directory.data ? <div className="refreshing" role="status"><LoaderCircle aria-hidden="true" size={16} />Refreshing</div> : null}
         </section>
       </main>
+      <UploadPanel tasks={uploads.tasks} onCancel={uploads.cancel} onRetry={uploads.retry} onRemove={uploads.remove} onClearCompleted={uploads.clearCompleted} />
       <LoginDialog open={path === '/admin' && session.status !== 'admin'} busy={loginBusy} error={loginError} onClose={closeLogin} onSubmit={submitLogin} />
       {menuEntry ? <EntryActionMenu entry={menuEntry} onOpen={handlers.onOpen} onPreview={handlers.onPreview} onAction={openEntryAction} onClose={() => setMenuEntry(null)} /> : null}
       {dialog?.type === 'rename' ? <RenameDialog open title={`Rename ${dialog.entries[0].name}`} initialName={dialog.entries[0].name} onClose={() => setDialog(null)} onSubmit={async (name) => { await patchEntry(dialog.entries[0].id, { name }); directory.refresh(); }} /> : null}
