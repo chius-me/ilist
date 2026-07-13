@@ -18,6 +18,13 @@ describe('mounts', () => {
     expect(() => normalizeMountPath('/photos%00')).toThrow('control');
   });
 
+  it('rejects literal and decoded dot mount path segments', () => {
+    expect(() => normalizeMountPath('/.')).toThrow('dot');
+    expect(() => normalizeMountPath('/..')).toThrow('dot');
+    expect(() => normalizeMountPath('/%2E')).toThrow('dot');
+    expect(() => normalizeMountPath('/%2E%2E')).toThrow('dot');
+  });
+
   it('rejects duplicate and reserved mount paths', async () => {
     await createMount(db(), { name: 'Photos', mountPath: '/photos', driverType: 's3', provider: 'cloudflare-r2' });
     await expect(
