@@ -1,10 +1,133 @@
 import { env } from 'cloudflare:test';
-import { describe, expect, it } from 'vitest';
-import { createFolder, moveEntries, patchEntry, setEntriesVisibility } from '../../src/worker/file-system';
+import { describe, expect, it, vi } from 'vitest';
+import nativeR2CompatibilityMount from '../../migrations/0010_native_r2_compat_mount.sql?raw';
+import { driverRegistry } from '../../src/worker/drivers/registry';
+import {
+  createFolder,
+  listVirtualDirectory,
+  moveEntries,
+  patchEntry,
+  setEntriesVisibility,
+} from '../../src/worker/file-system';
 import { getEntryById } from '../../src/worker/db';
+import { createMount } from '../../src/worker/mounts';
 import type { Env } from '../../src/worker/types';
 
 const db = () => (env as unknown as Env).DB;
+
+async function applyNativeR2CompatibilityMount(): Promise<void> {
+  await db().prepare(nativeR2CompatibilityMount).run();
+}
+
+describe('virtual mount file system', () => {
+  it('creates exactly one deterministic native R2 compatibility mount', async () => {
+    await db().prepare('DELETE FROM mounts').run();
+
+    await applyNativeR2CompatibilityMount();
+    await applyNativeR2CompatibilityMount();
+
+    const result = await db().prepare("SELECT * FROM mounts WHERE driver_type = 'native-r2'").all();
+    expect(result.results).toHaveLength(1);
+    expect(result.results[0]).toMatchObject({
+      id: 'native-r2',
+      name: 'R2',
+      mount_path: '/R2',
+      driver_type: 'native-r2',
+      provider: 'cloudflare-r2',
+      enabled: 1,
+      is_public: 1,
+      root_item_id: 'root',
+    });
+  });
+
+  it('lists only visible enabled mounts without contacting their providers', async () => {
+    await db().prepare('DELETE FROM mounts').run();
+    await applyNativeR2CompatibilityMount();
+    await createMount(db(), {
+      name: 'Private Archive',
+      mountPath: '/private-archive',
+      driverType: 's3',
+      provider: 'custom',
+      isPublic: false,
+      sortOrder: 10,
+    });
+    await createMount(db(), {
+      name: 'Unavailable Public',
+      mountPath: '/unavailable-public',
+      driverType: 's3',
+      provider: 'custom',
+      sortOrder: 20,
+    });
+    await createMount(db(), {
+      name: 'Disabled Public',
+      mountPath: '/disabled-public',
+      driverType: 's3',
+      provider: 'custom',
+      enabled: false,
+      sortOrder: 30,
+    });
+    const failingFactory = vi.fn(async () => {
+      throw new Error('provider unavailable');
+    });
+    driverRegistry.s3 = failingFactory;
+
+    try {
+      const guest = await listVirtualDirectory(db(), '/', false);
+      expect(guest.items.map((item) => item.name)).toEqual(['R2', 'Unavailable Public']);
+
+      const admin = await listVirtualDirectory(db(), '/', true);
+      expect(admin.items.map((item) => item.name)).toEqual(['R2', 'Private Archive', 'Unavailable Public']);
+      expect(admin.items[0]).toMatchObject({
+        id: 'native-r2',
+        name: 'R2',
+        kind: 'folder',
+        mountId: 'native-r2',
+        mountPath: '/R2',
+        driverType: 'native-r2',
+        provider: 'cloudflare-r2',
+        capabilities: { open: true, preview: false, download: false, rename: false, move: false, delete: false },
+      });
+      expect(failingFactory).not.toHaveBeenCalled();
+    } finally {
+      delete driverRegistry.s3;
+    }
+  });
+
+  it('keeps the existing entry tree reachable beneath the native R2 mount', async () => {
+    await db().prepare('DELETE FROM mounts').run();
+    await applyNativeR2CompatibilityMount();
+    const publicFolder = await createFolder(db(), { parentId: 'root', name: 'Public' });
+    const privateFolder = await createFolder(db(), { parentId: 'root', name: 'Private' });
+    await setEntriesVisibility(db(), [privateFolder.id], false);
+
+    const guest = await listVirtualDirectory(db(), '/R2', false);
+    expect(guest.items.map((item) => item.name)).toEqual(['Public']);
+    expect(guest.breadcrumbs).toEqual([
+      { id: 'virtual-root', name: 'ilist', path: '/' },
+      { id: 'native-r2', name: 'R2', path: '/R2' },
+    ]);
+
+    const nested = await listVirtualDirectory(db(), '/R2/Public', false);
+    expect(nested.current.id).toBe(publicFolder.id);
+    expect(nested.breadcrumbs.map((item) => item.path)).toEqual(['/', '/R2', '/R2/Public']);
+  });
+
+  it('does not reveal a private mount through a direct guest path', async () => {
+    await db().prepare('DELETE FROM mounts').run();
+    await createMount(db(), {
+      name: 'Private Archive',
+      mountPath: '/private-archive',
+      driverType: 's3',
+      provider: 'custom',
+      isPublic: false,
+    });
+
+    await expect(listVirtualDirectory(db(), '/private-archive', false)).rejects.toMatchObject({
+      status: 404,
+      code: 'MOUNT_NOT_FOUND',
+    });
+  });
+});
 
 describe('file system mutations', () => {
   it('creates a real empty folder that inherits visibility', async () => {

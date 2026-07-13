@@ -1,5 +1,6 @@
 import { SELF, env } from 'cloudflare:test';
 import { describe, expect, it } from 'vitest';
+import nativeR2CompatibilityMount from '../../migrations/0010_native_r2_compat_mount.sql?raw';
 import type { Env } from '../../src/worker/types';
 
 const origin = 'https://ilist.example';
@@ -15,13 +16,53 @@ async function login(): Promise<string> {
 }
 
 describe('filesystem API', () => {
-  it('uses one list endpoint for guest and admin capabilities', async () => {
+  it('lists the native R2 mount while stable and legacy file routes still work', async () => {
+    const db = (env as unknown as Env).DB;
+    await db.prepare(nativeR2CompatibilityMount).run();
+    const cookie = await login();
+    const id = 'compat-file-test';
+    const upload = await SELF.fetch(`${origin}/api/admin/files/${id}?parentId=root&name=compat.txt`, {
+      method: 'PUT',
+      headers: { cookie, origin, 'content-type': 'text/plain' },
+      body: 'native-r2-data',
+    });
+    expect(upload.status).toBe(200);
+
     const guest = await SELF.fetch(`${origin}/api/fs/list?path=/`);
     expect(guest.status).toBe(200);
-    const cookie = await login();
+    expect(await guest.json()).toMatchObject({
+      data: {
+        items: expect.arrayContaining([
+          expect.objectContaining({ id: 'native-r2', name: 'R2', kind: 'folder', mountId: 'native-r2' }),
+        ]),
+      },
+    });
+
+    const mounted = await SELF.fetch(`${origin}/api/fs/list?path=/R2`);
+    expect(mounted.status).toBe(200);
+    expect(await mounted.json()).toMatchObject({
+      data: { items: expect.arrayContaining([expect.objectContaining({ id, name: 'compat.txt' })]) },
+    });
+
     const admin = await SELF.fetch(`${origin}/api/fs/list?path=/`, { headers: { cookie } });
     expect(admin.status).toBe(200);
     expect((await admin.json() as { data: { current: { capabilities: { rename: boolean } } } }).data.current.capabilities.rename).toBe(false);
+
+    const stable = await SELF.fetch(`${origin}/file/${id}/ignored-name`);
+    expect(stable.status).toBe(200);
+    await expect(stable.text()).resolves.toBe('native-r2-data');
+
+    const now = new Date().toISOString();
+    await db.prepare(`INSERT INTO objects (key, name, size, content_type, etag, updated_at, is_public, sort_order, description)
+      VALUES (?, ?, 14, 'text/plain', 'etag', ?, 1, 0, '')`).bind('legacy/compat.txt', 'compat.txt', now).run();
+    await db.prepare(`INSERT INTO entries (
+      id, parent_id, name, kind, storage_key, size, content_type, etag, status, lifecycle_owner, is_public, sort_order, description, created_at, updated_at
+    ) VALUES (?, 'root', ?, 'file', ?, 14, 'text/plain', 'etag', 'ready', NULL, 1, 0, '', ?, ?)`).bind(
+      'legacy-compat-id', 'legacy-compat.txt', 'legacy/compat.txt', now, now,
+    ).run();
+    const legacy = await SELF.fetch(`${origin}/file/legacy/compat.txt`, { redirect: 'manual' });
+    expect(legacy.status).toBe(302);
+    expect(legacy.headers.get('location')).toBe('/file/legacy-compat-id/legacy-compat.txt');
   });
 
   it('creates, renames, moves, changes visibility, and deletes through admin routes', async () => {

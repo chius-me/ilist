@@ -23,13 +23,131 @@ import {
   updateReadyEntryFields,
 } from './db';
 import { storageKeyForEntry, validateEntryName } from './entry-domain';
-import { entryToApi, isEffectivelyPublic } from './entries';
+import { entryToApi, isEffectivelyPublic, listDirectory } from './entries';
 import { HttpError } from './http';
-import type { BatchResult, Entry, EntryRow, Env, StorageRecoveryOperationRow } from './types';
+import { resolveVirtualPath } from './mount-resolver';
+import { listMounts } from './mounts';
+import type {
+  BatchResult,
+  Breadcrumb,
+  Entry,
+  EntryCapabilities,
+  EntryRow,
+  Env,
+  Mount,
+  MountEntry,
+  StorageRecoveryOperationRow,
+  VirtualDirectoryResponse,
+} from './types';
 
 const ENTRY_NAME_UNIQUE_CONSTRAINT = 'UNIQUE constraint failed: entries.parent_id, entries.name';
 const ENTRY_ID_UNIQUE_CONSTRAINT = 'UNIQUE constraint failed: entries.id';
 const UPLOAD_HEARTBEAT_INTERVAL_MS = 60_000;
+const VIRTUAL_ROOT_ID = 'virtual-root';
+
+const READ_ONLY_FOLDER_CAPABILITIES: EntryCapabilities = {
+  open: true,
+  preview: false,
+  download: false,
+  rename: false,
+  move: false,
+  delete: false,
+  changeVisibility: false,
+};
+
+function virtualRootEntry(): Entry {
+  return {
+    id: VIRTUAL_ROOT_ID,
+    parentId: null,
+    name: 'ilist',
+    kind: 'folder',
+    size: 0,
+    contentType: null,
+    updatedAt: '1970-01-01T00:00:00.000Z',
+    isPublic: true,
+    effectivePublic: true,
+    sortOrder: 0,
+    description: '',
+    capabilities: READ_ONLY_FOLDER_CAPABILITIES,
+  };
+}
+
+function mountEntry(mount: Mount): MountEntry {
+  return {
+    id: mount.id,
+    parentId: VIRTUAL_ROOT_ID,
+    name: mount.name,
+    kind: 'folder',
+    size: 0,
+    contentType: null,
+    updatedAt: mount.updatedAt,
+    isPublic: mount.isPublic,
+    effectivePublic: mount.isPublic,
+    sortOrder: mount.sortOrder,
+    description: '',
+    capabilities: READ_ONLY_FOLDER_CAPABILITIES,
+    mountId: mount.id,
+    mountPath: mount.mountPath,
+    driverType: mount.driverType,
+    provider: mount.provider,
+  };
+}
+
+function withMountIdentity(entry: Entry, mount: Mount): MountEntry {
+  return {
+    ...entry,
+    mountId: mount.id,
+    mountPath: mount.mountPath,
+    driverType: mount.driverType,
+    provider: mount.provider,
+  };
+}
+
+function encodedMountPath(mount: Mount): string {
+  return `/${encodeURIComponent(mount.mountPath.slice(1))}`;
+}
+
+function mountedBreadcrumbs(mount: Mount, breadcrumbs: Breadcrumb[]): Breadcrumb[] {
+  const mountPath = encodedMountPath(mount);
+  return [
+    { id: VIRTUAL_ROOT_ID, name: 'ilist', path: '/' },
+    { id: mount.id, name: mount.name, path: mountPath },
+    ...breadcrumbs.slice(1).map((breadcrumb) => ({
+      ...breadcrumb,
+      path: `${mountPath}${breadcrumb.path}`,
+    })),
+  ];
+}
+
+export async function listVirtualDirectory(
+  db: D1Database,
+  pathname: string,
+  admin: boolean,
+): Promise<VirtualDirectoryResponse> {
+  const mounts = await listMounts(db);
+  if (pathname === '/') {
+    return {
+      current: virtualRootEntry(),
+      breadcrumbs: [{ id: VIRTUAL_ROOT_ID, name: 'ilist', path: '/' }],
+      items: mounts
+        .filter((mount) => mount.enabled && (admin || mount.isPublic))
+        .map(mountEntry),
+    };
+  }
+
+  const resolvableMounts = admin ? mounts : mounts.filter((mount) => mount.isPublic);
+  const { mount, relativePath } = resolveVirtualPath(pathname, resolvableMounts);
+  if (mount.driverType !== 'native-r2') {
+    throw new HttpError(503, 'DRIVER_UNAVAILABLE', 'Storage driver is unavailable');
+  }
+
+  const directory = await listDirectory(db, relativePath, admin);
+  return {
+    current: withMountIdentity(directory.current, mount),
+    breadcrumbs: mountedBreadcrumbs(mount, directory.breadcrumbs),
+    items: directory.items.map((entry) => withMountIdentity(entry, mount)),
+  };
+}
 
 interface UploadRecoveryHeartbeatOptions {
   now?: () => number;
