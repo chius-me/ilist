@@ -60,6 +60,16 @@ describe('filesystem API', () => {
     expect(response.status).toBe(403);
   });
 
+  it('requires authentication for mount administration routes', async () => {
+    const unauthenticated = await SELF.fetch(`${origin}/api/admin/mounts`);
+    expect(unauthenticated.status).toBe(401);
+    expect((await unauthenticated.json() as { error: { code: string } }).error.code).toBe('AUTH_REQUIRED');
+
+    const cookie = await login();
+    const response = await SELF.fetch(`${origin}/api/admin/mounts`, { headers: { cookie } });
+    expect(response.status).toBe(200);
+  });
+
   it('uploads and streams a stable entry URL with Range support', async () => {
     const cookie = await login();
     const id = 'file-router-test';
