@@ -4,7 +4,7 @@ import type { Entry } from '../../types/entries';
 
 export function DeleteDialog({ entries, onClose, onSubmit }: { entries: Entry[]; onClose: () => void; onSubmit: () => Promise<void> }) {
   const [busy, setBusy] = useState(false); const [error, setError] = useState<string | null>(null); const cancel = useRef<HTMLButtonElement>(null);
-  useEffect(() => { cancel.current?.focus(); }, []);
+  useEffect(() => { const previous = document.activeElement instanceof HTMLElement ? document.activeElement : null; cancel.current?.focus(); const closeOnEscape = (event: KeyboardEvent) => { if (event.key === 'Escape') onClose(); }; document.addEventListener('keydown', closeOnEscape); return () => { document.removeEventListener('keydown', closeOnEscape); previous?.focus(); }; }, [onClose]);
   const files = entries.filter((entry) => entry.kind === 'file'); const bytes = files.reduce((sum, entry) => sum + entry.size, 0);
   async function remove() { setBusy(true); setError(null); try { await onSubmit(); onClose(); } catch (reason) { setError(reason instanceof Error ? reason.message : 'Unable to delete.'); } finally { setBusy(false); } }
   const label = entries.length === 1 ? `Delete ${entries[0].name}` : `Delete ${entries.length} entries`;
