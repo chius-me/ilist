@@ -12,6 +12,8 @@ interface ExplorerToolbarProps {
   view: ExplorerView;
   sessionStatus: SessionStatus;
   selectionCount: number;
+  canUpload: boolean;
+  canCreateFolder: boolean;
   onQuery: (query: string) => void;
   onSort: (sort: ExplorerSort) => void;
   onView: (view: ExplorerView) => void;
@@ -26,6 +28,8 @@ export function ExplorerToolbar({
   view,
   sessionStatus,
   selectionCount,
+  canUpload,
+  canCreateFolder,
   onQuery,
   onSort,
   onView,
@@ -89,16 +93,18 @@ export function ExplorerToolbar({
         </div>
         {admin ? (
           <>
-            <input ref={uploadInput} className="srOnly" type="file" multiple tabIndex={-1} onChange={(event) => {
-              onUpload(Array.from(event.target.files ?? []));
-              event.target.value = '';
-            }} />
-            <button className="iconButton" type="button" title="Upload files" aria-label="Upload files" onClick={() => uploadInput.current?.click()}>
-              <Upload aria-hidden="true" size={17} />
-            </button>
-            <button className="iconButton" type="button" title="Create folder" aria-label="Create folder" onClick={onCreateFolder}>
+            {canUpload ? <>
+              <input ref={uploadInput} className="srOnly" type="file" multiple tabIndex={-1} onChange={(event) => {
+                onUpload(Array.from(event.target.files ?? []));
+                event.target.value = '';
+              }} />
+              <button className="iconButton" type="button" title="Upload files" aria-label="Upload files" onClick={() => uploadInput.current?.click()}>
+                <Upload aria-hidden="true" size={17} />
+              </button>
+            </> : null}
+            {canCreateFolder ? <button className="iconButton" type="button" title="Create folder" aria-label="Create folder" onClick={onCreateFolder}>
               <Plus aria-hidden="true" size={17} />
-            </button>
+            </button> : null}
             {selectionCount > 0 ? <span className="selectionCount">{selectionCount} selected</span> : null}
           </>
         ) : (

@@ -83,3 +83,64 @@ Observed result: passed with exit code 0. TypeScript checking and the production
 ## Commit
 
 `feat: expose virtual storage mounts` (hash reported in the task handoff).
+
+## Fix Review
+
+### Review Findings Resolved
+
+- Added `mountPath` to the common Worker and UI `Entry` contracts. Ordinary entries serialize it as `null`; mount and mounted entries carry their authoritative mount path.
+- Root explorer and folder-picker navigation use `mountPath`, including when the display name differs. Mounted child navigation continues to append the child entry name.
+- Added folder-level `upload` and `createFolder` capabilities. The native R2 entry tree grants them only to administrators on folders; virtual root and mount entries keep them disabled.
+- The admin toolbar hides upload and create-folder controls when the current directory lacks those capabilities. Drag/drop and create-dialog dispatch use the same guards.
+- List and grid selection checkboxes now require at least one mutation capability. Batch actions are derived only from mutable selected entries, so read-only mount folders cannot enter a batch operation.
+- Shared Worker setup now applies migration `0010`. Focused filesystem/router tests no longer import or execute it manually, while a separate migration suite verifies shared setup and idempotent reapplication.
+
+### RED Evidence
+
+Commands:
+
+```sh
+npm run test:worker -- tests/worker/file-system.test.ts tests/worker/router.test.ts tests/worker/native-r2-migration.test.ts
+npm run test:ui -- tests/ui/explorer.test.tsx tests/ui/operations.test.tsx
+```
+
+Observed Worker result before the fix: failed with exit code 1. The shared-setup assertion found no `native-r2` row, and virtual root returned no common `mountPath` field.
+
+Observed UI result before the fix: failed with exit code 1. Explorer navigation opened `/Cold%20Storage` instead of `/archive`; virtual-root administrators still saw upload, create-folder, and mount selection controls; and the folder picker requested the display-name path instead of `/archive`.
+
+### GREEN Evidence
+
+Focused commands:
+
+```sh
+npm run test:worker -- tests/worker/file-system.test.ts tests/worker/router.test.ts tests/worker/native-r2-migration.test.ts
+npm run test:ui -- tests/ui/explorer.test.tsx tests/ui/operations.test.tsx
+```
+
+Observed result: passed with exit code 0. Three Worker files with 25 tests passed, and two UI files with 6 tests passed.
+
+Full verification:
+
+```sh
+npm run check
+git diff --check
+```
+
+Observed result: passed with exit code 0. TypeScript and the production build passed; 14 Worker files with 115 tests passed; 7 UI files with 25 tests passed; and the whitespace check reported no errors.
+
+### Fix Files
+
+- Worker contract and serialization: `src/worker/types.ts`, `src/worker/entries.ts`, `src/worker/file-system.ts`.
+- UI contract and navigation: `src/ui/types/entries.ts`, `src/ui/api/entries.ts`, `src/ui/app/ExplorerApp.tsx`, and `src/ui/features/operations/FolderPickerDialog.tsx`.
+- Capability-based controls and selection: `src/ui/app/ExplorerApp.tsx`, `src/ui/features/explorer/ExplorerToolbar.tsx`, `src/ui/features/explorer/EntryRow.tsx`, and `src/ui/features/explorer/FileGrid.tsx`.
+- Migration setup and coverage: `tests/worker/setup.ts`, `tests/worker/native-r2-migration.test.ts`, `tests/worker/file-system.test.ts`, and `tests/worker/router.test.ts`.
+- UI coverage and typed fixtures: `tests/ui/explorer.test.tsx`, `tests/ui/operations.test.tsx`, and `tests/ui/preview.test.tsx`.
+
+### Fix Concerns
+
+- Non-native mounted-path provider dispatch remains intentionally deferred and still returns `DRIVER_UNAVAILABLE`; virtual-root listing remains provider-independent.
+- Test runners retain the existing non-failing process-secret and Node localStorage warnings.
+
+### Fix Commit
+
+`fix: address virtual mount review findings` (hash reported in the task handoff).

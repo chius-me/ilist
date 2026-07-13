@@ -18,7 +18,8 @@ const root = {
       effectivePublic: true,
       sortOrder: 0,
       description: '',
-      capabilities: { open: true, preview: false, download: false, rename: false, move: false, delete: false, changeVisibility: false },
+      mountPath: null,
+      capabilities: { open: true, preview: false, download: false, upload: false, createFolder: false, rename: false, move: false, delete: false, changeVisibility: false },
     },
     breadcrumbs: [{ id: 'root', name: 'ilist', path: '/' }],
     items: [
@@ -34,7 +35,8 @@ const root = {
         effectivePublic: true,
         sortOrder: 0,
         description: '',
-        capabilities: { open: true, preview: false, download: false, rename: false, move: false, delete: false, changeVisibility: false },
+        mountPath: null,
+        capabilities: { open: true, preview: false, download: false, upload: false, createFolder: false, rename: false, move: false, delete: false, changeVisibility: false },
       },
       {
         id: 'readme-file',
@@ -48,7 +50,8 @@ const root = {
         effectivePublic: true,
         sortOrder: 0,
         description: '',
-        capabilities: { open: false, preview: true, download: true, rename: false, move: false, delete: false, changeVisibility: false },
+        mountPath: null,
+        capabilities: { open: false, preview: true, download: true, upload: false, createFolder: false, rename: false, move: false, delete: false, changeVisibility: false },
       },
     ],
   },
@@ -74,5 +77,48 @@ describe('ExplorerApp', () => {
     expect(new URL(location.href).searchParams.get('preview')).toBe('readme-file');
     fireEvent.click(screen.getByRole('button', { name: /Docs/ }));
     await waitFor(() => expect(location.pathname).toBe('/Docs'));
+  });
+
+  it('uses a root mount path for navigation and child names below the mount', async () => {
+    const mountRoot = {
+      ...root,
+      data: {
+        ...root.data,
+        current: { ...root.data.current, id: 'virtual-root', mountPath: null },
+        breadcrumbs: [{ id: 'virtual-root', name: 'ilist', path: '/' }],
+        items: [{
+          ...root.data.items[0],
+          id: 'archive-mount',
+          name: 'Cold Storage',
+          mountPath: '/archive',
+          mountId: 'archive-mount',
+        }],
+      },
+    };
+    const archive = {
+      ...root,
+      data: {
+        ...root.data,
+        current: { ...root.data.current, id: 'archive-root', mountPath: '/archive' },
+        breadcrumbs: [
+          { id: 'virtual-root', name: 'ilist', path: '/' },
+          { id: 'archive-mount', name: 'Cold Storage', path: '/archive' },
+        ],
+        items: [{ ...root.data.items[0], id: 'reports', name: 'Reports', mountPath: '/archive' }],
+      },
+    };
+    vi.stubGlobal('fetch', vi.fn(async (input: RequestInfo | URL) => {
+      const url = String(input);
+      if (url.includes('/api/admin/me')) return new Response(JSON.stringify(guestError), { status: 401 });
+      if (url.includes('path=%2Farchive')) return new Response(JSON.stringify(archive));
+      if (url.includes('/api/fs/list')) return new Response(JSON.stringify(mountRoot));
+      throw new Error(`Unexpected fetch: ${url}`);
+    }));
+
+    render(<App />);
+    fireEvent.click(await screen.findByRole('button', { name: /Cold Storage/ }));
+    await waitFor(() => expect(location.pathname).toBe('/archive'));
+    fireEvent.click(await screen.findByRole('button', { name: /Reports/ }));
+    await waitFor(() => expect(location.pathname).toBe('/archive/Reports'));
   });
 });

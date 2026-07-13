@@ -95,6 +95,8 @@ export interface EntryCapabilities {
   open: boolean;
   preview: boolean;
   download: boolean;
+  upload: boolean;
+  createFolder: boolean;
   rename: boolean;
   move: boolean;
   delete: boolean;
@@ -113,6 +115,7 @@ export interface Entry {
   effectivePublic: boolean;
   sortOrder: number;
   description: string;
+  mountPath: string | null;
   capabilities: EntryCapabilities;
 }
 

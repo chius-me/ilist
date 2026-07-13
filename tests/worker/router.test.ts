@@ -1,6 +1,5 @@
 import { SELF, env } from 'cloudflare:test';
 import { describe, expect, it } from 'vitest';
-import nativeR2CompatibilityMount from '../../migrations/0010_native_r2_compat_mount.sql?raw';
 import type { Env } from '../../src/worker/types';
 
 const origin = 'https://ilist.example';
@@ -18,7 +17,6 @@ async function login(): Promise<string> {
 describe('filesystem API', () => {
   it('lists the native R2 mount while stable and legacy file routes still work', async () => {
     const db = (env as unknown as Env).DB;
-    await db.prepare(nativeR2CompatibilityMount).run();
     const cookie = await login();
     const id = 'compat-file-test';
     const upload = await SELF.fetch(`${origin}/api/admin/files/${id}?parentId=root&name=compat.txt`, {

@@ -39,3 +39,10 @@ export function childPath(parentPath: string, name: string): string {
   const base = parentPath === '/' ? '' : parentPath.replace(/\/$/, '');
   return `${base}/${encodeURIComponent(name)}`;
 }
+
+export function entryPath(parentPath: string, entry: Pick<Entry, 'name' | 'mountPath'>): string {
+  if (parentPath === '/' && entry.mountPath) {
+    return `/${encodeURIComponent(entry.mountPath.slice(1))}`;
+  }
+  return childPath(parentPath, entry.name);
+}

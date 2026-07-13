@@ -14,6 +14,8 @@ function capabilities(row: EntryRow, admin: boolean): EntryCapabilities {
     open: row.kind === 'folder',
     preview: file,
     download: file,
+    upload: admin && row.kind === 'folder',
+    createFolder: admin && row.kind === 'folder',
     rename: admin && row.id !== 'root',
     move: admin && row.id !== 'root',
     delete: admin && row.id !== 'root',
@@ -34,6 +36,7 @@ export function entryToApi(row: EntryRow, admin: boolean, effectivePublic: boole
     effectivePublic,
     sortOrder: row.sort_order,
     description: row.description,
+    mountPath: null,
     capabilities: capabilities(row, admin),
   };
 }

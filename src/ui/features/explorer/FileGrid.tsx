@@ -1,5 +1,5 @@
 import { File, Folder, Image, MoreHorizontal } from 'lucide-react';
-import type { Entry } from '../../types/entries';
+import { isEntryMutable, type Entry } from '../../types/entries';
 import type { EntryHandlers } from './EntryRow';
 
 function GridIcon({ entry }: { entry: Entry }) {
@@ -23,9 +23,10 @@ export function FileGrid({
     <ul className="fileGrid" aria-label="Files and folders">
       {entries.map((entry) => {
         const selected = selectedIds.has(entry.id);
+        const selectable = admin && isEntryMutable(entry);
         return (
           <li className={`fileCard ${selected ? 'isSelected' : ''}`} key={entry.id} onContextMenu={(event) => { if (admin) { event.preventDefault(); handlers.onMenu(entry); } }}>
-            {admin ? <input className="gridSelect" type="checkbox" checked={selected} aria-label={`Select ${entry.name}`} onChange={() => handlers.onToggle(entry)} /> : null}
+            {selectable ? <input className="gridSelect" type="checkbox" checked={selected} aria-label={`Select ${entry.name}`} onChange={() => handlers.onToggle(entry)} /> : null}
             <button className="gridPrimary" type="button" onClick={() => (entry.kind === 'folder' ? handlers.onOpen(entry) : handlers.onPreview(entry))}>
               <span className={`gridIcon ${entry.kind}`}><GridIcon entry={entry} /></span>
               <strong title={entry.name}>{entry.name}</strong>
