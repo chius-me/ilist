@@ -95,13 +95,17 @@ describe('visual style contracts', () => {
     expect(explorer).toContain('.sortControl select { width: 64px; max-width: 64px;');
   });
 
-  it('keeps the site header and command bar transparent so only the file list carries surface color', () => {
-    expect(shell).toContain('background: transparent;');
+  it('keeps the site header transparent and merges the toolbar into the file browser surface', () => {
     expect(shell).toMatch(/\.siteHeader\s*\{[\s\S]*?background: transparent;/);
     expect(shell).toMatch(/\.siteHeader\s*\{[\s\S]*?border-bottom: 0;/);
-    expect(explorer).toMatch(/\.explorerBrowser\s*\{[\s\S]*?background: transparent;/);
-    expect(explorer).toMatch(/\.explorerToolbar\s*\{[\s\S]*?background: transparent;/);
-    expect(explorer).toMatch(/\.explorerContent\s*\{[\s\S]*?background: var\(--surface\);/);
-    expect(explorer).toMatch(/\.explorerContent\s*\{[\s\S]*?border: 1px solid var\(--line\);/);
+    expect(explorer).toMatch(/\.explorerBrowser\s*\{[^}]*border: 1px solid var\(--line\);[^}]*\}/);
+    expect(explorer).toMatch(/\.explorerBrowser\s*\{[^}]*border-radius: 8px;[^}]*\}/);
+    expect(explorer).toMatch(/\.explorerBrowser\s*\{[^}]*background: var\(--surface\);[^}]*\}/);
+    expect(explorer).toMatch(/\.explorerToolbar\s*\{[^}]*background: transparent;[^}]*\}/);
+    expect(explorer).toMatch(/\.explorerToolbar\s*\{[^}]*padding: 8px 10px;[^}]*\}/);
+    expect(explorer).toMatch(/\.explorerContent\s*\{[^}]*border-top: 1px solid var\(--line\);[^}]*\}/);
+    expect(explorer).toMatch(/\.explorerContent\s*\{[^}]*background: transparent;[^}]*\}/);
+    expect(explorer).not.toMatch(/\.explorerContent\s*\{[^}]*\bborder: 1px solid var\(--line\);/);
+    expect(explorer).not.toMatch(/\.explorerContent\s*\{[^}]*border-radius: 8px;/);
   });
 });
