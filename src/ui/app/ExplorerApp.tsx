@@ -1,4 +1,4 @@
-import { AlertCircle, Folder, LoaderCircle, RefreshCw } from 'lucide-react';
+import { AlertCircle, Folder, LoaderCircle, RefreshCw, Settings } from 'lucide-react';
 import { useEffect, useMemo, useRef, useState, type DragEvent } from 'react';
 import { createFolder, deleteEntries, entryPath, getEntry, moveEntries, patchEntry, setVisibility } from '../api/entries';
 import { useDirectory } from '../hooks/useDirectory';
@@ -22,6 +22,7 @@ import { RenameDialog } from '../features/operations/RenameDialog';
 import { PreviewOverlay } from '../features/preview/PreviewOverlay';
 import { UploadPanel } from '../features/uploads/UploadPanel';
 import { useUploadQueue } from '../features/uploads/useUploadQueue';
+import { MountManager } from '../features/mounts/MountManager';
 
 const VIEW_MODE_KEY = 'ilist.explorer.view';
 const MOBILE_ACTIONS_QUERY = '(max-width: 760px)';
@@ -75,7 +76,9 @@ export function ExplorerApp() {
   const { path, previewId, openPath, openPreview, closePreview } = useExplorerLocation();
   const session = useSession();
   const lastNonAdminPath = useRef('/');
-  const explorerPath = path === '/admin' ? lastNonAdminPath.current : path;
+  const storageRoute = path === '/admin/storages';
+  const adminRoute = path === '/admin' || storageRoute;
+  const explorerPath = adminRoute ? lastNonAdminPath.current : path;
   const directory = useDirectory(explorerPath, session.status);
   const selection = useSelection();
   const [query, setQuery] = useState('');
@@ -95,7 +98,7 @@ export function ExplorerApp() {
   const mobileActions = useMobileActions();
 
   useEffect(() => {
-    if (path !== '/admin') lastNonAdminPath.current = path;
+    if (!path.startsWith('/admin')) lastNonAdminPath.current = path;
   }, [path]);
 
   useEffect(() => {
@@ -212,7 +215,7 @@ export function ExplorerApp() {
     setLoginError(null);
     try {
       await session.signIn(username, password);
-      openPath(lastNonAdminPath.current);
+      if (!storageRoute) openPath(lastNonAdminPath.current);
     } catch (error) {
       setLoginError(error instanceof Error ? error.message : 'Unable to sign in');
     } finally {
@@ -227,14 +230,14 @@ export function ExplorerApp() {
 
   return (
     <>
-      <a className="skipLink" href="#file-list">Skip to files</a>
+      <a className="skipLink" href={storageRoute ? '#storage-manager' : '#file-list'}>Skip to content</a>
       <header className="siteHeader">
         <div className="headerInner">
           <button className="siteName" type="button" onClick={() => openPath('/')} aria-label="Open ilist root"><Folder aria-hidden="true" size={19} />ilist</button>
-          <span className="sessionIndicator">{admin ? session.user?.username || 'Admin' : 'Shared files'}</span>
+          <div className="headerSession">{admin ? <button className="iconButton" type="button" title="Storage settings" aria-label="Storage settings" onClick={() => openPath('/admin/storages')}><Settings size={17} /></button> : null}<span className="sessionIndicator">{admin ? session.user?.username || 'Admin' : 'Shared files'}</span></div>
         </div>
       </header>
-      <main className="explorerShell" id="file-explorer">
+      {storageRoute && admin ? <MountManager onBack={() => openPath(lastNonAdminPath.current)} /> : <main className="explorerShell" id="file-explorer">
         {directory.data ? <Breadcrumbs items={directory.data.breadcrumbs} onOpen={openPath} /> : <div className="breadcrumbPlaceholder" aria-hidden="true" />}
         {admin && selectedEntries.length > 0 ? <SelectionToolbar count={selectedEntries.length} pending={operationPending} onMove={() => setDialog({ type: 'move', entries: selectedEntries })} onPublish={() => void runBatch(() => setVisibility(selectedEntries.map((entry) => entry.id), true))} onHide={() => void runBatch(() => setVisibility(selectedEntries.map((entry) => entry.id), false))} onDelete={() => setDialog({ type: 'delete', entries: selectedEntries })} onClear={selection.clear} /> : <ExplorerToolbar
           query={query}
@@ -273,9 +276,9 @@ export function ExplorerApp() {
           {directory.data && entries.length > 0 ? (view === 'list' ? <FileList entries={entries} selectedIds={selection.selectedIds} admin={admin} handlers={handlers} /> : <FileGrid entries={entries} selectedIds={selection.selectedIds} admin={admin} handlers={handlers} />) : null}
           {directory.loading && directory.data ? <div className="refreshing" role="status"><LoaderCircle aria-hidden="true" size={16} />Refreshing</div> : null}
         </section>
-      </main>
+      </main>}
       <UploadPanel tasks={uploads.tasks} onCancel={uploads.cancel} onRetry={uploads.retry} onRemove={uploads.remove} onClearCompleted={uploads.clearCompleted} />
-      <LoginDialog open={path === '/admin' && session.status !== 'admin'} busy={loginBusy} error={loginError} onClose={closeLogin} onSubmit={submitLogin} />
+      <LoginDialog open={adminRoute && session.status !== 'admin'} busy={loginBusy} error={loginError} onClose={closeLogin} onSubmit={submitLogin} />
       {menuEntry && !mobileActions ? <EntryActionMenu entry={menuEntry} actions={currentEntryActions} onClose={() => setMenuEntry(null)} /> : null}
       {menuEntry && mobileActions ? <MobileActionSheet open title={`Actions for ${menuEntry.name}`} actions={currentEntryActions} onClose={() => setMenuEntry(null)} /> : null}
       {dialog?.type === 'rename' ? <RenameDialog open title={`Rename ${dialog.entries[0].name}`} initialName={dialog.entries[0].name} onClose={() => setDialog(null)} onSubmit={async (name) => { await patchEntry(dialog.entries[0].id, { name }); directory.refresh(); }} /> : null}

@@ -1,6 +1,7 @@
 import { fireEvent, render, screen } from '@testing-library/react';
 import { describe, expect, it, vi } from 'vitest';
 import { MobileActionSheet } from '../../src/ui/features/explorer/MobileActionSheet';
+import { MountDialog } from '../../src/ui/features/mounts/MountDialog';
 
 describe('responsive actions', () => {
   it('exposes the same actions in a labeled mobile dialog and closes on Escape', () => {
@@ -24,5 +25,14 @@ describe('responsive actions', () => {
     expect(onClose).toHaveBeenCalledOnce();
     unmount();
     expect(trigger).toHaveFocus();
+  });
+
+  it('focuses the storage name and closes the storage sheet on Escape', () => {
+    const onClose = vi.fn();
+    render(<MountDialog mount={null} busy={false} error={null} onClose={onClose} onSubmit={vi.fn()} />);
+
+    expect(screen.getByLabelText('Display name')).toHaveFocus();
+    fireEvent.keyDown(document, { key: 'Escape' });
+    expect(onClose).toHaveBeenCalledOnce();
   });
 });

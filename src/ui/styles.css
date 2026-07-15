@@ -472,3 +472,47 @@ button:focus-visible, a:focus-visible, input:focus-visible, select:focus-visible
 @media (prefers-reduced-motion: reduce) {
   *, *::before, *::after { animation-duration: 0.01ms !important; animation-iteration-count: 1 !important; scroll-behavior: auto !important; transition-duration: 0.01ms !important; }
 }
+.headerSession { display: flex; align-items: center; gap: 10px; }
+.storageManager { width: min(calc(100% - 32px), 1080px); margin: 26px auto; }
+.storageManagerHeader { display: flex; align-items: end; justify-content: space-between; gap: 20px; padding: 4px 0 20px; border-bottom: 1px solid var(--line); }
+.storageManagerHeader h1 { margin: 12px 0 4px; font-size: 24px; letter-spacing: 0; }
+.storageManagerHeader p { margin: 0; color: var(--muted); font-size: 13px; }
+.backButton { display: inline-flex; align-items: center; gap: 6px; border: 0; background: transparent; color: var(--muted); padding: 0; }
+.mountList { display: grid; }
+.mountRow { display: grid; grid-template-columns: minmax(210px, 1.3fr) minmax(260px, 1fr) auto; align-items: center; gap: 18px; min-height: 72px; padding: 10px 8px; border-bottom: 1px solid var(--line); }
+.mountProvider { display: flex; align-items: center; gap: 12px; min-width: 0; }
+.mountProvider > svg { color: var(--accent); }
+.mountProvider div { display: grid; min-width: 0; }
+.mountProvider strong, .mountProvider span { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.mountProvider span, .mountDetails { color: var(--muted); font-size: 12px; }
+.mountDetails { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 10px; }
+.mountDetails span { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.mountActions { display: flex; gap: 6px; }
+.statusOnline { color: #16794c; }
+.statusOffline { color: var(--muted); }
+.mountEmpty, .mountLoading { min-height: 240px; display: grid; place-content: center; justify-items: center; gap: 8px; color: var(--muted); }
+.mountDialog { width: min(calc(100% - 24px), 680px); max-height: calc(100dvh - 32px); overflow: auto; border: 1px solid var(--line-strong); border-radius: 8px; background: #fff; box-shadow: 0 18px 48px rgba(26,39,34,.2); }
+.mountDialog > header { display: flex; justify-content: space-between; align-items: start; padding: 16px; border-bottom: 1px solid var(--line); }
+.mountDialog h2, .confirmDialog h2 { margin: 0; font-size: 18px; letter-spacing: 0; }
+.mountDialog header p { margin: 3px 0 0; color: var(--muted); font-size: 12px; }
+.mountDialog form { padding: 16px; }
+.mountFormGrid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 14px; }
+.mountFormGrid label { display: grid; gap: 6px; font-size: 13px; font-weight: 650; }
+.mountFormGrid input, .mountFormGrid select { width: 100%; height: 38px; border: 1px solid var(--line-strong); border-radius: 6px; background: #fff; padding: 0 9px; color: var(--text); }
+.mountSwitches { display: flex; gap: 22px; margin-top: 16px; }
+.mountSwitches label { display: flex; align-items: center; gap: 7px; font-size: 13px; }
+.mountDialog footer, .confirmDialog footer { display: flex; justify-content: flex-end; gap: 8px; margin-top: 18px; }
+.confirmDialog { width: min(calc(100% - 24px), 420px); border: 1px solid var(--line-strong); border-radius: 8px; background: #fff; padding: 18px; box-shadow: 0 18px 48px rgba(26,39,34,.2); }
+.confirmDialog p { color: var(--muted); line-height: 1.5; }
+.dangerButton { border-color: #b42318; background: #b42318; color: #fff; }
+.formError { margin-top: 14px; color: #b42318; font-size: 13px; }
+@media (max-width: 760px) {
+  .storageManager { width: 100%; margin: 12px 0; }
+  .storageManagerHeader { align-items: start; padding: 10px 14px 16px; }
+  .storageManagerHeader h1 { font-size: 20px; }
+  .mountRow { grid-template-columns: 1fr auto; padding: 12px 14px; }
+  .mountDetails { grid-column: 1 / -1; grid-row: 2; }
+  .mountActions { grid-column: 2; grid-row: 1; }
+  .mountFormGrid { grid-template-columns: 1fr; }
+  .mountDialog { align-self: end; width: 100%; max-height: calc(100dvh - 8px); border-radius: 8px 8px 0 0; }
+}
