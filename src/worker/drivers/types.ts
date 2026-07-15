@@ -31,6 +31,7 @@ export type DownloadResult =
   | { kind: 'stream'; response: Response };
 
 export interface StorageDriver {
+  readonly rootId: string;
   readonly capabilities: ReadonlySet<DriverCapability>;
   list(parentId: string, cursor?: string): Promise<ListResult>;
   stat(itemId: string): Promise<StorageItem>;

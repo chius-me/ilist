@@ -48,20 +48,29 @@ async function waitForRefresh(env: Env, mountId: string): Promise<string> {
   throw new HttpError(503, 'ONEDRIVE_REFRESH_BUSY', 'OneDrive token refresh is busy');
 }
 
-async function refreshAccessToken(env: Env, mountId: string): Promise<string> {
+async function refreshAccessToken(
+  env: Env,
+  mountId: string,
+  rejectedAccessToken?: string,
+  fetcher: typeof fetch = fetch,
+): Promise<string> {
   let credentials = validCredentials(await getCredentials(env, mountId));
-  if (credentials.expiresAt > Date.now() + REFRESH_SKEW_MS) return credentials.accessToken;
+  if (rejectedAccessToken ? credentials.accessToken !== rejectedAccessToken : credentials.expiresAt > Date.now() + REFRESH_SKEW_MS) {
+    return credentials.accessToken;
+  }
 
   const owner = crypto.randomUUID();
   if (!await acquireLease(env, mountId, owner, Date.now())) return waitForRefresh(env, mountId);
   try {
     credentials = validCredentials(await getCredentials(env, mountId));
-    if (credentials.expiresAt > Date.now() + REFRESH_SKEW_MS) return credentials.accessToken;
+    if (rejectedAccessToken ? credentials.accessToken !== rejectedAccessToken : credentials.expiresAt > Date.now() + REFRESH_SKEW_MS) {
+      return credentials.accessToken;
+    }
     const token = await requestOneDriveTokens(env, {
       grant_type: 'refresh_token',
       refresh_token: credentials.refreshToken,
       scope: ONEDRIVE_SCOPES,
-    });
+    }, fetcher);
     const next: OneDriveCredentials = {
       accessToken: token.accessToken,
       refreshToken: token.refreshToken ?? credentials.refreshToken,
@@ -80,4 +89,13 @@ export async function getOneDriveAccessToken(env: Env, mountId: string): Promise
   const credentials = validCredentials(await getCredentials(env, mountId));
   if (credentials.expiresAt > Date.now() + REFRESH_SKEW_MS) return credentials.accessToken;
   return refreshAccessToken(env, mountId);
+}
+
+export function refreshOneDriveAccessToken(
+  env: Env,
+  mountId: string,
+  rejectedAccessToken: string,
+  fetcher: typeof fetch = fetch,
+): Promise<string> {
+  return refreshAccessToken(env, mountId, rejectedAccessToken, fetcher);
 }

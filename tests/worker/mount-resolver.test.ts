@@ -57,7 +57,7 @@ describe('resolveVirtualPath', () => {
 
 describe('createDriver', () => {
   it('rejects a mount whose driver has not been registered', async () => {
-    await expect(createDriver({} as Env, { ...mounts[0], driverType: 'onedrive' })).rejects.toMatchObject({
+    await expect(createDriver({} as Env, { ...mounts[0], driverType: 'onedrive' }, {})).rejects.toMatchObject({
       code: 'DRIVER_UNAVAILABLE',
       status: 503,
     });
@@ -65,6 +65,7 @@ describe('createDriver', () => {
 
   it('passes only environment, mount metadata, and decrypted credentials to the registered factory', async () => {
     const driver: StorageDriver = {
+      rootId: 'root',
       capabilities: new Set(),
       list: async () => ({ items: [], nextCursor: null }),
       stat: async () => {
