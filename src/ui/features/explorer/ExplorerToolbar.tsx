@@ -52,6 +52,8 @@ export function ExplorerToolbar({
   const searchButton = useRef<HTMLButtonElement>(null);
   const searchInput = useRef<HTMLInputElement>(null);
   const toolbar = useRef<HTMLElement>(null);
+  const adminMenuButton = useRef<HTMLButtonElement>(null);
+  const adminMenu = useRef<HTMLDivElement>(null);
   const restoreSearchFocus = useRef(false);
   const [searchOpen, setSearchOpen] = useState(false);
   const [adminMenuOpen, setAdminMenuOpen] = useState(false);
@@ -80,20 +82,35 @@ export function ExplorerToolbar({
 
   useEffect(() => {
     if (!adminMenuOpen) return;
+    const trigger = adminMenuButton.current;
+    adminMenu.current?.querySelector<HTMLElement>('[role="menuitem"]')?.focus();
     const closeOnOutsideClick = (event: MouseEvent) => {
-      if (toolbar.current?.contains(event.target as Node)) return;
+      const target = event.target as Node;
+      if (adminMenu.current?.contains(target) || trigger?.contains(target)) return;
       setAdminMenuOpen(false);
     };
-    const closeOnEscape = (event: KeyboardEvent) => {
-      if (event.key !== 'Escape') return;
+    const handleMenuKey = (event: KeyboardEvent) => {
+      if (event.key === 'Escape') {
+        event.preventDefault();
+        setAdminMenuOpen(false);
+        return;
+      }
+      if (!['ArrowDown', 'ArrowUp', 'Home', 'End'].includes(event.key) || !adminMenu.current) return;
       event.preventDefault();
-      setAdminMenuOpen(false);
+      const items = [...adminMenu.current.querySelectorAll<HTMLElement>('[role="menuitem"]')];
+      const current = items.indexOf(document.activeElement as HTMLElement);
+      const next = event.key === 'Home' ? 0
+        : event.key === 'End' ? items.length - 1
+          : event.key === 'ArrowDown' ? (current + 1) % items.length
+            : (current - 1 + items.length) % items.length;
+      items[next]?.focus();
     };
     document.addEventListener('mousedown', closeOnOutsideClick);
-    document.addEventListener('keydown', closeOnEscape);
+    document.addEventListener('keydown', handleMenuKey);
     return () => {
       document.removeEventListener('mousedown', closeOnOutsideClick);
-      document.removeEventListener('keydown', closeOnEscape);
+      document.removeEventListener('keydown', handleMenuKey);
+      trigger?.focus();
     };
   }, [adminMenuOpen]);
 
@@ -118,8 +135,7 @@ export function ExplorerToolbar({
 
   return (
     <section ref={toolbar} className="explorerToolbar" aria-label={t('toolbar.controls')}>
-      <div className="toolbarPath"><Breadcrumbs items={breadcrumbs} onOpen={onOpenPath} /></div>
-      <div className="toolbarActions">
+      <div className="toolbarPath">
         {searchOpen ? <label className="searchControl searchOverlay">
           <Search aria-hidden="true" size={17} />
           <span className="srOnly">{t('toolbar.search')}</span>
@@ -129,9 +145,12 @@ export function ExplorerToolbar({
               closeSearch();
             }
           }} placeholder={t('toolbar.search')} />
-        </label> : <button ref={searchButton} className="iconButton" type="button" title={t('toolbar.search')} aria-label={t('toolbar.search')} onClick={() => setSearchOpen(true)}>
+        </label> : <Breadcrumbs items={breadcrumbs} onOpen={onOpenPath} />}
+      </div>
+      <div className="toolbarActions">
+        {!searchOpen ? <button ref={searchButton} className="iconButton" type="button" title={t('toolbar.search')} aria-label={t('toolbar.search')} onClick={() => setSearchOpen(true)}>
           <Search aria-hidden="true" size={17} />
-        </button>}
+        </button> : null}
         <label className="sortControl">
           <span className="srOnly">{t('toolbar.sort')}</span>
           <select value={sort.field} onChange={updateSort} aria-label={t('toolbar.sort')}>
@@ -199,10 +218,10 @@ export function ExplorerToolbar({
               </button> : null}
             </div>
             {canUpload || canCreateFolder ? <div className="mobileAdminActions">
-              <button className="iconButton" type="button" title={t('toolbar.adminMenu')} aria-label={t('toolbar.adminMenu')} aria-haspopup="menu" aria-expanded={adminMenuOpen} onClick={() => setAdminMenuOpen((open) => !open)}>
+              <button ref={adminMenuButton} className="iconButton" type="button" title={t('toolbar.adminMenu')} aria-label={t('toolbar.adminMenu')} aria-haspopup="menu" aria-expanded={adminMenuOpen} onClick={() => setAdminMenuOpen((open) => !open)}>
                 <Plus aria-hidden="true" size={17} />
               </button>
-              {adminMenuOpen ? <div className="mobileAdminMenu" role="menu" aria-label={t('toolbar.adminMenu')}>
+              {adminMenuOpen ? <div ref={adminMenu} className="mobileAdminMenu" role="menu" aria-label={t('toolbar.adminMenu')}>
                 {canUpload ? <button type="button" role="menuitem" onClick={openUpload}><Upload aria-hidden="true" size={17} />{t('toolbar.upload')}</button> : null}
                 {canCreateFolder ? <button type="button" role="menuitem" onClick={createFolder}><Plus aria-hidden="true" size={17} />{t('toolbar.createFolder')}</button> : null}
               </div> : null}

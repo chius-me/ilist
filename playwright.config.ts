@@ -1,5 +1,7 @@
 import { defineConfig, devices } from '@playwright/test';
 
+const port = Number(process.env.PLAYWRIGHT_PORT ?? 4173);
+
 export default defineConfig({
   testDir: './tests/e2e',
   fullyParallel: false,
@@ -9,13 +11,13 @@ export default defineConfig({
   },
   snapshotPathTemplate: '{testDir}/{testFilePath}-snapshots/{arg}-{projectName}{ext}',
   use: {
-    baseURL: 'http://127.0.0.1:4173',
+    baseURL: `http://127.0.0.1:${port}`,
     ...(process.env.PLAYWRIGHT_BROWSER_CHANNEL ? { channel: process.env.PLAYWRIGHT_BROWSER_CHANNEL } : {}),
     trace: 'retain-on-failure',
   },
   webServer: {
-    command: 'npm run dev:web',
-    url: 'http://127.0.0.1:4173',
+    command: `npm run dev:web -- --port ${port}`,
+    url: `http://127.0.0.1:${port}`,
     reuseExistingServer: true,
   },
   projects: [

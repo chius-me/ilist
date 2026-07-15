@@ -80,9 +80,9 @@ describe('visual style contracts', () => {
 
   it('keeps the compact command bar on one row with 48px mobile icon targets', () => {
     expect(explorer).toContain('.explorerToolbar { position: relative; display: flex; align-items: center; min-height: 54px;');
-    expect(explorer).toContain('.toolbarPath { min-width: 0; flex: 1 1 auto; overflow: hidden; }');
+    expect(explorer).toMatch(/\.toolbarPath\s*\{[^}]*min-width: 0;[^}]*flex: 1 1 auto;[^}]*overflow: hidden;/);
     expect(explorer).toContain('.toolbarActions { position: relative; z-index: 2; margin-left: auto;');
-    expect(explorer).toContain('.searchOverlay { position: absolute; right: 100%; width: min(360px, calc(100vw - 24px));');
+    expect(explorer).toContain('.searchOverlay { width: 100%; min-width: 0; max-width: 360px; }');
     expect(explorer).toMatch(/\.sortControl select\s*\{[\s\S]*?width: auto;[\s\S]*?max-width: 88px;/);
     expect(explorer).toContain('.explorerToolbar .iconButton, .mobileViewToggle button { width: 48px; height: 48px; flex-basis: 48px; }');
     expect(explorer).toContain('.desktopViewToggle, .desktopAdminActions { display: none; }');
@@ -90,5 +90,8 @@ describe('visual style contracts', () => {
     expect(explorer).not.toContain('.directoryCommands');
     expect(explorer).not.toContain('.explorerToolbar { align-items: stretch; flex-wrap: wrap; }');
     expect(explorer).not.toContain('.toolbarActions { width: 100%; justify-content: flex-start; }');
+    expect(explorer).toContain('.explorerPage { width: 100%; padding-top: 12px; }');
+    expect(explorer).toContain('.explorerToolbar, .toolbarActions { gap: 0; }');
+    expect(explorer).toContain('.sortControl select { width: 64px; max-width: 64px;');
   });
 });
