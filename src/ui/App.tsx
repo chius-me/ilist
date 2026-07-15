@@ -1,5 +1,6 @@
 import { ExplorerApp } from './app/ExplorerApp';
+import { AppProviders } from './app/AppProviders';
 
 export function App() {
-  return <ExplorerApp />;
+  return <AppProviders><ExplorerApp /></AppProviders>;
 }
