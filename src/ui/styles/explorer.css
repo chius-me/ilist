@@ -204,6 +204,7 @@
 .loadingRow span:first-child { width: 28px; height: 28px; }
 .loadingRow span:last-child { width: 68px; justify-self: end; }
 @keyframes skeleton { to { opacity: 0.48; } }
+.explorerToolbar .isSpinning { animation: spin 0.9s linear infinite; }
 .refreshing { display: inline-flex; align-items: center; gap: 6px; margin: 10px 12px; color: var(--muted); font-size: 12px; }
 .refreshing svg { animation: spin 0.9s linear infinite; }
 @keyframes spin { to { transform: rotate(360deg); } }
