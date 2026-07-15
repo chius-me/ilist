@@ -77,6 +77,26 @@ describe('OneDrive read driver', () => {
     expect(stat).toHaveBeenCalledTimes(2);
   });
 
+  it('rejects item IDs outside a configured OneDrive sub-root', async () => {
+    const scopedMount = { ...mount, rootItemId: 'mounted-root' };
+    const stat = vi.fn(async (id: string) => {
+      if (id === 'mounted-root') return graphItem({ id, name: 'Mounted', file: undefined, folder: { childCount: 1 }, parentReference: { id: 'drive-root' } });
+      if (id === 'inside') return graphItem({ id, parentReference: { id: 'mounted-root' }, '@microsoft.graph.downloadUrl': 'https://download.example/inside' });
+      if (id === 'outside') return graphItem({ id, parentReference: { id: 'other-folder' }, '@microsoft.graph.downloadUrl': 'https://download.example/outside' });
+      return graphItem({ id, parentReference: { id: 'drive-root' }, file: undefined, folder: { childCount: 1 } });
+    });
+    const api = driverClient({ stat });
+    const driver = new OneDriveDriver(scopedMount, api);
+
+    await expect(driver.stat('inside')).resolves.toMatchObject({ id: 'inside' });
+    await expect(driver.getDownload('outside', new Request('https://ilist.example/file'))).rejects.toMatchObject({
+      status: 404,
+      code: 'STORAGE_ITEM_NOT_FOUND',
+    });
+    await expect(driver.remove('outside')).rejects.toMatchObject({ code: 'STORAGE_ITEM_NOT_FOUND' });
+    expect(api.remove).not.toHaveBeenCalled();
+  });
+
   it('uses encoded Graph item paths and only accepts Graph nextLink cursors', async () => {
     const fetcher = vi.fn(async (_input: RequestInfo | URL, _init?: RequestInit) => Response.json({ value: [], '@odata.nextLink': 'https://graph.microsoft.com/v1.0/me/drive/items/child/children?$skiptoken=next' }));
     const client = new OneDriveClient(workerEnv(), mount.id, fetcher, async () => 'test-access');

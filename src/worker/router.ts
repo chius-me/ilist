@@ -24,6 +24,9 @@ import {
   upsertObject,
 } from './db';
 import { entryToApi, isEffectivelyPublic } from './entries';
+import { validateEntryName } from './entry-domain';
+import { externalEntry, requireExternalCapability, resolveExternalEntry } from './external-entries';
+import { decodeExternalId } from './external-identity';
 import {
   createFolder,
   deleteEntryTrees,
@@ -38,7 +41,7 @@ import { fail, HttpError, noContent, ok, readJson, requireSameOrigin, requireSam
 import { handleMountRoutes } from './mount-routes';
 import { handleOAuthRoutes } from './oauth-routes';
 import { keyFromPath, putObject, streamEntryObject } from './r2';
-import type { Env } from './types';
+import type { BatchFailure, BatchResult, Env } from './types';
 
 interface LoginBody {
   username?: string;
@@ -204,6 +207,61 @@ async function authorizeEntry(env: Env, id: string, admin: boolean) {
   return { entry, effectivePublic };
 }
 
+function operationFailure(id: string, error: unknown): BatchFailure {
+  if (error instanceof HttpError) return { id, code: error.code, message: error.message };
+  return { id, code: 'PROVIDER_OPERATION_FAILED', message: 'Storage provider operation failed' };
+}
+
+async function moveExternalEntries(env: Env, ids: string[], destinationId: string): Promise<BatchResult | null> {
+  const destinationIdentity = decodeExternalId(destinationId);
+  const externalIds = ids.filter((id) => decodeExternalId(id));
+  if (!destinationIdentity && externalIds.length === 0) return null;
+  const succeeded: string[] = [];
+  const failed: BatchFailure[] = [];
+
+  for (const id of new Set(ids)) {
+    const identity = decodeExternalId(id);
+    if (!identity || !destinationIdentity || identity.mountId !== destinationIdentity.mountId) {
+      failed.push({ id, code: 'CROSS_MOUNT_MOVE_UNSUPPORTED', message: 'Entries cannot be moved between mounts' });
+      continue;
+    }
+    try {
+      const source = await resolveExternalEntry(env, id, true);
+      if (!source) throw new HttpError(404, 'ENTRY_NOT_FOUND', 'Entry not found');
+      requireExternalCapability(source.driver, 'move');
+      await source.driver.move(identity.itemId, destinationIdentity.itemId);
+      succeeded.push(id);
+    } catch (error) {
+      failed.push(operationFailure(id, error));
+    }
+  }
+  return { succeeded, failed };
+}
+
+async function deleteExternalEntries(env: Env, ids: string[]): Promise<BatchResult | null> {
+  const externalIds = ids.filter((id) => decodeExternalId(id));
+  if (externalIds.length === 0) return null;
+  const succeeded: string[] = [];
+  const failed: BatchFailure[] = [];
+
+  for (const id of new Set(ids)) {
+    if (!decodeExternalId(id)) {
+      failed.push({ id, code: 'MIXED_MOUNT_BATCH_UNSUPPORTED', message: 'Batch operations must target one storage type' });
+      continue;
+    }
+    try {
+      const source = await resolveExternalEntry(env, id, true);
+      if (!source) throw new HttpError(404, 'ENTRY_NOT_FOUND', 'Entry not found');
+      requireExternalCapability(source.driver, 'delete');
+      await source.driver.remove(source.identity.itemId);
+      succeeded.push(id);
+    } catch (error) {
+      failed.push(operationFailure(id, error));
+    }
+  }
+  return { succeeded, failed };
+}
+
 async function reconcileAfterStorageFailure(env: Env, operation: () => Promise<Response>): Promise<Response> {
   try {
     return await operation();
@@ -220,7 +278,7 @@ async function handleFilesystem(request: Request, env: Env, url: URL): Promise<R
   const admin = Boolean(await currentUser(env, request));
 
   if (url.pathname === '/api/fs/list') {
-    return ok(await listVirtualDirectory(env.DB, url.searchParams.get('path') ?? '/', admin));
+    return ok(await listVirtualDirectory(env, url.searchParams.get('path') ?? '/', admin));
   }
 
   const match = /^\/api\/fs\/entries\/(.+)$/.exec(url.pathname);
@@ -231,6 +289,8 @@ async function handleFilesystem(request: Request, env: Env, url: URL): Promise<R
     } catch {
       throw new HttpError(404, 'ENTRY_NOT_FOUND', 'Entry not found');
     }
+    const external = await resolveExternalEntry(env, id, admin);
+    if (external) return ok(external.entry);
     const { entry, effectivePublic } = await authorizeEntry(env, id, admin);
     return ok(entryToApi(entry, admin, effectivePublic));
   }
@@ -294,6 +354,12 @@ async function handleAdmin(request: Request, env: Env, url: URL, options: RouteR
     if (request.method !== 'POST') return methodNotAllowed();
     const body = await readJson<FolderBody>(request);
     if (typeof body.parentId !== 'string' || typeof body.name !== 'string') invalidRequest();
+    const external = await resolveExternalEntry(env, body.parentId, true);
+    if (external) {
+      requireExternalCapability(external.driver, 'createFolder');
+      const created = await external.driver.createFolder(external.identity.itemId, validateEntryName(body.name));
+      return ok(externalEntry(created, external.mount, external.driver, true));
+    }
     return ok(await createFolder(env.DB, { parentId: body.parentId, name: body.name }));
   }
 
@@ -309,6 +375,18 @@ async function handleAdmin(request: Request, env: Env, url: URL, options: RouteR
     const parentId = url.searchParams.get('parentId');
     const name = url.searchParams.get('name');
     if (parentId === null || name === null) invalidRequest();
+    const external = await resolveExternalEntry(env, parentId, true);
+    if (external) {
+      requireExternalCapability(external.driver, 'upload');
+      if (!request.body) invalidRequest();
+      const uploaded = await external.driver.upload(
+        external.identity.itemId,
+        validateEntryName(name),
+        request.body,
+        request.headers.get('content-type'),
+      );
+      return ok(externalEntry(uploaded, external.mount, external.driver, true));
+    }
     return reconcileAfterStorageFailure(env, async () => ok(await uploadFile(env, request, { id, parentId, name })));
   }
 
@@ -316,13 +394,18 @@ async function handleAdmin(request: Request, env: Env, url: URL, options: RouteR
     if (request.method !== 'POST') return methodNotAllowed();
     const body = await readJson<MoveEntriesBody>(request);
     if (typeof body.destinationId !== 'string') invalidRequest();
-    return ok(await moveEntries(env.DB, stringArray(body.ids), body.destinationId));
+    const ids = stringArray(body.ids);
+    const external = await moveExternalEntries(env, ids, body.destinationId);
+    return ok(external ?? await moveEntries(env.DB, ids, body.destinationId));
   }
 
   if (url.pathname === '/api/admin/entries/delete') {
     if (request.method !== 'POST') return methodNotAllowed();
     const body = await readJson<DeleteEntriesBody>(request);
-    return reconcileAfterStorageFailure(env, async () => ok(await deleteEntryTrees(env, stringArray(body.ids))));
+    const ids = stringArray(body.ids);
+    const external = await deleteExternalEntries(env, ids);
+    if (external) return ok(external);
+    return reconcileAfterStorageFailure(env, async () => ok(await deleteEntryTrees(env, ids)));
   }
 
   if (url.pathname === '/api/admin/entries/visibility') {
@@ -342,7 +425,17 @@ async function handleAdmin(request: Request, env: Env, url: URL, options: RouteR
       || (body.sortOrder !== undefined && typeof body.sortOrder !== 'number')
       || (body.isPublic !== undefined && typeof body.isPublic !== 'boolean')
     ) invalidRequest();
-    return ok(await patchEntry(env.DB, decodeURIComponent(patchMatch[1]), {
+    const id = decodeURIComponent(patchMatch[1]);
+    const external = await resolveExternalEntry(env, id, true);
+    if (external) {
+      if (typeof body.name !== 'string' || body.description !== undefined || body.sortOrder !== undefined || body.isPublic !== undefined) {
+        throw new HttpError(405, 'OPERATION_UNSUPPORTED', 'External entries only support renaming');
+      }
+      requireExternalCapability(external.driver, 'rename');
+      const renamed = await external.driver.rename(external.identity.itemId, validateEntryName(body.name));
+      return ok(externalEntry(renamed, external.mount, external.driver, true));
+    }
+    return ok(await patchEntry(env.DB, id, {
       ...(typeof body.name === 'string' ? { name: body.name } : {}),
       ...(typeof body.description === 'string' ? { description: body.description } : {}),
       ...(typeof body.sortOrder === 'number' ? { sortOrder: body.sortOrder } : {}),
@@ -409,6 +502,25 @@ async function handleFile(request: Request, env: Env, url: URL): Promise<Respons
   }
   const [candidateId] = suffix.split('/');
   const admin = Boolean(await currentUser(env, request));
+  const external = await resolveExternalEntry(env, candidateId, admin);
+  if (external) {
+    if (external.item.kind !== 'file') throw new HttpError(400, 'NOT_A_FILE', 'Entry is not a file');
+    requireExternalCapability(external.driver, 'download');
+    const download = await external.driver.getDownload(external.identity.itemId, request);
+    if (download.kind === 'redirect') {
+      return new Response(null, {
+        status: 302,
+        headers: { location: download.url, 'cache-control': 'private, no-store' },
+      });
+    }
+    const headers = new Headers(download.response.headers);
+    if (!external.mount.isPublic) headers.set('cache-control', 'private, no-store');
+    return new Response(request.method === 'HEAD' ? null : download.response.body, {
+      status: download.response.status,
+      statusText: download.response.statusText,
+      headers,
+    });
+  }
   if (/^[A-Za-z0-9_-]{8,80}$/.test(candidateId) && await getEntryById(env.DB, candidateId)) {
     const { entry, effectivePublic } = await authorizeEntry(env, candidateId, admin);
     return streamEntryObject(env.R2_BUCKET, entry, request, {

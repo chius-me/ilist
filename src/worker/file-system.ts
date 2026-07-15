@@ -24,6 +24,7 @@ import {
 } from './db';
 import { storageKeyForEntry, validateEntryName } from './entry-domain';
 import { entryToApi, isEffectivelyPublic, listDirectory } from './entries';
+import { listExternalDirectory } from './external-entries';
 import { HttpError } from './http';
 import { resolveVirtualPath } from './mount-resolver';
 import { listMounts } from './mounts';
@@ -123,11 +124,11 @@ function mountedBreadcrumbs(mount: Mount, breadcrumbs: Breadcrumb[]): Breadcrumb
 }
 
 export async function listVirtualDirectory(
-  db: D1Database,
+  env: Env,
   pathname: string,
   admin: boolean,
 ): Promise<VirtualDirectoryResponse> {
-  const mounts = await listMounts(db);
+  const mounts = await listMounts(env.DB);
   if (pathname === '/') {
     return {
       current: virtualRootEntry(),
@@ -141,10 +142,10 @@ export async function listVirtualDirectory(
   const resolvableMounts = admin ? mounts : mounts.filter((mount) => mount.isPublic);
   const { mount, relativePath } = resolveVirtualPath(pathname, resolvableMounts);
   if (mount.driverType !== 'native-r2') {
-    throw new HttpError(503, 'DRIVER_UNAVAILABLE', 'Storage driver is unavailable');
+    return listExternalDirectory(env, mount, relativePath, admin);
   }
 
-  const directory = await listDirectory(db, relativePath, admin);
+  const directory = await listDirectory(env.DB, relativePath, admin);
   return {
     current: withMountIdentity(directory.current, mount),
     breadcrumbs: mountedBreadcrumbs(mount, directory.breadcrumbs),

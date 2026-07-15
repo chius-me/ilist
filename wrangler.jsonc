@@ -14,7 +14,14 @@
     "SESSION_TTL_SECONDS": "604800"
   },
   "secrets": {
-    "required": ["ADMIN_PASSWORD_HASH", "CREDENTIAL_MASTER_KEY", "SESSION_SECRET"]
+    "required": [
+      "ADMIN_PASSWORD_HASH",
+      "CREDENTIAL_MASTER_KEY",
+      "SESSION_SECRET",
+      "MICROSOFT_CLIENT_ID",
+      "MICROSOFT_CLIENT_SECRET",
+      "PUBLIC_ORIGIN"
+    ]
   },
   "r2_buckets": [
     {

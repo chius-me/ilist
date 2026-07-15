@@ -1,6 +1,6 @@
 # ilist
 
-ilist is a lightweight Cloudflare Workers file explorer. D1 stores a virtual filesystem of file and folder entries, including visibility and metadata. R2 stores file blobs under immutable entry storage keys. The Worker joins those layers for browsing, administration, previews, downloads, and stable file URLs.
+ilist is a lightweight, OpenList-style file explorer built on Cloudflare Workers. A virtual root can contain multiple user-named OneDrive Personal and S3-compatible mounts, including Cloudflare R2. The original bound R2 bucket remains available as the built-in `R2` compatibility mount.
 
 ## Stack
 
@@ -8,6 +8,7 @@ ilist is a lightweight Cloudflare Workers file explorer. D1 stores a virtual fil
 - D1 binding: `DB`
 - R2 bucket binding: `R2_BUCKET`
 - React + Vite frontend
+- Microsoft Graph REST and S3 Signature V4 without provider SDKs
 
 ## Local Setup
 
@@ -19,12 +20,25 @@ npm run hash-password -- "your-admin-password"
 cp .dev.vars.example .dev.vars
 ```
 
-Set the generated password hash and a unique, 32-character-or-longer session secret in `.dev.vars`:
+Generate the remaining local keys:
+
+```bash
+openssl rand -base64 32 # CREDENTIAL_MASTER_KEY
+openssl rand -hex 32    # SESSION_SECRET
+```
+
+Set the generated values and Microsoft application settings in `.dev.vars`. `PUBLIC_ORIGIN` must be one exact HTTPS origin without a trailing slash. OAuth cannot complete against Wrangler's default plain-HTTP local URL; use the deployed Worker or an HTTPS development hostname.
 
 ```env
 ADMIN_PASSWORD_HASH=pbkdf2:210000:replace_with_salt_hex:replace_with_hash_hex
+CREDENTIAL_MASTER_KEY=replace-with-32-byte-base64-key
 SESSION_SECRET=replace-with-at-least-32-random-characters
+MICROSOFT_CLIENT_ID=replace-with-application-client-id
+MICROSOFT_CLIENT_SECRET=replace-with-application-client-secret
+PUBLIC_ORIGIN=https://ilist.example.com
 ```
+
+See [OneDrive setup](docs/onedrive-setup.md) for the Microsoft app registration and production secret procedure.
 
 Apply every D1 migration to the local database, then migrate the retained legacy object index. Run the import twice: the second invocation proves the import is idempotent.
 
@@ -47,7 +61,7 @@ The Worker runs locally at the URL printed by Wrangler, normally `http://localho
 
 ## Filesystem API
 
-The explorer uses URL paths to address directories and entry IDs to address files:
+The explorer uses URL paths to address directories and opaque entry IDs to address files. External IDs contain both the mount identity and provider item identity, so the same provider ID can safely exist in several mounts:
 
 - `GET /api/fs/list?path=/path/to/folder` lists a directory for the current guest or admin session.
 - `GET /api/fs/entries/:id` returns an entry when it is visible to the caller.
@@ -62,6 +76,16 @@ Admin session routes:
 - `POST /api/admin/entries/move`, `/api/admin/entries/delete`, and `/api/admin/entries/visibility`
 
 Top-level entry names `api`, `file`, and `admin` are reserved because they would collide with Worker routes. The same names are valid below the root.
+
+## Storage Mounts
+
+Administrators manage mounts from `/admin/storages`. Every mount has its own display name, top-level path, guest visibility, connection, and optional provider root.
+
+- **OneDrive Personal:** create a named mount, then complete Microsoft authorization. Multiple mounts can connect different personal Microsoft accounts.
+- **Cloudflare R2:** use endpoint `https://<ACCOUNT_ID>.r2.cloudflarestorage.com`, region `auto`, path-style addressing, bucket name, and bucket-scoped S3 credentials.
+- **Other S3-compatible storage:** provide the HTTPS endpoint, signing region, bucket, addressing mode, and credentials. A root prefix can expose only one subtree.
+
+Mount deletion removes ilist configuration and encrypted credentials only. It never deletes the provider bucket or drive. Cross-mount move/copy and resumable uploads are not part of this release.
 
 Uploads are single, non-resumable Worker requests. The practical maximum is the Cloudflare request-body limit for the zone plan (100 MB on Free and Pro, 200 MB on Business, and 500 MB by default on Enterprise); larger or interruption-tolerant uploads require a multipart design. Recursive deletion processes at most 1000 entries per requested tree by default and reports per-entry failures when a tree exceeds that limit.
 
@@ -83,6 +107,8 @@ npx wrangler d1 execute ilist-db --remote --command "SELECT kind, status, COUNT(
 npx wrangler d1 execute ilist-db --remote --command "SELECT COUNT(*) AS old_count FROM objects"
 npm run deploy
 ```
+
+Before the first multi-mount deployment, configure all six required Worker secrets listed in `wrangler.jsonc`. Wrangler preserves existing secrets during normal code deployments. Keep `CREDENTIAL_MASTER_KEY` stable: changing it makes stored S3 credentials and OneDrive tokens unreadable.
 
 Before deployment, record the export location and expected legacy-object count. After the import, confirm all imported entries are `ready`, compare the entry and object counts, deploy, and run authenticated and guest smoke tests. At minimum verify the root explorer, nested-path refresh, stable file link, guest access to hidden entries, admin login, a small disposable upload and delete, and the deployed API responses:
 
