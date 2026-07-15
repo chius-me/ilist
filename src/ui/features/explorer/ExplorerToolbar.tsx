@@ -1,4 +1,4 @@
-import { ArrowDownAZ, Grid2X2, List, LogIn, Plus, Search, Upload } from 'lucide-react';
+import { ArrowDownAZ, Grid2X2, List, Plus, Search, Upload } from 'lucide-react';
 import { useRef, type ChangeEvent } from 'react';
 import type { SessionStatus } from '../../hooks/useSession';
 
@@ -17,7 +17,6 @@ interface ExplorerToolbarProps {
   onQuery: (query: string) => void;
   onSort: (sort: ExplorerSort) => void;
   onView: (view: ExplorerView) => void;
-  onLogin: () => void;
   onUpload: (files: File[]) => void;
   onCreateFolder: () => void;
 }
@@ -33,7 +32,6 @@ export function ExplorerToolbar({
   onQuery,
   onSort,
   onView,
-  onLogin,
   onUpload,
   onCreateFolder,
 }: ExplorerToolbarProps) {
@@ -107,11 +105,7 @@ export function ExplorerToolbar({
             </button> : null}
             {selectionCount > 0 ? <span className="selectionCount">{selectionCount} selected</span> : null}
           </>
-        ) : (
-          <button className="iconButton" type="button" title="Admin sign in" aria-label="Admin sign in" onClick={onLogin}>
-            <LogIn aria-hidden="true" size={17} />
-          </button>
-        )}
+        ) : null}
       </div>
     </section>
   );
