@@ -24,7 +24,9 @@ Self-hosted file index and manager for Cloudflare Workers.
 - S3-compatible mounts with AWS Signature Version 4
 - Cloudflare R2 through either S3 credentials or the built-in Worker binding
 - Public directory browsing, stable file links, downloads, and common file previews
-- List and grid views, breadcrumbs, sorting, search, selection, and responsive layout
+- English and Simplified Chinese interface with system, light, and dark themes stored locally
+- List and grid views, breadcrumbs, sorting, search, keyboard selection, and responsive layout
+- Responsive storage and appearance administration for desktop, tablet, and mobile screens
 - Administrator login, upload, folder creation, rename, move, delete, and visibility controls
 - D1 migrations and compatibility support for legacy R2 object links
 - Streamed provider responses without buffering complete files in Worker memory
@@ -148,9 +150,12 @@ Fill in test-only values before starting Wrangler. It normally serves the applic
 | Command | Purpose |
 | --- | --- |
 | `npm run dev` | Run the local Worker and UI |
+| `npm run dev:web` | Run the frontend-only Vite development server |
 | `npm run build` | Build the Vite frontend |
 | `npm run test:worker` | Run Worker runtime tests |
 | `npm run test:ui` | Run UI tests |
+| `npm run test:e2e` | Run browser workflows in desktop, tablet, and mobile viewports |
+| `npm run test:visual` | Run browser screenshot scenarios |
 | `npm run test` | Run all tests |
 | `npm run check` | Type-check, build, and run all tests |
 | `npm run deploy` | Build and deploy with Wrangler |

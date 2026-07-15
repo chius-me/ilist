@@ -127,12 +127,12 @@ export function ExplorerPage({
     setPreviewError(null);
     setPreviewLoading(true);
     void getEntry(previewId, controller.signal).then(setPreviewEntry).catch((error: unknown) => {
-      if (!(error instanceof DOMException && error.name === 'AbortError')) setPreviewError(error instanceof Error ? error : new Error('Unable to load preview'));
+      if (!(error instanceof DOMException && error.name === 'AbortError')) setPreviewError(error instanceof Error ? error : new Error(t('preview.unavailable')));
     }).finally(() => {
       if (!controller.signal.aborted) setPreviewLoading(false);
     });
     return () => controller.abort();
-  }, [previewId]);
+  }, [previewId, t]);
 
   useEffect(() => {
     selection.clear();
@@ -251,7 +251,7 @@ export function ExplorerPage({
               onCreateFolder={() => setDialog({ type: 'create', entries: [] })}
             />}
           </div>
-          <section className={`explorerContent${dragOver ? ' isDragOver' : ''}`} id="file-list" tabIndex={-1} aria-label={previewId ? `Files with preview ${previewId} selected` : 'Files'} onDragEnter={onDragEnter} onDragOver={onDragOver} onDragLeave={onDragLeave} onDrop={onDrop}>
+          <section className={`explorerContent${dragOver ? ' isDragOver' : ''}`} id="file-list" tabIndex={-1} aria-label={previewId ? t('explorer.filesWithPreview', { id: previewId }) : t('nav.files')} onDragEnter={onDragEnter} onDragOver={onDragOver} onDragLeave={onDragLeave} onDrop={onDrop}>
             <div className="directoryCommands"><button className="iconButton" type="button" onClick={directory.refresh} disabled={directory.loading} aria-label={t('action.refresh')} title={t('action.refresh')}><RefreshCw aria-hidden="true" size={16} /></button></div>
             {directory.error && directory.data ? <div className="retryBanner" role="alert"><AlertCircle aria-hidden="true" size={18} /><span>{directory.error.message}</span><button type="button" onClick={directory.refresh}><RefreshCw aria-hidden="true" size={15} />{t('action.retry')}</button></div> : null}
             {directory.loading && !directory.data ? <LoadingCollection view={view} label={t('state.loadingFiles')} /> : null}

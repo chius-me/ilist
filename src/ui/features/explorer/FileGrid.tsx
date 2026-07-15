@@ -22,7 +22,7 @@ export function FileGrid({
 }) {
   const { formatBytes, t } = useI18n();
   return (
-    <ul className="fileGrid" aria-label="Files and folders" {...interactionProps}>
+    <ul className="fileGrid" aria-label={t('explorer.collection')} {...interactionProps}>
       {entries.map((entry) => {
         const selected = selectedIds.has(entry.id);
         const selectable = admin && isEntryMutable(entry);
@@ -41,7 +41,7 @@ export function FileGrid({
               handlers.onMenu(entry, anchor);
             }}
           >
-            {selectable ? <input className="gridSelect" type="checkbox" checked={selected} aria-label={`Select ${entry.name}`} onChange={(event) => handlers.onToggle(entry, { range: (event.nativeEvent as MouseEvent).shiftKey })} /> : null}
+            {selectable ? <input className="gridSelect" type="checkbox" checked={selected} aria-label={t('entry.select', { name: entry.name })} onChange={(event) => handlers.onToggle(entry, { range: (event.nativeEvent as MouseEvent).shiftKey })} /> : null}
             <button className="gridPrimary" type="button" aria-label={`${t('action.open')} ${entry.name}`} onClick={() => (entry.kind === 'folder' ? handlers.onOpen(entry) : handlers.onPreview(entry))}>
               <span className={`gridMedia ${entry.kind}`}><FileIcon entry={entry} size={34} /></span>
               <span className="gridFooter">

@@ -7,8 +7,10 @@ import { AppShell } from './AppShell';
 import { AdminLayout, type AdminSection } from './AdminLayout';
 import { ExplorerPage } from './ExplorerPage';
 import { PreferencesPage } from './PreferencesPage';
+import { useI18n } from '../i18n/I18nProvider';
 
 export function ExplorerApp() {
+  const { t } = useI18n();
   const { path, previewId, openPath, openPreview, closePreview } = useExplorerLocation();
   const session = useSession();
   const lastNonAdminPath = useRef('/');
@@ -32,7 +34,7 @@ export function ExplorerApp() {
       await session.signIn(username, password);
       if (!adminSection) openPath(lastNonAdminPath.current);
     } catch (error) {
-      setLoginError(error instanceof Error ? error.message : 'Unable to sign in');
+      setLoginError(error instanceof Error ? error.message : t('login.unableSignIn'));
     } finally {
       setLoginBusy(false);
     }

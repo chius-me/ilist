@@ -1,9 +1,12 @@
 import { act, renderHook, waitFor } from '@testing-library/react';
+import type { ReactNode } from 'react';
 import { describe, expect, it, vi } from 'vitest';
+import { AppProviders } from '../../src/ui/app/AppProviders';
 import { uploadReducer } from '../../src/ui/features/uploads/upload-reducer';
 import { useUploadQueue } from '../../src/ui/features/uploads/useUploadQueue';
 
 describe('upload queue', () => {
+  const wrapper = ({ children }: { children: ReactNode }) => <AppProviders>{children}</AppProviders>;
   it('tracks byte progress and retryable failure', () => {
     const task = { id: 'upload-12345678', parentId: 'root', file: new File(['hello'], 'a.txt'), status: 'queued' as const, uploadedBytes: 0, progress: 0 };
     const uploading = uploadReducer([task], { type: 'progress', id: task.id, uploadedBytes: 3, totalBytes: 5 });
@@ -21,7 +24,7 @@ describe('upload queue', () => {
       maximum = Math.max(maximum, active);
       resolvers.push(() => { active -= 1; resolve(); });
     }));
-    const { result } = renderHook(() => useUploadQueue({ transport, onCompleted: () => undefined }));
+    const { result } = renderHook(() => useUploadQueue({ transport, onCompleted: () => undefined }), { wrapper });
     act(() => result.current.enqueue('root', [new File(['1'], '1.txt'), new File(['2'], '2.txt'), new File(['3'], '3.txt')]));
     await waitFor(() => expect(transport).toHaveBeenCalledTimes(2));
     expect(maximum).toBe(2);
@@ -31,7 +34,7 @@ describe('upload queue', () => {
 
   it('keeps invalid and duplicate names out of the transport queue', async () => {
     const transport = vi.fn(() => Promise.resolve());
-    const { result } = renderHook(() => useUploadQueue({ transport, onCompleted: () => undefined }));
+    const { result } = renderHook(() => useUploadQueue({ transport, onCompleted: () => undefined }), { wrapper });
     act(() => result.current.enqueue('root', [new File([''], '   '), new File(['a'], 'same.txt'), new File(['b'], 'same.txt')]));
     await waitFor(() => expect(result.current.tasks).toHaveLength(3));
     await waitFor(() => expect(result.current.tasks.map((task) => task.status)).toEqual(['failed', 'completed', 'failed']));
@@ -43,7 +46,7 @@ describe('upload queue', () => {
     let finish!: () => void;
     const transport = vi.fn(() => new Promise<void>((resolve) => { finish = resolve; }));
     const onCompleted = vi.fn();
-    const { result } = renderHook(() => useUploadQueue({ transport, onCompleted }));
+    const { result } = renderHook(() => useUploadQueue({ transport, onCompleted }), { wrapper });
 
     act(() => result.current.enqueue('onedrive-folder', [new File(['content'], 'report.txt')]));
     await waitFor(() => expect(transport).toHaveBeenCalledOnce());

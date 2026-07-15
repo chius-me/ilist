@@ -1,11 +1,14 @@
-import { fireEvent, render, screen } from '@testing-library/react';
+import { act, fireEvent, render, renderHook, screen, waitFor } from '@testing-library/react';
+import type { ReactNode } from 'react';
 import { describe, expect, it, vi } from 'vitest';
+import { App } from '../../src/ui/App';
 import { MobileActionSheet } from '../../src/ui/features/explorer/MobileActionSheet';
 import { MountDialog } from '../../src/ui/features/mounts/MountDialog';
 import { AppProviders } from '../../src/ui/app/AppProviders';
 import { FileGrid } from '../../src/ui/features/explorer/FileGrid';
 import { FileList } from '../../src/ui/features/explorer/FileList';
 import type { Entry } from '../../src/ui/types/entries';
+import { useUploadQueue } from '../../src/ui/features/uploads/useUploadQueue';
 
 const report: Entry = {
   id: 'report-file',
@@ -23,7 +26,50 @@ const report: Entry = {
   capabilities: { open: false, preview: true, download: true, upload: false, createFolder: false, rename: false, move: false, delete: false, changeVisibility: false },
 };
 
+const root = {
+  ok: true,
+  data: {
+    current: {
+      ...report,
+      id: 'root',
+      parentId: null,
+      name: '',
+      kind: 'folder',
+      size: 0,
+      contentType: null,
+      capabilities: { ...report.capabilities, open: true, upload: true, createFolder: true },
+    },
+    breadcrumbs: [],
+    items: [report],
+  },
+};
+
 describe('responsive actions', () => {
+  for (const locale of ['en', 'zh-CN'] as const) {
+    it(`renders primary surfaces in ${locale}`, async () => {
+      localStorage.setItem('ilist.ui.preferences', JSON.stringify({ version: 1, locale, theme: 'light', defaultView: 'list' }));
+      vi.stubGlobal('fetch', vi.fn(async (input: RequestInfo | URL) => {
+        const url = String(input);
+        if (url.includes('/api/admin/me')) return Response.json({ ok: true, data: { username: 'admin' } });
+        if (url.includes('/api/fs/list')) return Response.json(root);
+        throw new Error(`Unexpected fetch: ${url}`);
+      }));
+      render(<App />);
+
+      expect(await screen.findByRole('main')).toBeVisible();
+      expect(await screen.findByRole('button', { name: locale === 'en' ? 'Upload files' : '上传文件' })).toBeVisible();
+    });
+  }
+
+  it('localizes upload queue validation errors', async () => {
+    localStorage.setItem('ilist.ui.preferences', JSON.stringify({ version: 1, locale: 'zh-CN', theme: 'light', defaultView: 'list' }));
+    const wrapper = ({ children }: { children: ReactNode }) => <AppProviders>{children}</AppProviders>;
+    const { result } = renderHook(() => useUploadQueue({ transport: vi.fn(), onCompleted: vi.fn() }), { wrapper });
+
+    act(() => result.current.enqueue('root', [new File([''], '   ')]));
+    await waitFor(() => expect(result.current.tasks[0]?.error).toBe('文件名无效'));
+  });
+
   it('keeps explicit open and separate action controls in both collection views', () => {
     const handlers = { onOpen: vi.fn(), onPreview: vi.fn(), onToggle: vi.fn(), onMenu: vi.fn() };
 
