@@ -1,4 +1,4 @@
-import { act, fireEvent, render, renderHook, screen, waitFor } from '@testing-library/react';
+import { act, fireEvent, render, renderHook, screen, waitFor, within } from '@testing-library/react';
 import type { ReactNode } from 'react';
 import { describe, expect, it, vi } from 'vitest';
 import { App } from '../../src/ui/App';
@@ -10,6 +10,7 @@ import { FileList } from '../../src/ui/features/explorer/FileList';
 import type { Entry } from '../../src/ui/types/entries';
 import { useUploadQueue } from '../../src/ui/features/uploads/useUploadQueue';
 import { AdminLayout } from '../../src/ui/app/AdminLayout';
+import { ExplorerToolbar } from '../../src/ui/features/explorer/ExplorerToolbar';
 
 const report: Entry = {
   id: 'report-file',
@@ -46,6 +47,90 @@ const root = {
 };
 
 describe('responsive actions', () => {
+  it('uses the compact mobile view toggle and administrator menu commands', () => {
+    vi.stubGlobal('matchMedia', vi.fn().mockReturnValue({ matches: true, addEventListener: vi.fn(), removeEventListener: vi.fn() }));
+    const onView = vi.fn();
+    const onUpload = vi.fn();
+    const onCreateFolder = vi.fn();
+    const { container } = render(
+      <AppProviders>
+        <ExplorerToolbar
+          breadcrumbs={[]}
+          query=""
+          sort={{ field: 'name', order: 'asc' }}
+          view="list"
+          refreshing={false}
+          sessionStatus="admin"
+          selectionCount={0}
+          canUpload
+          canCreateFolder
+          onQuery={vi.fn()}
+          onOpenPath={vi.fn()}
+          onRefresh={vi.fn()}
+          onSort={vi.fn()}
+          onView={onView}
+          onUpload={onUpload}
+          onCreateFolder={onCreateFolder}
+        />
+      </AppProviders>,
+    );
+
+    const mobileViewToggle = container.querySelector<HTMLElement>('.mobileViewToggle');
+    expect(mobileViewToggle).not.toBeNull();
+    fireEvent.click(within(mobileViewToggle!).getByRole('button', { name: 'Switch to grid view' }));
+    expect(onView).toHaveBeenCalledWith('grid');
+
+    const mobileAdminActions = container.querySelector<HTMLElement>('.mobileAdminActions');
+    expect(mobileAdminActions).not.toBeNull();
+    fireEvent.click(within(mobileAdminActions!).getByRole('button', { name: 'Administrator menu' }));
+    expect(screen.getByRole('menu', { name: 'Administrator menu' })).toBeVisible();
+
+    fireEvent.click(screen.getByRole('menuitem', { name: 'Upload files' }));
+    expect(screen.queryByRole('menu', { name: 'Administrator menu' })).not.toBeInTheDocument();
+    fireEvent.change(container.querySelector('input[type="file"]')!, { target: { files: [new File(['report'], 'report.txt')] } });
+    expect(onUpload).toHaveBeenCalledWith([expect.objectContaining({ name: 'report.txt' })]);
+
+    fireEvent.click(within(mobileAdminActions!).getByRole('button', { name: 'Administrator menu' }));
+    fireEvent.click(screen.getByRole('menuitem', { name: 'Create folder' }));
+    expect(onCreateFolder).toHaveBeenCalledOnce();
+    expect(screen.queryByRole('menu', { name: 'Administrator menu' })).not.toBeInTheDocument();
+  });
+
+  it('closes the compact administrator menu on Escape and outside click', () => {
+    vi.stubGlobal('matchMedia', vi.fn().mockReturnValue({ matches: true, addEventListener: vi.fn(), removeEventListener: vi.fn() }));
+    const { container } = render(
+      <AppProviders>
+        <ExplorerToolbar
+          breadcrumbs={[]}
+          query=""
+          sort={{ field: 'name', order: 'asc' }}
+          view="list"
+          refreshing={false}
+          sessionStatus="admin"
+          selectionCount={0}
+          canUpload
+          canCreateFolder
+          onQuery={vi.fn()}
+          onOpenPath={vi.fn()}
+          onRefresh={vi.fn()}
+          onSort={vi.fn()}
+          onView={vi.fn()}
+          onUpload={vi.fn()}
+          onCreateFolder={vi.fn()}
+        />
+      </AppProviders>,
+    );
+
+    const menuButton = within(container.querySelector<HTMLElement>('.mobileAdminActions')!).getByRole('button', { name: 'Administrator menu' });
+    fireEvent.click(menuButton);
+    fireEvent.keyDown(document, { key: 'Escape' });
+    expect(screen.queryByRole('menu', { name: 'Administrator menu' })).not.toBeInTheDocument();
+
+    fireEvent.click(menuButton);
+    fireEvent.mouseDown(document.body);
+    expect(screen.queryByRole('menu', { name: 'Administrator menu' })).not.toBeInTheDocument();
+  });
+
   for (const locale of ['en', 'zh-CN'] as const) {
     it(`renders primary surfaces in ${locale}`, async () => {
       localStorage.setItem('ilist.ui.preferences', JSON.stringify({ version: 1, locale, theme: 'light', defaultView: 'list' }));
