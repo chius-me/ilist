@@ -95,7 +95,8 @@ export function ExplorerToolbar({
         setAdminMenuOpen(false);
         return;
       }
-      if (!['ArrowDown', 'ArrowUp', 'Home', 'End'].includes(event.key) || !adminMenu.current) return;
+      if (!['ArrowDown', 'ArrowUp', 'Home', 'End'].includes(event.key)
+        || !adminMenu.current?.contains(document.activeElement)) return;
       event.preventDefault();
       const items = [...adminMenu.current.querySelectorAll<HTMLElement>('[role="menuitem"]')];
       const current = items.indexOf(document.activeElement as HTMLElement);
