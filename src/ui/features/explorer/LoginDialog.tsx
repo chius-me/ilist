@@ -1,6 +1,7 @@
 import { LogIn, X } from 'lucide-react';
 import { type FormEvent, useEffect, useRef, useState } from 'react';
 import { useFeedbackI18n } from '../../components/ToastRegion';
+import { useModalFocus } from '../../hooks/useModalFocus';
 
 export function LoginDialog({
   open,
@@ -19,6 +20,8 @@ export function LoginDialog({
   const [username, setUsername] = useState('');
   const [password, setPassword] = useState('');
   const usernameInput = useRef<HTMLInputElement>(null);
+  const backdrop = useRef<HTMLDivElement>(null);
+  useModalFocus({ active: open, containerRef: backdrop, initialFocusRef: usernameInput, onClose });
 
   useEffect(() => {
     if (!open) {
@@ -26,14 +29,7 @@ export function LoginDialog({
       setPassword('');
       return;
     }
-    const previous = document.activeElement instanceof HTMLElement ? document.activeElement : null;
     usernameInput.current?.focus();
-    const closeOnEscape = (event: KeyboardEvent) => { if (event.key === 'Escape') onClose(); };
-    document.addEventListener('keydown', closeOnEscape);
-    return () => {
-      document.removeEventListener('keydown', closeOnEscape);
-      previous?.focus();
-    };
   }, [onClose, open]);
 
   if (!open) return null;
@@ -44,7 +40,7 @@ export function LoginDialog({
   }
 
   return (
-    <div className="dialogBackdrop overlayScrim" role="presentation" onMouseDown={onClose}>
+    <div ref={backdrop} className="dialogBackdrop overlayScrim" role="presentation" onMouseDown={onClose}>
       <section className="loginDialog overlaySurface" role="dialog" aria-modal="true" aria-labelledby="login-title" onMouseDown={(event) => event.stopPropagation()}>
         <header className="dialogHeader overlayHeader">
           <h2 id="login-title">{t('nav.signIn')}</h2>

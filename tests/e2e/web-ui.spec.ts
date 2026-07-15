@@ -20,6 +20,12 @@ async function settleVisualState(page: Page) {
   await page.waitForTimeout(200);
 }
 
+async function openEntryAction(page: Page, report: string, action: string) {
+  await page.getByRole('button', { name: `Actions for ${report}` }).click();
+  if ((page.viewportSize()?.width ?? 0) <= 760) await page.getByRole('dialog', { name: `Actions for ${report}` }).getByRole('button', { name: action }).click();
+  else await page.getByRole('menu', { name: `Actions for ${report}` }).getByRole('menuitem', { name: action }).click();
+}
+
 test('@visual explorer list, grid, themes, and locales', async ({ page }) => {
   await installApiFixtures(page, { admin: true });
   await page.goto('/');
@@ -59,6 +65,7 @@ test('@visual previews, selection, menus, and dialogs stay in bounds', async ({ 
 
   await page.getByRole('checkbox', { name: `Select ${report}` }).check();
   await expect(page.getByRole('region', { name: 'Selected file actions' })).toBeVisible();
+  await expect(page).toHaveScreenshot('selection-toolbar.png', { fullPage: true });
   await page.getByRole('button', { name: 'Clear selection' }).click();
   await page.getByRole('button', { name: `Actions for ${report}` }).click();
 
@@ -66,15 +73,32 @@ test('@visual previews, selection, menus, and dialogs stay in bounds', async ({ 
     const sheet = page.getByRole('dialog', { name: `Actions for ${report}` });
     await expect(sheet).toBeVisible();
     await expectInsideViewport(page, sheet);
+    await expect(page).toHaveScreenshot('mobile-action-sheet.png', { fullPage: true });
     await sheet.getByRole('button', { name: 'Rename' }).click();
   } else {
     const menu = page.getByRole('menu', { name: `Actions for ${report}` });
     await expect(menu).toBeVisible();
     await expectInsideViewport(page, menu);
+    await expect(page).toHaveScreenshot('desktop-context-menu.png', { fullPage: true });
     await menu.getByRole('menuitem', { name: 'Rename' }).click();
   }
   await expect(page.getByRole('dialog', { name: `Rename ${report}` })).toBeVisible();
   await expect(page).toHaveScreenshot('rename-dialog.png', { fullPage: true });
+  await page.getByRole('button', { name: 'Close' }).click();
+
+  await openEntryAction(page, report, 'Delete');
+  await expect(page.getByRole('dialog', { name: `Delete ${report}` })).toBeVisible();
+  await expect(page).toHaveScreenshot('delete-dialog.png', { fullPage: true });
+  await page.getByRole('button', { name: 'Cancel' }).click();
+
+  await openEntryAction(page, report, 'Move');
+  await expect(page.getByRole('dialog', { name: 'Move selected entries' })).toBeVisible();
+  await expect(page).toHaveScreenshot('move-dialog.png', { fullPage: true });
+  await page.getByRole('button', { name: 'Cancel' }).click();
+
+  await openEntryAction(page, report, 'Properties');
+  await expect(page.getByRole('dialog', { name: `Properties for ${report}` })).toBeVisible();
+  await expect(page).toHaveScreenshot('properties-dialog.png', { fullPage: true });
   await expectNoHorizontalOverflow(page);
 });
 
@@ -92,13 +116,31 @@ test('@visual upload, storage, and appearance surfaces', async ({ page }) => {
   await expectNoHorizontalOverflow(page);
   await expect(page).toHaveScreenshot('storage-management.png', { fullPage: true });
 
+  const productionActions = page.getByRole('button', { name: 'Actions for Production archive' });
+  const productionMenu = page.locator('details.mountActionMenu').nth(0);
+  await productionActions.click();
+  await page.getByRole('button', { name: 'Delete' }).click();
+  await expect(productionMenu).not.toHaveAttribute('open', '');
+  await expect(page.getByRole('dialog', { name: 'Delete storage mount' })).toBeVisible();
+  await expect(page).toHaveScreenshot('mount-delete-confirmation.png', { fullPage: true, maxDiffPixelRatio: 0 });
+  await page.getByRole('button', { name: 'Cancel' }).click();
+
+  const personalActions = page.getByRole('button', { name: 'Actions for Personal drive' });
+  const personalMenu = page.locator('details.mountActionMenu').nth(1);
+  await personalActions.click();
+  await page.getByRole('button', { name: 'Disconnect' }).click();
+  await expect(personalMenu).not.toHaveAttribute('open', '');
+  await expect(page.getByRole('dialog', { name: 'Disconnect OneDrive' })).toBeVisible();
+  await expect(page).toHaveScreenshot('mount-disconnect-confirmation.png', { fullPage: true, maxDiffPixelRatio: 0 });
+  await page.getByRole('button', { name: 'Cancel' }).click();
+
   if ((page.viewportSize()?.width ?? 0) <= 760) await page.getByRole('button', { name: 'Admin menu' }).click();
   await page.getByRole('link', { name: 'Appearance' }).click();
   await expect(page.getByRole('heading', { name: 'Appearance' })).toBeVisible();
   await expect(page).toHaveScreenshot('appearance-preferences.png', { fullPage: true });
 });
 
-test('navigates folders and exposes loading, empty, and retry states', async ({ page }) => {
+test('@visual navigates folders and exposes loading, empty, and retry states', async ({ page }) => {
   await installApiFixtures(page, { admin: true });
   await page.goto('/');
   await page.getByRole('button', { name: /Open 项目资料/ }).click();
@@ -108,27 +150,33 @@ test('navigates folders and exposes loading, empty, and retry states', async ({ 
   await installApiFixtures(loadingPage, { directoryState: 'loading' });
   await loadingPage.goto('/');
   await expect(loadingPage.getByLabel('Loading files')).toBeVisible();
+  await expect(loadingPage).toHaveScreenshot('loading-state.png', { fullPage: true });
   await loadingPage.close();
 
   const emptyPage = await page.context().newPage();
   await installApiFixtures(emptyPage, { directoryState: 'empty' });
   await emptyPage.goto('/');
   await expect(emptyPage.getByText('This folder is empty')).toBeVisible();
+  await expect(emptyPage).toHaveScreenshot('empty-state.png', { fullPage: true });
   await emptyPage.close();
 
   const errorPage = await page.context().newPage();
   await installApiFixtures(errorPage, { directoryState: 'error' });
   await errorPage.goto('/');
   await expect(errorPage.getByRole('button', { name: 'Retry' })).toBeVisible();
+  await expect(errorPage).toHaveScreenshot('retry-state.png', { fullPage: true });
   await errorPage.close();
 });
 
-test('shows a localized login error for guests', async ({ page }) => {
+test('@visual shows a localized login error for guests', async ({ page }) => {
   await installApiFixtures(page, { admin: false });
   await page.goto('/');
-  await page.getByRole('button', { name: 'Sign in' }).click();
-  await page.getByLabel('Username').fill('admin');
-  await page.getByLabel('Password').fill('incorrect');
-  await page.getByRole('button', { name: 'Sign in', exact: true }).last().click();
-  await expect(page.getByRole('alert')).toHaveText('Invalid credentials');
+  await page.getByRole('button', { name: 'Change theme' }).click();
+  await page.getByRole('button', { name: 'Change language' }).click();
+  await page.getByRole('button', { name: '管理员登录' }).click();
+  await page.getByLabel('用户名').fill('admin');
+  await page.getByLabel('密码').fill('incorrect');
+  await page.getByRole('button', { name: '登录', exact: true }).last().click();
+  await expect(page.getByRole('alert')).toHaveText('用户名或密码无效。');
+  await expect(page).toHaveScreenshot('login-error-dark-zh.png', { fullPage: true });
 });

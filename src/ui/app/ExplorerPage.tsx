@@ -22,6 +22,7 @@ import { useDirectory } from '../hooks/useDirectory';
 import { useSelection } from '../hooks/useSelection';
 import type { useSession } from '../hooks/useSession';
 import { useI18n } from '../i18n/I18nProvider';
+import { localizedApiError } from '../i18n/apiErrors';
 import { usePreferences } from '../preferences/PreferencesProvider';
 import { isEntryMutable, type Entry } from '../types/entries';
 
@@ -70,7 +71,7 @@ function directoryErrorTitle(error: Error, t: ReturnType<typeof useI18n>['t']): 
 function directoryErrorHint(error: Error, t: ReturnType<typeof useI18n>['t']): string {
   if (error instanceof ApiError && error.code === 'MOUNT_DISABLED') return t('state.disconnectedHint');
   if (error instanceof ApiError && (error.status === 404 || error.code === 'ENTRY_NOT_FOUND' || error.code === 'MOUNT_NOT_FOUND')) return t('state.unavailableHint');
-  return error.message;
+  return localizedApiError(error, t, 'state.loadFailed');
 }
 
 export interface ExplorerPageProps {
@@ -216,7 +217,7 @@ export function ExplorerPage({
       }
       directory.refresh();
     } catch (error) {
-      pushToast('error', error instanceof Error ? error.message : t('feedback.operationFailed'));
+      pushToast('error', localizedApiError(error, t, 'feedback.operationFailed'));
       throw error;
     } finally {
       setOperationPending(false);
@@ -228,7 +229,7 @@ export function ExplorerPage({
     if (action === 'publish' || action === 'hide') void runBatch(() => setVisibility([entry.id], action === 'publish'));
   }
 
-  const currentEntryActions = menu ? entryActions(menu.entry, { onOpen: handlers.onOpen, onPreview: handlers.onPreview, onAction: openEntryAction }) : [];
+  const currentEntryActions = menu ? entryActions(menu.entry, { onOpen: handlers.onOpen, onPreview: handlers.onPreview, onAction: openEntryAction, onCopyFailure: () => pushToast('error', t('feedback.copyFailed')) }) : [];
 
   return (
     <>
@@ -253,7 +254,7 @@ export function ExplorerPage({
           </div>
           <section className={`explorerContent${dragOver ? ' isDragOver' : ''}`} id="file-list" tabIndex={-1} aria-label={previewId ? t('explorer.filesWithPreview', { id: previewId }) : t('nav.files')} onDragEnter={onDragEnter} onDragOver={onDragOver} onDragLeave={onDragLeave} onDrop={onDrop}>
             <div className="directoryCommands"><button className="iconButton" type="button" onClick={directory.refresh} disabled={directory.loading} aria-label={t('action.refresh')} title={t('action.refresh')}><RefreshCw aria-hidden="true" size={16} /></button></div>
-            {directory.error && directory.data ? <div className="retryBanner" role="alert"><AlertCircle aria-hidden="true" size={18} /><span>{directory.error.message}</span><button type="button" onClick={directory.refresh}><RefreshCw aria-hidden="true" size={15} />{t('action.retry')}</button></div> : null}
+            {directory.error && directory.data ? <div className="retryBanner" role="alert"><AlertCircle aria-hidden="true" size={18} /><span>{directoryErrorHint(directory.error, t)}</span><button type="button" onClick={directory.refresh}><RefreshCw aria-hidden="true" size={15} />{t('action.retry')}</button></div> : null}
             {directory.loading && !directory.data ? <LoadingCollection view={view} label={t('state.loadingFiles')} /> : null}
             {directory.error && !directory.data ? <div className="errorState" role="alert"><AlertCircle aria-hidden="true" size={32} /><strong>{directoryErrorTitle(directory.error, t)}</strong><span>{directoryErrorHint(directory.error, t)}</span><button className="button" type="button" onClick={directory.refresh}><RefreshCw aria-hidden="true" size={16} />{t('action.retry')}</button></div> : null}
             {directory.data && !directory.loading && !directory.error && entries.length === 0 ? <EmptyState query={query} admin={admin} /> : null}
@@ -275,11 +276,11 @@ export function ExplorerPage({
       <ToastRegion toasts={toasts} onDismiss={dismissToast} />
       {menu && !mobileActions ? <EntryActionMenu entry={menu.entry} anchor={menu.anchor} actions={currentEntryActions} onClose={() => setMenu(null)} /> : null}
       {menu && mobileActions ? <MobileActionSheet open title={t('entry.actions', { name: menu.entry.name })} anchor={menu.anchor} actions={currentEntryActions} translate={t} cancelLabel={t('action.cancel')} onClose={() => setMenu(null)} /> : null}
-      {dialog?.type === 'rename' ? <RenameDialog open title={t('dialog.renameTitle', { name: dialog.entries[0].name })} initialName={dialog.entries[0].name} onClose={() => setDialog(null)} onSubmit={async (name) => { await patchEntry(dialog.entries[0].id, { name }); directory.refresh(); }} /> : null}
-      {dialog?.type === 'create' && directory.data && canCreateFolder ? <RenameDialog open title={t('toolbar.createFolder')} submitLabel={t('common.save')} onClose={() => setDialog(null)} onSubmit={async (name) => { await createFolder(directory.data!.current.id, name); directory.refresh(); }} /> : null}
+      {dialog?.type === 'rename' ? <RenameDialog open title={t('dialog.renameTitle', { name: dialog.entries[0].name })} initialName={dialog.entries[0].name} onClose={() => setDialog(null)} onSubmit={async (name) => { await patchEntry(dialog.entries[0].id, { name }); directory.refresh(); pushToast('success', t('feedback.renamed')); }} /> : null}
+      {dialog?.type === 'create' && directory.data && canCreateFolder ? <RenameDialog open title={t('toolbar.createFolder')} submitLabel={t('common.save')} onClose={() => setDialog(null)} onSubmit={async (name) => { await createFolder(directory.data!.current.id, name); directory.refresh(); pushToast('success', t('feedback.folderCreated')); }} /> : null}
       {dialog?.type === 'move' ? <FolderPickerDialog entries={dialog.entries} onClose={() => setDialog(null)} onSubmit={(destinationId) => runBatch(() => moveEntries(dialog.entries.map((entry) => entry.id), destinationId))} /> : null}
       {dialog?.type === 'delete' ? <DeleteDialog entries={dialog.entries} onClose={() => setDialog(null)} onSubmit={() => runBatch(() => deleteEntries(dialog.entries.map((entry) => entry.id)))} /> : null}
-      {dialog?.type === 'properties' ? <PropertiesDialog entry={dialog.entries[0]} onClose={() => setDialog(null)} onSubmit={async (entryPatch) => { await patchEntry(dialog.entries[0].id, entryPatch); directory.refresh(); }} /> : null}
+      {dialog?.type === 'properties' ? <PropertiesDialog entry={dialog.entries[0]} onClose={() => setDialog(null)} onSubmit={async (entryPatch) => { await patchEntry(dialog.entries[0].id, entryPatch); directory.refresh(); pushToast('success', t('feedback.propertiesSaved')); }} /> : null}
       {previewId ? <PreviewOverlay entry={previewEntry} loading={previewLoading} error={previewError} onClose={onClosePreview} /> : null}
     </>
   );

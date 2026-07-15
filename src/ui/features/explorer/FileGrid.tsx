@@ -42,7 +42,11 @@ export function FileGrid({
             }}
           >
             {selectable ? <input className="gridSelect" type="checkbox" checked={selected} aria-label={t('entry.select', { name: entry.name })} onChange={(event) => handlers.onToggle(entry, { range: (event.nativeEvent as MouseEvent).shiftKey })} /> : null}
-            <button className="gridPrimary" type="button" aria-label={`${t('action.open')} ${entry.name}`} onClick={() => (entry.kind === 'folder' ? handlers.onOpen(entry) : handlers.onPreview(entry))}>
+            <button className="gridPrimary" type="button" aria-label={`${t('action.open')} ${entry.name}`} onClick={(event) => {
+              if (selectable && (event.metaKey || event.ctrlKey || event.shiftKey)) handlers.onToggle(entry, { range: event.shiftKey });
+              else if (entry.kind === 'folder') handlers.onOpen(entry);
+              else handlers.onPreview(entry);
+            }}>
               <span className={`gridMedia ${entry.kind}`}><FileIcon entry={entry} size={34} /></span>
               <span className="gridFooter">
                 <strong title={entry.name}>{entry.name}</strong>

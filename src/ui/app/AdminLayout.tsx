@@ -1,5 +1,5 @@
 import { ArrowLeft, Database, Menu, Palette, X } from 'lucide-react';
-import { type MouseEvent, type PropsWithChildren, useState } from 'react';
+import { type MouseEvent, type PropsWithChildren, useEffect, useState } from 'react';
 import { useI18n } from '../i18n/I18nProvider';
 
 export type AdminSection = 'storage' | 'appearance';
@@ -13,6 +13,14 @@ export interface AdminLayoutProps extends PropsWithChildren {
 export function AdminLayout({ active, onNavigate, onBack, children }: AdminLayoutProps) {
   const { t } = useI18n();
   const [drawerOpen, setDrawerOpen] = useState(false);
+  const [narrow, setNarrow] = useState(() => window.matchMedia('(max-width: 760px)').matches);
+  useEffect(() => {
+    const media = window.matchMedia('(max-width: 760px)');
+    const update = () => setNarrow(media.matches);
+    update();
+    media.addEventListener('change', update);
+    return () => media.removeEventListener('change', update);
+  }, []);
 
   function navigate(event: MouseEvent<HTMLAnchorElement>, section: AdminSection) {
     event.preventDefault();
@@ -32,7 +40,7 @@ export function AdminLayout({ active, onNavigate, onBack, children }: AdminLayou
         {drawerOpen ? <X aria-hidden="true" size={17} /> : <Menu aria-hidden="true" size={17} />}
         {t('admin.menu')}
       </button>
-      <aside className="adminSidebar" id="admin-navigation">
+      <aside className="adminSidebar" id="admin-navigation" inert={narrow && !drawerOpen ? true : undefined} aria-hidden={narrow && !drawerOpen ? true : undefined}>
         <nav aria-label={t('admin.navigation')}>
           <a href="/" onClick={back}><ArrowLeft aria-hidden="true" size={17} />{t('nav.files')}</a>
           <span className="adminNavLabel">{t('shell.admin')}</span>

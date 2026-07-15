@@ -8,6 +8,7 @@ import { AdminLayout, type AdminSection } from './AdminLayout';
 import { ExplorerPage } from './ExplorerPage';
 import { PreferencesPage } from './PreferencesPage';
 import { useI18n } from '../i18n/I18nProvider';
+import { localizedApiError } from '../i18n/apiErrors';
 
 export function ExplorerApp() {
   const { t } = useI18n();
@@ -34,7 +35,7 @@ export function ExplorerApp() {
       await session.signIn(username, password);
       if (!adminSection) openPath(lastNonAdminPath.current);
     } catch (error) {
-      setLoginError(error instanceof Error ? error.message : t('login.unableSignIn'));
+      setLoginError(localizedApiError(error, t, 'login.unableSignIn'));
     } finally {
       setLoginBusy(false);
     }
@@ -45,6 +46,11 @@ export function ExplorerApp() {
     openPath(lastNonAdminPath.current);
   }
 
+  async function signOut() {
+    await session.signOut();
+    if (path.startsWith('/admin')) openPath(lastNonAdminPath.current);
+  }
+
   return (
     <AppShell
       admin={admin}
@@ -53,7 +59,7 @@ export function ExplorerApp() {
       onHome={() => openPath('/')}
       onStorage={() => openPath('/admin/storages')}
       onSignIn={() => openPath('/admin')}
-      onSignOut={session.signOut}
+      onSignOut={signOut}
     >
       {adminSection && admin
         ? <AdminLayout active={adminSection} onNavigate={(section) => openPath(`/admin/${section === 'storage' ? 'storages' : 'appearance'}`)} onBack={() => openPath(lastNonAdminPath.current)}>

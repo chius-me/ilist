@@ -90,6 +90,20 @@ describe('explorer collection interactions', () => {
     expect(screen.getByText('4 selected')).toBeVisible();
   });
 
+  it('uses modifier clicks on entry names for toggle and range selection without opening', async () => {
+    render(<App />);
+    const first = await screen.findByRole('button', { name: 'Open first.txt' });
+    const third = screen.getByRole('button', { name: 'Open third.txt' });
+
+    fireEvent.click(first, { ctrlKey: true });
+    expect(screen.getByText('1 selected')).toBeVisible();
+    expect(new URL(location.href).searchParams.has('preview')).toBe(false);
+
+    fireEvent.click(third, { shiftKey: true });
+    expect(screen.getByText('3 selected')).toBeVisible();
+    expect(new URL(location.href).searchParams.has('preview')).toBe(false);
+  });
+
   it('uses roving focus for keyboard activation and explicit selection', async () => {
     render(<App />);
     const collection = await screen.findByRole('list', { name: 'Files and folders' });
@@ -153,5 +167,22 @@ describe('explorer collection interactions', () => {
     expect(menu).toHaveStyle({ position: 'fixed' });
     fireEvent.keyDown(window, { key: 'Escape' });
     await waitFor(() => expect(trigger).toHaveFocus());
+  });
+
+  it('moves focus through desktop menu items with arrow, Home, and End keys', async () => {
+    const user = userEvent.setup();
+    render(<App />);
+    await user.click(await screen.findByRole('button', { name: 'Actions for first.txt' }));
+    const items = screen.getAllByRole('menuitem');
+    expect(items[0]).toHaveFocus();
+
+    fireEvent.keyDown(window, { key: 'ArrowDown' });
+    expect(items[1]).toHaveFocus();
+    fireEvent.keyDown(window, { key: 'End' });
+    expect(items.at(-1)).toHaveFocus();
+    fireEvent.keyDown(window, { key: 'Home' });
+    expect(items[0]).toHaveFocus();
+    fireEvent.keyDown(window, { key: 'ArrowUp' });
+    expect(items.at(-1)).toHaveFocus();
   });
 });

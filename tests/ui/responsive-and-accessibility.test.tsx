@@ -9,6 +9,7 @@ import { FileGrid } from '../../src/ui/features/explorer/FileGrid';
 import { FileList } from '../../src/ui/features/explorer/FileList';
 import type { Entry } from '../../src/ui/types/entries';
 import { useUploadQueue } from '../../src/ui/features/uploads/useUploadQueue';
+import { AdminLayout } from '../../src/ui/app/AdminLayout';
 
 const report: Entry = {
   id: 'report-file',
@@ -117,5 +118,15 @@ describe('responsive actions', () => {
     expect(screen.getByLabelText('Display name')).toHaveFocus();
     fireEvent.keyDown(document, { key: 'Escape' });
     expect(onClose).toHaveBeenCalledOnce();
+  });
+
+  it('removes closed mobile administration navigation from focus order', () => {
+    vi.stubGlobal('matchMedia', vi.fn().mockReturnValue({ matches: true, addEventListener: vi.fn(), removeEventListener: vi.fn() }));
+    render(<AppProviders><AdminLayout active="storage" onNavigate={vi.fn()} onBack={vi.fn()}><div>Storage</div></AdminLayout></AppProviders>);
+
+    const navigation = screen.getByRole('navigation', { name: 'Administration', hidden: true });
+    expect(navigation.closest('aside')).toHaveAttribute('inert');
+    fireEvent.click(screen.getByRole('button', { name: 'Admin menu' }));
+    expect(navigation.closest('aside')).not.toHaveAttribute('inert');
   });
 });

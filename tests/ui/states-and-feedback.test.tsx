@@ -131,6 +131,23 @@ describe('page states and feedback', () => {
     await waitFor(() => expect(screen.getByLabelText('Username')).toHaveValue(''));
   });
 
+  it('traps dialog focus and isolates the background while open', async () => {
+    const user = userEvent.setup();
+    render(<div><button type="button">Background command</button><AppProviders><LoginDialog open busy={false} error={null} onClose={() => undefined} onSubmit={() => undefined} /></AppProviders></div>);
+    const dialog = screen.getByRole('dialog', { name: 'Admin sign in' });
+    const username = screen.getByLabelText('Username');
+    const submit = screen.getByRole('button', { name: 'Sign in' });
+    expect(dialog.parentElement).toHaveAttribute('data-modal-active', 'true');
+    expect(screen.getByText('Background command').closest('button')).toHaveAttribute('inert');
+
+    username.focus();
+    await user.tab({ shift: true });
+    expect(screen.getByRole('button', { name: 'Close' })).toHaveFocus();
+    submit.focus();
+    await user.tab();
+    expect(screen.getByRole('button', { name: 'Close' })).toHaveFocus();
+  });
+
   it('distinguishes disconnected storage and offers one retry command', async () => {
     vi.stubGlobal('fetch', vi.fn(async (input: RequestInfo | URL) => {
       const url = String(input);
@@ -142,5 +159,27 @@ describe('page states and feedback', () => {
 
     expect(await screen.findByText('Storage is disconnected')).toBeVisible();
     expect(screen.getAllByRole('button', { name: 'Retry' })).toHaveLength(1);
+  });
+
+  it('localizes directory and login API failures without exposing server messages', async () => {
+    localStorage.setItem('ilist.ui.preferences', JSON.stringify({ version: 1, locale: 'zh-CN', theme: 'light', defaultView: 'list' }));
+    history.replaceState(null, '', '/raw-error');
+    vi.stubGlobal('fetch', vi.fn(async (input: RequestInfo | URL) => {
+      const url = String(input);
+      if (url.includes('/api/admin/me')) return Response.json({ ok: false, error: { code: 'AUTH_REQUIRED', message: 'Raw auth failure' } }, { status: 401 });
+      if (url.includes('/api/fs/list')) return Response.json({ ok: false, error: { code: 'UPSTREAM_ERROR', message: 'Raw provider failure' } }, { status: 502 });
+      if (url.includes('/api/admin/login')) return Response.json({ ok: false, error: { code: 'INVALID_CREDENTIALS', message: 'Raw login failure' } }, { status: 401 });
+      throw new Error(`Unexpected fetch: ${url}`);
+    }));
+    render(<App />);
+    expect(await screen.findByText('存储操作失败。')).toBeVisible();
+    expect(screen.queryByText(/Raw provider/)).not.toBeInTheDocument();
+
+    await userEvent.click(screen.getByRole('button', { name: '管理员登录' }));
+    await userEvent.type(screen.getByLabelText('用户名'), 'admin');
+    await userEvent.type(screen.getByLabelText('密码'), 'bad');
+    await userEvent.click(screen.getByRole('button', { name: '登录' }));
+    expect(await screen.findByText('用户名或密码无效。')).toBeVisible();
+    expect(screen.queryByText(/Raw login/)).not.toBeInTheDocument();
   });
 });

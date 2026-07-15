@@ -80,7 +80,7 @@ const mounts = [
   },
   {
     id: 'personal', name: 'Personal drive', mountPath: '/personal', driverType: 'onedrive', provider: 'microsoft-onedrive-personal',
-    enabled: true, isPublic: false, sortOrder: 1, rootItemId: null, connected: false, config: {},
+    enabled: true, isPublic: false, sortOrder: 1, rootItemId: null, connected: true, config: {},
     createdAt: '2026-07-02T00:00:00.000Z', updatedAt: '2026-07-15T00:00:00.000Z',
   },
 ];

@@ -1,7 +1,8 @@
 import type { ComponentType } from 'react';
-import { useEffect, useRef } from 'react';
+import { useRef } from 'react';
 import type { MessageKey } from '../../i18n/messages';
 import { useFeedbackI18n } from '../../components/ToastRegion';
+import { useModalFocus } from '../../hooks/useModalFocus';
 
 export type MobileAction = {
   id: string;
@@ -26,26 +27,13 @@ export function MobileActionSheet({ open, title, anchor, actions, translate, can
   const translateMessage = translate ?? t;
   const resolvedCancelLabel = cancelLabel ?? t('action.cancel');
   const firstAction = useRef<HTMLButtonElement | HTMLAnchorElement>(null);
-  const previouslyFocused = useRef<HTMLElement | null>(null);
-
-  useEffect(() => {
-    if (!open) return;
-    previouslyFocused.current = anchor ?? (document.activeElement instanceof HTMLElement ? document.activeElement : null);
-    firstAction.current?.focus();
-    const closeOnEscape = (event: KeyboardEvent) => {
-      if (event.key === 'Escape') onClose();
-    };
-    document.addEventListener('keydown', closeOnEscape);
-    return () => {
-      document.removeEventListener('keydown', closeOnEscape);
-      previouslyFocused.current?.focus();
-    };
-  }, [anchor, onClose, open]);
+  const backdrop = useRef<HTMLDivElement>(null);
+  useModalFocus({ active: open, containerRef: backdrop, initialFocusRef: firstAction, onClose, restoreFocus: anchor });
 
   if (!open) return null;
 
   return (
-    <div className="mobileActionBackdrop" onMouseDown={onClose}>
+    <div ref={backdrop} className="mobileActionBackdrop" onMouseDown={onClose}>
       <section className="mobileActionSheet" role="dialog" aria-modal="true" aria-label={title} onMouseDown={(event) => event.stopPropagation()}>
         <div className="mobileActionSheetHandle" aria-hidden="true" />
         <h2>{title}</h2>

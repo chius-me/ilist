@@ -75,6 +75,7 @@ describe('ExplorerApp', () => {
     expect(screen.queryByText('listed size')).not.toBeInTheDocument();
     fireEvent.click(screen.getByRole('button', { name: /README.txt/ }));
     expect(new URL(location.href).searchParams.get('preview')).toBe('readme-file');
+    fireEvent.click(screen.getByRole('button', { name: 'Close preview' }));
     fireEvent.click(screen.getByRole('button', { name: /Docs/ }));
     await waitFor(() => expect(location.pathname).toBe('/Docs'));
   });

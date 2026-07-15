@@ -1,6 +1,7 @@
 import { X } from 'lucide-react';
 import { useEffect, useMemo, useRef, useState, type FormEvent } from 'react';
 import { useI18n } from '../../i18n/I18nProvider';
+import { useModalFocus } from '../../hooks/useModalFocus';
 import type { Mount, MountInput, S3MountConfig } from '../../types/mounts';
 
 interface Props {
@@ -23,6 +24,8 @@ function r2Account(endpoint: string): string {
 export function MountDialog({ mount, busy, error, onClose, onSubmit }: Props) {
   const { t } = useI18n();
   const nameInput = useRef<HTMLInputElement>(null);
+  const backdrop = useRef<HTMLDivElement>(null);
+  useModalFocus({ active: true, containerRef: backdrop, initialFocusRef: nameInput, onClose });
   const initialEndpoint = stringConfig(mount, 'endpoint');
   const [storageType, setStorageType] = useState<'s3' | 'onedrive'>(mount?.driverType === 'onedrive' ? 'onedrive' : 's3');
   const [name, setName] = useState(mount?.name ?? '');
@@ -39,19 +42,6 @@ export function MountDialog({ mount, busy, error, onClose, onSubmit }: Props) {
   const [enabled, setEnabled] = useState(mount?.enabled ?? true);
   const [isPublic, setIsPublic] = useState(mount?.isPublic ?? true);
   const derivedEndpoint = useMemo(() => provider === 'cloudflare-r2' && accountId ? `https://${accountId}.r2.cloudflarestorage.com` : endpoint, [accountId, endpoint, provider]);
-
-  useEffect(() => {
-    const previous = document.activeElement instanceof HTMLElement ? document.activeElement : null;
-    nameInput.current?.focus();
-    const closeOnEscape = (event: KeyboardEvent) => {
-      if (event.key === 'Escape') onClose();
-    };
-    document.addEventListener('keydown', closeOnEscape);
-    return () => {
-      document.removeEventListener('keydown', closeOnEscape);
-      previous?.focus();
-    };
-  }, [onClose]);
 
   function submit(event: FormEvent) {
     event.preventDefault();
@@ -70,7 +60,7 @@ export function MountDialog({ mount, busy, error, onClose, onSubmit }: Props) {
     });
   }
 
-  return <div className="dialogBackdrop overlayScrim" role="presentation" onMouseDown={onClose}>
+  return <div ref={backdrop} className="dialogBackdrop overlayScrim" role="presentation" onMouseDown={onClose}>
     <section className="mountDialog overlaySurface" role="dialog" aria-modal="true" aria-labelledby="mount-dialog-title" onMouseDown={(event) => event.stopPropagation()}>
       <header className="overlayHeader"><div><h2 id="mount-dialog-title">{mount ? t('mount.editStorage') : t('admin.addStorage')}</h2><p>{storageType === 'onedrive' ? t('mount.oneDriveMount') : t('mount.s3Mount')}</p></div><button className="iconButton" type="button" onClick={onClose} aria-label={t('common.close')} title={t('common.close')}><X aria-hidden="true" size={18} /></button></header>
       <form onSubmit={submit}>

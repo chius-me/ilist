@@ -2,6 +2,7 @@ import { AlertCircle, Download, LoaderCircle, X } from 'lucide-react';
 import { useEffect, useRef, useState } from 'react';
 import { fileUrl } from '../../api/entries';
 import { useFeedbackI18n } from '../../components/ToastRegion';
+import { useModalFocus } from '../../hooks/useModalFocus';
 import type { Entry } from '../../types/entries';
 import { previewKind } from './preview-kind';
 
@@ -115,23 +116,11 @@ function PreviewBody({ entry }: { entry: Entry }) {
 export function PreviewOverlay({ entry = null, loading = false, error = null, onClose }: PreviewOverlayProps) {
   const { t } = useFeedbackI18n();
   const closeButton = useRef<HTMLButtonElement>(null);
-  const previouslyFocused = useRef<HTMLElement | null>(null);
-
-  useEffect(() => {
-    previouslyFocused.current = document.activeElement instanceof HTMLElement ? document.activeElement : null;
-    closeButton.current?.focus();
-    const closeOnEscape = (event: KeyboardEvent) => {
-      if (event.key === 'Escape') onClose();
-    };
-    window.addEventListener('keydown', closeOnEscape);
-    return () => {
-      window.removeEventListener('keydown', closeOnEscape);
-      previouslyFocused.current?.focus();
-    };
-  }, [onClose]);
+  const backdrop = useRef<HTMLDivElement>(null);
+  useModalFocus({ active: true, containerRef: backdrop, initialFocusRef: closeButton, onClose });
 
   return (
-    <div className="previewBackdrop overlayScrim overlayScrimStrong">
+    <div ref={backdrop} className="previewBackdrop overlayScrim overlayScrimStrong">
       <section className="previewOverlay overlaySurface" role="dialog" aria-modal="true" aria-label={entry ? t('preview.title', { name: entry.name }) : t('preview.file')}>
         <header className="previewHeader overlayHeader">
           <h2 title={entry?.name}>{entry?.name || t('preview.file')}</h2>
