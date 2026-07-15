@@ -13,6 +13,10 @@ export function updateShare(id: string, input: UpdateShareInput): Promise<ShareV
   return jsonRequest(`/api/admin/shares/${encodeURIComponent(id)}`, { method: 'PATCH', body: JSON.stringify(input) });
 }
 
+export function rotateShareToken(id: string): Promise<CreatedShare> {
+  return jsonRequest(`/api/admin/shares/${encodeURIComponent(id)}/rotate`, { method: 'POST', body: '{}' });
+}
+
 export async function deleteShare(id: string): Promise<void> {
   const response = await fetch(`/api/admin/shares/${encodeURIComponent(id)}`, { method: 'DELETE', credentials: 'same-origin' });
   if (!response.ok) {

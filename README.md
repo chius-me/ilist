@@ -6,7 +6,7 @@
 
 Self-hosted file index and manager for Cloudflare Workers.
 
-[![Release](https://img.shields.io/badge/release-v0.1.7-2ea44f?logo=github)](https://github.com/chius-me/ilist/releases/tag/v0.1.7)
+[![Release](https://img.shields.io/badge/release-v0.1.9-2ea44f?logo=github)](https://github.com/chius-me/ilist/blob/main/docs/releases/v0.1.9.md)
 [![License](https://img.shields.io/badge/license-GPL--3.0--only-blue)](https://github.com/chius-me/ilist/blob/main/LICENSE)
 ![Cloudflare Workers](https://img.shields.io/badge/Cloudflare-Workers-f38020?logo=cloudflare&logoColor=white)
 ![TypeScript](https://img.shields.io/badge/TypeScript-5.8-3178c6?logo=typescript&logoColor=white)
@@ -14,7 +14,7 @@ Self-hosted file index and manager for Cloudflare Workers.
 
 </div>
 
-> [v0.1.7](https://github.com/chius-me/ilist/releases/tag/v0.1.7) hardens same-origin file delivery, share-root checks, password authentication, and mount publication defaults. Read the [release guide](docs/releases/v0.1.7.md) before upgrading.
+> [v0.1.9](docs/releases/v0.1.9.md) adds upload resume after reload, share download limits and token rotation, server-side folder search, same-mount copy, and sandboxed PDF preview. Read the [release guide](docs/releases/v0.1.9.md) before upgrading. v0.1.8 security hardening remains required; see [v0.1.8](docs/releases/v0.1.8.md).
 
 ## Features
 
@@ -156,12 +156,12 @@ Use a bucket-scoped R2 API token with only the permissions ilist requires.
 - Files smaller than `10 MiB` use the existing single-request upload path.
 - Files of exactly `10 MiB` or larger use resumable upload when the current OneDrive, Google Drive, or S3 mount advertises multipart support.
 - Parts are uploaded sequentially in `10 MiB` chunks. The queue runs at most two files concurrently.
-- Pause, resume, and retry preserve the opaque ilist upload session and server-confirmed parts while the page remains open. Reloading or leaving the page discards the in-memory queue; unfinished server sessions are later cleaned up, but automatic recovery after reload is not implemented.
+- Pause, resume, and retry preserve the opaque ilist upload session and server-confirmed parts while the page remains open. After a full page reload, unfinished multipart sessions reappear in the upload queue and require re-selecting the original local file before parts continue (browsers cannot silently re-read disk files).
 - Provider upload URLs, OneDrive session proofs, Google resumable session URLs, and S3 upload IDs remain encrypted or server-side and are never returned to the browser.
 - The built-in `R2` Worker binding remains compatible with existing deployments but does not implement resumable upload; use an S3-configured R2 mount for multipart uploads.
 - Configure an incomplete multipart upload lifecycle rule on S3-compatible buckets so abandoned provider uploads are removed if Worker cleanup cannot reach them.
 
-OneDrive resumable upload uses the same delegated `Files.ReadWrite` permission documented above. Google Drive uses the full Drive OAuth scope documented above. Apply all D1 migrations, including `0012_upload_sessions.sql`, `0013_upload_terminal_leases.sql`, `0014_shares.sql`, `0015_auth_rate_limits.sql`, `0016_mounts_private_default.sql`, and `0017_share_auth_revision.sql`, before deploying the current build.
+OneDrive resumable upload uses the same delegated `Files.ReadWrite` permission documented above. Google Drive uses the full Drive OAuth scope documented above. Apply all D1 migrations, including `0012_upload_sessions.sql`, `0013_upload_terminal_leases.sql`, `0014_shares.sql`, `0015_auth_rate_limits.sql`, `0016_mounts_private_default.sql`, `0017_share_auth_revision.sql`, and `0018_share_limits_and_counters.sql`, before deploying the current build.
 
 ## Controlled Shares
 
@@ -169,7 +169,7 @@ Administrators can create a share from any file or folder action menu and manage
 
 Google Docs, Sheets, and Slides expose explicit export formats in both the main explorer and controlled shares. PDF is used for preview when available; downloads remain subject to the share's current download policy.
 
-The raw `/s/:token` URL is returned only once when the share is created. D1 stores only its SHA-256 hash, so the management page cannot recover or copy an existing link. Public item IDs are share-scoped encrypted handles rather than mount or provider IDs. Password authorization uses a short-lived, `HttpOnly`, `SameSite=Lax` cookie scoped to that share path. Changing or removing the share password revokes every authorization cookie issued under the previous password policy.
+The raw `/s/:token` URL is returned only once when the share is created or rotated. D1 stores only its SHA-256 hash, so the management page cannot recover or copy an existing link. Administrators can rotate the token, which immediately invalidates the previous public URL while keeping share policy. Optional maximum download counts are enforced server-side. Public item IDs are share-scoped encrypted handles rather than mount or provider IDs. Password authorization uses a short-lived, `HttpOnly`, `SameSite=Lax` cookie scoped to that share path. Changing or removing the share password revokes every authorization cookie issued under the previous password policy.
 
 Every metadata, listing, preview, and file request rechecks the current password, enabled, expiration, target, and download policy. Share responses use `Cache-Control: private, no-store`; do not add a Cloudflare cache rule that overrides this policy. Disabling or deleting a share therefore takes effect on the next request.
 
@@ -243,13 +243,14 @@ Do not put `ADMIN_PASSWORD_HASH`, `CREDENTIAL_MASTER_KEY`, OAuth client secrets,
 - OneDrive Personal only; work and school tenants are not yet supported
 - Google support is limited to My Drive. Shared Drives, Shared with me, and shortcut traversal are not implemented.
 - No WebDAV, FTP, SFTP, SMB, or local filesystem drivers
-- Resumable recovery is page-session-only; reloading the page does not restore the upload queue
-- Built-in R2 binding uploads remain single-request and subject to Cloudflare request-body limits
-- No cross-mount copy or move
-- Shares do not support uploads, recipient accounts, access quotas, or access counters
+- Upload resume after reload requires re-binding the original local file; silent recovery without re-selection is not possible in browsers
+- Built-in R2 binding uploads remain single-request below `10 MiB` and reject larger single-request uploads with a stable error; use an S3-configured R2 mount for multipart uploads
+- No cross-mount copy or move (same-mount copy is supported)
+- Shares do not support uploads, recipient accounts, or email notifications
 - No offline download, archive extraction, media transcoding, or background task system
 - Provider listings are fetched live; distributed directory caching is not implemented
 - Built-in R2 recursive deletion is bounded and reports per-entry failures; S3-compatible and OneDrive folder deletion follow provider-specific behavior
+- Google Shared Drives, Shared with me, OneDrive work/school accounts, multi-user ACL, and WebDAV remain out of scope
 
 ## Legacy R2 Upgrade
 

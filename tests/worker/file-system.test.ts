@@ -63,7 +63,8 @@ describe('virtual mount file system', () => {
         mountPath: '/R2',
         driverType: 'native-r2',
         provider: 'cloudflare-r2',
-        capabilities: { open: true, preview: false, download: false, rename: false, move: false, delete: false },
+        capabilities: { open: true, preview: false, download: false, rename: false, move: false,
+    copy: false, delete: false },
       });
       expect(failingFactory).not.toHaveBeenCalled();
     } finally {

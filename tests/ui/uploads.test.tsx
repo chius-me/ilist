@@ -10,9 +10,9 @@ import {
   type ResumableUploadControl,
 } from '../../src/ui/api/uploads';
 import { ApiError } from '../../src/ui/api/client';
-import { uploadReducer } from '../../src/ui/features/uploads/upload-reducer';
+import { uploadReducer, type UploadTask } from '../../src/ui/features/uploads/upload-reducer';
 import { UploadPanel } from '../../src/ui/features/uploads/UploadPanel';
-import { useUploadQueue } from '../../src/ui/features/uploads/useUploadQueue';
+import { placeholderFile, useUploadQueue } from '../../src/ui/features/uploads/useUploadQueue';
 
 const PART_SIZE = 10 * 1024 * 1024;
 
@@ -483,6 +483,46 @@ describe('upload queue', () => {
     for (const status of ['queued', 'creating', 'uploading', 'paused', 'failed'] as const) {
       expect(uploadReducer([{ ...base, status }], { type: 'cancelled', id: base.id })[0].status).toBe('cancelled');
     }
+  });
+
+  it('exposes session size on restored placeholders and rejects wrong-size rebind files', () => {
+    const expectedSize = 25 * 1024 * 1024;
+    const placeholder = placeholderFile('archive.bin', expectedSize);
+    expect(placeholder.name).toBe('archive.bin');
+    expect(placeholder.size).toBe(expectedSize);
+
+    const task: UploadTask = {
+      id: 'restore-1',
+      parentId: 'folder',
+      file: placeholder,
+      transport: 'multipart',
+      status: 'failed',
+      uploadedBytes: PART_SIZE,
+      progress: 40,
+      sessionId: 'session-restore',
+      needsRebind: true,
+      fileName: 'archive.bin',
+      expectedSize,
+      error: 'rebind',
+    };
+
+    const wrongSize = new File([new Uint8Array(10)], 'archive.bin');
+    expect(uploadReducer([task], { type: 'rebind', id: task.id, file: wrongSize })[0]).toMatchObject({
+      needsRebind: true,
+      sessionId: 'session-restore',
+    });
+
+    const matching = new File([new Uint8Array(0)], 'archive.bin');
+    Object.defineProperty(matching, 'size', { value: expectedSize, configurable: true });
+    const rebound = uploadReducer([task], { type: 'rebind', id: task.id, file: matching })[0];
+    expect(rebound).toMatchObject({
+      needsRebind: false,
+      status: 'queued',
+      sessionId: 'session-restore',
+      expectedSize,
+      error: undefined,
+    });
+    expect(rebound.file.size).toBe(expectedSize);
   });
 
   it('releases a paused multipart task slot and resumes it once', async () => {

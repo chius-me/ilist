@@ -17,8 +17,8 @@ import {
 import { resolveShareCreationTarget } from './share-targets';
 import type { Env, Share } from './types';
 
-const CREATE_KEYS = new Set(['entryId', 'password', 'expiresAt', 'allowDownload', 'enabled']);
-const UPDATE_KEYS = new Set(['password', 'clearPassword', 'expiresAt', 'allowDownload', 'enabled']);
+const CREATE_KEYS = new Set(['entryId', 'password', 'expiresAt', 'allowDownload', 'enabled', 'maxDownloads']);
+const UPDATE_KEYS = new Set(['password', 'clearPassword', 'expiresAt', 'allowDownload', 'enabled', 'maxDownloads']);
 
 function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === 'object' && value !== null && !Array.isArray(value);
@@ -51,6 +51,14 @@ function expiration(value: unknown, now = Math.floor(Date.now() / 1000)): number
   return seconds;
 }
 
+function maxDownloads(value: unknown): number | null {
+  if (value === undefined || value === null) return null;
+  if (typeof value !== 'number' || !Number.isSafeInteger(value) || value < 1) {
+    invalid('Share max downloads must be a positive integer or null');
+  }
+  return value;
+}
+
 function publicOrigin(env: Env): string {
   let url: URL;
   try {
@@ -77,6 +85,9 @@ async function toAdminView(env: Env, share: Share) {
     expiresAt: share.expiresAt === null ? null : new Date(share.expiresAt * 1000).toISOString(),
     allowDownload: share.allowDownload,
     enabled: share.enabled,
+    downloadCount: share.downloadCount,
+    maxDownloads: share.maxDownloads,
+    accessCount: share.accessCount,
     createdAt: share.createdAt,
     updatedAt: share.updatedAt,
   };
@@ -103,6 +114,7 @@ async function createShare(request: Request, env: Env): Promise<Response> {
     expiresAt: expiration(body.expiresAt),
     allowDownload: body.allowDownload,
     enabled: body.enabled !== false,
+    maxDownloads: maxDownloads(body.maxDownloads),
   });
   return ok({
     share: await toAdminView(env, share),
@@ -128,9 +140,22 @@ async function updateShare(request: Request, env: Env, id: string): Promise<Resp
   if (Object.prototype.hasOwnProperty.call(body, 'expiresAt')) patch.expiresAt = expiration(body.expiresAt);
   if (typeof body.allowDownload === 'boolean') patch.allowDownload = body.allowDownload;
   if (typeof body.enabled === 'boolean') patch.enabled = body.enabled;
+  if (Object.prototype.hasOwnProperty.call(body, 'maxDownloads')) patch.maxDownloads = maxDownloads(body.maxDownloads);
   const updated = await updateShareRecord(env.DB, id, patch);
   if (!updated) throw new HttpError(404, 'SHARE_NOT_FOUND', 'Share was not found');
   return ok(await toAdminView(env, updated));
+}
+
+async function rotateShareToken(env: Env, id: string): Promise<Response> {
+  const current = await getShareById(env.DB, id);
+  if (!current) throw new HttpError(404, 'SHARE_NOT_FOUND', 'Share was not found');
+  const generated = createShareToken();
+  const updated = await updateShareRecord(env.DB, id, { tokenHash: await generated.tokenHash });
+  if (!updated) throw new HttpError(404, 'SHARE_NOT_FOUND', 'Share was not found');
+  return ok({
+    share: await toAdminView(env, updated),
+    url: `${publicOrigin(env)}/s/${generated.token}`,
+  });
 }
 
 export async function handleShareAdminRoutes(request: Request, env: Env, url: URL): Promise<Response | null> {
@@ -138,6 +163,18 @@ export async function handleShareAdminRoutes(request: Request, env: Env, url: UR
     if (request.method === 'GET') return ok(await Promise.all((await listShares(env.DB)).map((share) => toAdminView(env, share))));
     if (request.method === 'POST') return createShare(request, env);
     return new Response(null, { status: 405 });
+  }
+
+  const rotateMatch = /^\/api\/admin\/shares\/([^/]+)\/rotate$/.exec(url.pathname);
+  if (rotateMatch) {
+    let id: string;
+    try {
+      id = decodeURIComponent(rotateMatch[1]);
+    } catch {
+      throw new HttpError(404, 'SHARE_NOT_FOUND', 'Share was not found');
+    }
+    if (request.method !== 'POST') return new Response(null, { status: 405 });
+    return rotateShareToken(env, id);
   }
 
   const match = /^\/api\/admin\/shares\/([^/]+)$/.exec(url.pathname);

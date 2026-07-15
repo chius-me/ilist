@@ -19,7 +19,13 @@ import {
   hasShareAuthorization,
   shareAuthorizationCookie,
 } from './share-auth';
-import { getShareByTokenHash, upgradeSharePasswordHash } from './share-store';
+import { canDownloadFromShare, isShareDownloadLimitReached } from './share-policy';
+import {
+  getShareByTokenHash,
+  incrementShareAccessCount,
+  tryConsumeShareDownload,
+  upgradeSharePasswordHash,
+} from './share-store';
 import { downloadSharedFile, listSharedFolder, resolveSharedItem } from './share-targets';
 import type { Env, Share } from './types';
 
@@ -176,11 +182,14 @@ export async function handleSharePublicRoutes(
   try {
     if (suffix === '/api') {
       if (request.method !== 'GET') return methodNotAllowed();
+      await incrementShareAccessCount(env.DB, share.id);
       const root = await resolveSharedItem(env, share, null);
       return privateNoStore(ok({
         name: share.name,
         targetKind: share.targetKind,
-        allowDownload: share.allowDownload,
+        allowDownload: canDownloadFromShare(share),
+        maxDownloads: share.maxDownloads,
+        downloadCount: share.downloadCount,
         protected: share.passwordHash !== null,
         expiresAt: share.expiresAt === null ? null : new Date(share.expiresAt * 1000).toISOString(),
         entry: root.entry,
@@ -189,6 +198,7 @@ export async function handleSharePublicRoutes(
 
     if (suffix === '/api/list') {
       if (request.method !== 'GET') return methodNotAllowed();
+      await incrementShareAccessCount(env.DB, share.id);
       const parent = url.searchParams.get('parent');
       return privateNoStore(ok(await listSharedFolder(env, share, parent || null)));
     }
@@ -196,6 +206,7 @@ export async function handleSharePublicRoutes(
     const entryMatch = /^\/api\/entries\/([^/]+)$/.exec(suffix);
     if (entryMatch) {
       if (request.method !== 'GET') return methodNotAllowed();
+      await incrementShareAccessCount(env.DB, share.id);
       return privateNoStore(ok((await resolveSharedItem(env, share, decodePathValue(entryMatch[1]))).entry));
     }
 
@@ -203,8 +214,18 @@ export async function handleSharePublicRoutes(
     if (fileMatch) {
       if (request.method !== 'GET' && request.method !== 'HEAD') return methodNotAllowed();
       const download = url.searchParams.get('download') === '1';
-      if (download && !share.allowDownload) {
-        throw new HttpError(403, 'SHARE_DOWNLOAD_DISABLED', 'Downloads are disabled for this share');
+      if (download) {
+        if (!share.allowDownload) {
+          throw new HttpError(403, 'SHARE_DOWNLOAD_DISABLED', 'Downloads are disabled for this share');
+        }
+        if (isShareDownloadLimitReached(share)) {
+          throw new HttpError(403, 'SHARE_DOWNLOAD_LIMIT', 'Share download limit has been reached');
+        }
+        if (request.method === 'GET' && !await tryConsumeShareDownload(env.DB, share.id)) {
+          throw new HttpError(403, 'SHARE_DOWNLOAD_LIMIT', 'Share download limit has been reached');
+        }
+      } else if (!share.allowDownload && isShareDownloadLimitReached(share)) {
+        // Previews remain available unless downloads were never allowed; limits only block downloads.
       }
       return privateNoStore(await downloadSharedFile(
         env,

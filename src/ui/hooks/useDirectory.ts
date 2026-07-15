@@ -9,7 +9,7 @@ interface DirectoryState {
   error: Error | null;
 }
 
-export function useDirectory(path: string, sessionStatus: SessionStatus) {
+export function useDirectory(path: string, sessionStatus: SessionStatus, nameFilter = '') {
   const [refreshVersion, setRefreshVersion] = useState(0);
   const manualRefresh = useRef(false);
   const [state, setState] = useState<DirectoryState>({ data: null, loading: sessionStatus === 'checking', error: null });
@@ -22,7 +22,7 @@ export function useDirectory(path: string, sessionStatus: SessionStatus) {
     manualRefresh.current = false;
     setState((current) => ({ data: keepData ? current.data : null, loading: true, error: null }));
 
-    void listDirectory(path, controller.signal)
+    void listDirectory(path, controller.signal, nameFilter)
       .then((data) => {
         if (!controller.signal.aborted) setState({ data, loading: false, error: null });
       })
@@ -36,7 +36,7 @@ export function useDirectory(path: string, sessionStatus: SessionStatus) {
       });
 
     return () => controller.abort();
-  }, [path, refreshVersion, sessionStatus]);
+  }, [nameFilter, path, refreshVersion, sessionStatus]);
 
   const refresh = useCallback(() => {
     manualRefresh.current = true;

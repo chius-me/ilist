@@ -12,6 +12,11 @@ export interface UploadTask {
   partNumber?: number;
   partCount?: number;
   uploadedParts?: number[];
+  /** True when a server session exists but the local File must be re-selected. */
+  needsRebind?: boolean;
+  fileName?: string;
+  /** Expected total size from the server session (used when rebinding after reload). */
+  expectedSize?: number;
   error?: string;
 }
 
@@ -30,7 +35,8 @@ export type UploadAction =
   | { type: 'retry'; id: string }
   | { type: 'released'; id: string }
   | { type: 'remove'; id: string }
-  | { type: 'clearCompleted' };
+  | { type: 'clearCompleted' }
+  | { type: 'rebind'; id: string; file: File };
 
 function percent(uploadedBytes: number, totalBytes: number): number {
   return totalBytes ? Math.round((Math.min(uploadedBytes, totalBytes) / totalBytes) * 100) : 100;
@@ -78,8 +84,22 @@ export function uploadReducer(tasks: UploadTask[], action: UploadAction): Upload
     if (action.type === 'failed') return { ...task, status: 'failed', error: action.error };
     if (action.type === 'cancelled') return { ...task, status: 'cancelled', error: undefined };
     if (action.type === 'retry') {
+      if (task.needsRebind) return task;
       if (task.transport === 'multipart' && task.sessionId) return { ...task, status: 'queued', error: undefined };
       return { ...task, status: 'queued', uploadedBytes: 0, progress: 0, error: undefined };
+    }
+    if (action.type === 'rebind') {
+      if (task.fileName && action.file.name !== task.fileName) return task;
+      const expectedSize = task.expectedSize ?? task.file.size;
+      if (expectedSize > 0 && action.file.size !== expectedSize) return task;
+      return {
+        ...task,
+        file: action.file,
+        expectedSize: action.file.size,
+        needsRebind: false,
+        status: 'queued',
+        error: undefined,
+      };
     }
     if (action.type === 'released') return task;
     return task;

@@ -8,13 +8,15 @@ const entry = (id: string, name: string, kind: 'file' | 'folder') => ({
   contentType: kind === 'file' ? 'application/pdf' : null,
   updatedAt: '2026-07-10T00:00:00Z', isPublic: true, effectivePublic: true,
   sortOrder: 0, description: '', mountPath: null,
-  capabilities: { open: kind === 'folder', preview: kind === 'file', download: kind === 'file', upload: kind === 'folder', createFolder: kind === 'folder', rename: true, move: true, delete: true, changeVisibility: true },
+  capabilities: { open: kind === 'folder', preview: kind === 'file', download: kind === 'file', upload: kind === 'folder', createFolder: kind === 'folder', rename: true, move: true,
+    copy: false, delete: true, changeVisibility: true },
 });
 
 const root = {
   ok: true,
   data: {
-    current: { ...entry('root', '', 'folder'), parentId: null, capabilities: { open: true, preview: false, download: false, upload: true, createFolder: true, rename: false, move: false, delete: false, changeVisibility: false } },
+    current: { ...entry('root', '', 'folder'), parentId: null, capabilities: { open: true, preview: false, download: false, upload: true, createFolder: true, rename: false, move: false,
+    copy: false, delete: false, changeVisibility: false } },
     breadcrumbs: [{ id: 'root', name: 'ilist', path: '/' }],
     items: [entry('report', 'report.pdf', 'file'), entry('archive', 'Archive', 'folder')],
   },
@@ -95,6 +97,7 @@ describe('explorer operations', () => {
             download: false,
             rename: false,
             move: false,
+    copy: false,
             delete: false,
             changeVisibility: false,
             upload: false,
@@ -111,6 +114,7 @@ describe('explorer operations', () => {
             download: false,
             rename: false,
             move: false,
+    copy: false,
             delete: false,
             changeVisibility: false,
             upload: false,
@@ -184,6 +188,7 @@ describe('explorer operations', () => {
       download: false,
       rename: false,
       move: false,
+      copy: false,
       delete: false,
       changeVisibility: false,
       upload: false,

@@ -4,6 +4,7 @@ import {
   completeResumableUpload,
   createResumableUpload,
   getResumableUpload,
+  listResumableUploads,
   uploadResumablePart,
   type CreateUploadSessionBody,
 } from './upload-service';
@@ -30,6 +31,7 @@ export async function handleUploadRoutes(
   ownerSessionId: string,
 ): Promise<Response | null> {
   if (url.pathname === SESSION_PATH) {
+    if (request.method === 'GET') return ok(await listResumableUploads(env, ownerSessionId));
     if (request.method !== 'POST') return methodNotAllowed();
     const body = await readJson<unknown>(request);
     return ok(await createResumableUpload(env, ownerSessionId, body as CreateUploadSessionBody));

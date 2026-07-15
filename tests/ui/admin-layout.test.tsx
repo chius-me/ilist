@@ -18,7 +18,8 @@ describe('administration layout', () => {
       if (url.includes('/api/admin/me')) return Response.json(admin);
       if (url.endsWith('/api/admin/mounts')) return Response.json({ ok: true, data: [savedMount] });
       if (url.includes('/api/admin/logout')) return Response.json({ ok: true, data: {} });
-      if (url.includes('/api/fs/list')) return Response.json({ ok: true, data: { current: { id: 'root', parentId: null, name: '', kind: 'folder', size: 0, contentType: null, updatedAt: '', isPublic: true, effectivePublic: true, sortOrder: 0, description: '', mountPath: null, capabilities: { open: true, preview: false, download: false, rename: false, move: false, delete: false, changeVisibility: false, upload: false, createFolder: false } }, breadcrumbs: [], items: [] } });
+      if (url.includes('/api/fs/list')) return Response.json({ ok: true, data: { current: { id: 'root', parentId: null, name: '', kind: 'folder', size: 0, contentType: null, updatedAt: '', isPublic: true, effectivePublic: true, sortOrder: 0, description: '', mountPath: null, capabilities: { open: true, preview: false, download: false, rename: false, move: false,
+    copy: false, delete: false, changeVisibility: false, upload: false, createFolder: false } }, breadcrumbs: [], items: [] } });
       throw new Error(`Unexpected fetch: ${url}`);
     }));
   });

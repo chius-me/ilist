@@ -1,6 +1,6 @@
 import type { Entry } from '../../types/entries';
 
-export type PreviewKind = 'image' | 'video' | 'audio' | 'text' | 'fallback';
+export type PreviewKind = 'image' | 'video' | 'audio' | 'text' | 'pdf' | 'fallback';
 
 const imageContentTypes = new Set(['image/jpeg', 'image/png', 'image/gif', 'image/webp', 'image/avif']);
 const videoContentTypes = new Set(['video/mp4', 'video/webm']);
@@ -15,11 +15,12 @@ export function previewKind(entry: Pick<Entry, 'name' | 'contentType'>): Preview
   if (imageContentTypes.has(contentType)) return 'image';
   if (videoContentTypes.has(contentType)) return 'video';
   if (audioContentTypes.has(contentType)) return 'audio';
-  if (contentType === 'application/pdf') return 'fallback';
+  if (contentType === 'application/pdf') return 'pdf';
   if (contentType.startsWith('text/') || contentType === 'application/json' || contentType === 'application/xml') return 'text';
 
   const extension = entry.name.split('.').pop()?.toLocaleLowerCase();
-  if (extension === 'pdf' || extension === 'svg') return 'fallback';
+  if (extension === 'pdf') return 'pdf';
+  if (extension === 'svg') return 'fallback';
   if (textExtensions.has(extension ?? '')) return 'text';
   return 'fallback';
 }

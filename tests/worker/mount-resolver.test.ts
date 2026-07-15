@@ -87,6 +87,9 @@ describe('createDriver', () => {
       move: async () => {
         throw new Error('not used');
       },
+      copy: async () => {
+        throw new Error('not used');
+      },
       remove: async () => {
         throw new Error('not used');
       },

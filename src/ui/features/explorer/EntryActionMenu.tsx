@@ -1,4 +1,4 @@
-import { Copy, Download, Eye, EyeOff, FolderInput, Info, Pencil, Share2, Trash2 } from 'lucide-react';
+import { Copy, CopyPlus, Download, Eye, EyeOff, FolderInput, Info, Pencil, Share2, Trash2 } from 'lucide-react';
 import type { ComponentType } from 'react';
 import { useEffect, useLayoutEffect, useRef, useState } from 'react';
 import { fileUrl } from '../../api/entries';
@@ -6,7 +6,7 @@ import { useI18n } from '../../i18n/I18nProvider';
 import type { MessageKey } from '../../i18n/messages';
 import type { Entry } from '../../types/entries';
 
-export type EntryActionId = 'rename' | 'move' | 'properties' | 'delete' | 'publish' | 'hide' | 'share';
+export type EntryActionId = 'rename' | 'move' | 'copyTo' | 'properties' | 'delete' | 'publish' | 'hide' | 'share';
 
 export type EntryAction = {
   id: string;
@@ -54,6 +54,7 @@ export function entryActions(entry: Entry, handlers: {
   if (handlers.canShare) actions.push({ id: 'share', labelKey: 'action.share', icon: Share2, onSelect: () => handlers.onAction('share', entry) });
   if (entry.capabilities.rename) actions.push({ id: 'rename', labelKey: 'action.rename', icon: Pencil, onSelect: () => handlers.onAction('rename', entry) });
   if (entry.capabilities.move) actions.push({ id: 'move', labelKey: 'action.move', icon: FolderInput, onSelect: () => handlers.onAction('move', entry) });
+  if (entry.capabilities.copy) actions.push({ id: 'copyTo', labelKey: 'action.copyTo', icon: CopyPlus, onSelect: () => handlers.onAction('copyTo', entry) });
   if (entry.capabilities.rename) actions.push({ id: 'properties', labelKey: 'action.properties', icon: Info, onSelect: () => handlers.onAction('properties', entry) });
   if (entry.capabilities.changeVisibility) actions.push({ id: entry.isPublic ? 'hide' : 'publish', labelKey: entry.isPublic ? 'action.hide' : 'action.publish', icon: entry.isPublic ? EyeOff : Eye, onSelect: () => handlers.onAction(entry.isPublic ? 'hide' : 'publish', entry) });
   if (entry.capabilities.delete) actions.push({ id: 'delete', labelKey: 'action.delete', icon: Trash2, destructive: true, onSelect: () => handlers.onAction('delete', entry) });

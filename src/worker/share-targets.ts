@@ -58,6 +58,7 @@ function sharedCapabilities(item: StorageItem, allowDownload: boolean): EntryCap
     createFolder: false,
     rename: false,
     move: false,
+    copy: false,
     delete: false,
     changeVisibility: false,
   };
@@ -211,9 +212,11 @@ export async function downloadSharedFile(
 ): Promise<Response> {
   const resolved = await resolveSharedItem(env, share, handle, registry);
   if (resolved.item.kind !== 'file') throw new HttpError(400, 'NOT_A_FILE', 'Shared item is not a file');
+  const sandboxedPreview = new URL(request.url).searchParams.get('preview') === '1';
   if (resolved.nativeRow) {
     return streamEntryObject(env.R2_BUCKET, resolved.nativeRow, request, {
       download,
+      sandboxedPreview,
       publicFile: false,
     });
   }
@@ -226,6 +229,7 @@ export async function downloadSharedFile(
     filename: exportOption ? `${resolved.item.name}.${exportOption.extension}` : resolved.item.name,
     contentType: exportOption?.contentType ?? resolved.item.contentType,
     download,
+    sandboxedPreview,
     publicFile: false,
     method: request.method,
   };

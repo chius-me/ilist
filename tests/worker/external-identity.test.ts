@@ -62,6 +62,7 @@ describe('external entry identity', () => {
       upload: vi.fn(),
       rename: vi.fn(),
       move: vi.fn(),
+      copy: vi.fn(async () => { throw new Error('not implemented'); }),
       remove: vi.fn(),
     };
 

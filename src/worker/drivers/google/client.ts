@@ -315,6 +315,16 @@ export class GoogleDriveClient {
     return this.updateMetadata(itemId, { name });
   }
 
+  copy(itemId: string, destinationParentId: string, name: string): Promise<GoogleFile> {
+    const url = new URL(`${DRIVE_BASE}/files/${encodeURIComponent(itemId)}/copy`);
+    url.searchParams.set('fields', FILE_FIELDS);
+    return this.requestJson<GoogleFile>(url.toString(), {
+      method: 'POST',
+      headers: { 'content-type': 'application/json; charset=UTF-8' },
+      body: JSON.stringify({ name, parents: [destinationParentId] }),
+    });
+  }
+
   async move(itemId: string, destinationId: string): Promise<GoogleFile> {
     const current = await this.stat(itemId);
     const url = this.fileUrl(itemId);

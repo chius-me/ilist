@@ -70,6 +70,9 @@ export interface ShareRow {
   expires_at: number | null;
   allow_download: number;
   enabled: number;
+  download_count: number;
+  max_downloads: number | null;
+  access_count: number;
   created_at: string;
   updated_at: string;
 }
@@ -86,6 +89,9 @@ export interface Share {
   expiresAt: number | null;
   allowDownload: boolean;
   enabled: boolean;
+  downloadCount: number;
+  maxDownloads: number | null;
+  accessCount: number;
   createdAt: string;
   updatedAt: string;
 }
@@ -137,6 +143,7 @@ export interface EntryCapabilities {
   createFolder: boolean;
   rename: boolean;
   move: boolean;
+  copy: boolean;
   delete: boolean;
   changeVisibility: boolean;
 }

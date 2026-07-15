@@ -1,5 +1,6 @@
 import { createDriver } from './drivers/registry';
 import { requireResumableUploadAdapter, type StorageDriver, type StorageItem } from './drivers/types';
+import { matchesNameFilter } from './entries';
 import { encodeExternalId, decodeExternalId, type ExternalIdentity } from './external-identity';
 import { HttpError } from './http';
 import { getMount } from './mounts';
@@ -19,6 +20,7 @@ function capabilities(driver: StorageDriver, item: StorageItem, admin: boolean) 
     createFolder: admin && folder && driver.capabilities.has('createFolder'),
     rename: admin && item.id !== driver.rootId && driver.capabilities.has('rename'),
     move: admin && item.id !== driver.rootId && driver.capabilities.has('move'),
+    copy: admin && item.id !== driver.rootId && driver.capabilities.has('copy'),
     delete: admin && item.id !== driver.rootId && driver.capabilities.has('delete'),
     changeVisibility: false,
   };
@@ -67,6 +69,7 @@ export async function listExternalDirectory(
   mount: Mount,
   relativePath: string,
   admin: boolean,
+  nameFilter: string | null = null,
 ): Promise<VirtualDirectoryResponse> {
   const driver = await createDriver(env, mount);
   const segments = relativePath === '/' ? [] : relativePath.slice(1).split('/');
@@ -94,7 +97,9 @@ export async function listExternalDirectory(
   return {
     current: externalEntry(current, mount, driver, admin),
     breadcrumbs,
-    items: (await listAll(driver, current.id)).map((entry) => externalEntry(entry, mount, driver, admin)),
+    items: (await listAll(driver, current.id))
+      .filter((entry) => matchesNameFilter(entry.name, nameFilter))
+      .map((entry) => externalEntry(entry, mount, driver, admin)),
   };
 }
 

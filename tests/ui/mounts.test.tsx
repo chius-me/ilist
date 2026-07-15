@@ -6,7 +6,8 @@ import { AppProviders } from '../../src/ui/app/AppProviders';
 import { MountManager } from '../../src/ui/features/mounts/MountManager';
 
 const admin = { ok: true, data: { username: 'admin' } };
-const emptyRoot = { ok: true, data: { current: { id: 'virtual-root', parentId: null, name: '', kind: 'folder', size: 0, contentType: null, updatedAt: '', isPublic: true, effectivePublic: true, sortOrder: 0, description: '', mountPath: null, capabilities: { open: true, preview: false, download: false, upload: false, createFolder: false, rename: false, move: false, delete: false, changeVisibility: false } }, breadcrumbs: [], items: [] } };
+const emptyRoot = { ok: true, data: { current: { id: 'virtual-root', parentId: null, name: '', kind: 'folder', size: 0, contentType: null, updatedAt: '', isPublic: true, effectivePublic: true, sortOrder: 0, description: '', mountPath: null, capabilities: { open: true, preview: false, download: false, upload: false, createFolder: false, rename: false, move: false,
+    copy: false, delete: false, changeVisibility: false } }, breadcrumbs: [], items: [] } };
 const savedMount = {
   id: 'mount-1', name: 'Archive', mountPath: '/archive', driverType: 's3', provider: 'cloudflare-r2',
   enabled: true, isPublic: true, sortOrder: 0, rootItemId: null,

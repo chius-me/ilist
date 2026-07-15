@@ -12,12 +12,16 @@ const entry: Entry = {
   id: 'private-file', parentId: 'root', name: 'private.txt', kind: 'file', size: 12,
   contentType: 'text/plain', updatedAt: '2026-07-18T00:00:00.000Z', isPublic: false,
   effectivePublic: false, sortOrder: 0, description: '', mountPath: null,
-  capabilities: { open: false, preview: true, download: true, upload: false, createFolder: false, rename: true, move: true, delete: true, changeVisibility: true },
+  capabilities: { open: false, preview: true, download: true, upload: false, createFolder: false, rename: true, move: true,
+    copy: false, delete: true, changeVisibility: true },
 };
 
 const share: ShareView = {
   id: 'share-1', mountId: 'native-r2', mountName: 'R2', name: 'private.txt', targetKind: 'file',
   protected: false, expiresAt: null, allowDownload: true, enabled: true,
+  downloadCount: 0,
+  maxDownloads: null,
+  accessCount: 0,
   createdAt: '2026-07-18T00:00:00.000Z', updatedAt: '2026-07-18T00:00:00.000Z',
 };
 

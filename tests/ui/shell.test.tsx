@@ -37,6 +37,7 @@ beforeEach(() => {
               createFolder: false,
               rename: false,
               move: false,
+    copy: false,
               delete: false,
               changeVisibility: false,
             },

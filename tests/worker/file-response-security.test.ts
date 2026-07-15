@@ -1,5 +1,9 @@
 import { describe, expect, it } from 'vitest';
-import { secureFileResponse } from '../../src/worker/file-response-security';
+import {
+  assertTextPreviewSizeAllowed,
+  secureFileResponse,
+  TEXT_PREVIEW_MAX_BYTES,
+} from '../../src/worker/file-response-security';
 import { withApplicationSecurityHeaders } from '../../src/worker/response-security';
 
 const FILE_CSP = "sandbox; default-src 'none'; frame-ancestors 'none'";
@@ -38,6 +42,76 @@ describe('secureFileResponse', () => {
     expect(response.headers.get('referrer-policy')).toBe('no-referrer');
     expect(response.headers.get('cross-origin-resource-policy')).toBe('same-origin');
     expect(response.headers.get('cache-control')).toBe('public, max-age=3600');
+  });
+
+  it('allows PDF only through the sandboxed preview path with embeddable CSP', () => {
+    const attachment = secureFileResponse(new Response('%PDF'), {
+      filename: 'doc.pdf',
+      contentType: 'application/pdf',
+      download: false,
+      publicFile: false,
+      method: 'GET',
+    });
+    expect(attachment.headers.get('content-type')).toBe('application/octet-stream');
+    expect(attachment.headers.get('content-disposition')).toMatch(/^attachment;/);
+    expect(attachment.headers.get('content-security-policy')).toBe(FILE_CSP);
+    expect(attachment.headers.get('x-frame-options')).toBeNull();
+
+    const preview = secureFileResponse(new Response('%PDF'), {
+      filename: 'doc.pdf',
+      contentType: 'application/pdf',
+      download: false,
+      sandboxedPreview: true,
+      publicFile: false,
+      method: 'GET',
+    });
+    expect(preview.headers.get('content-type')).toBe('application/pdf');
+    expect(preview.headers.get('content-disposition')).toMatch(/^inline;/);
+    expect(preview.headers.get('content-security-policy')).toBe(
+      "sandbox; default-src 'none'; frame-ancestors 'self'",
+    );
+    expect(preview.headers.get('x-frame-options')).toBe('SAMEORIGIN');
+  });
+
+  it('fails closed when text preview content-length exceeds the bound', () => {
+    expect(() => assertTextPreviewSizeAllowed(String(TEXT_PREVIEW_MAX_BYTES))).not.toThrow();
+    expect(() => assertTextPreviewSizeAllowed(String(TEXT_PREVIEW_MAX_BYTES + 1))).toThrow('TEXT_PREVIEW_TOO_LARGE');
+    expect(() => assertTextPreviewSizeAllowed('not-a-number')).toThrow('TEXT_PREVIEW_TOO_LARGE');
+  });
+
+  it('rejects oversized text responses on the secure file path for non-download previews', () => {
+    expect(() => secureFileResponse(new Response('x'.repeat(10), {
+      headers: { 'content-length': String(TEXT_PREVIEW_MAX_BYTES + 1) },
+    }), {
+      filename: 'notes.txt',
+      contentType: 'text/plain',
+      download: false,
+      publicFile: false,
+      method: 'GET',
+    })).toThrow(/TEXT_PREVIEW_TOO_LARGE|too large/i);
+
+    const allowed = secureFileResponse(new Response('ok', {
+      headers: { 'content-length': '2' },
+    }), {
+      filename: 'notes.txt',
+      contentType: 'text/plain',
+      download: false,
+      publicFile: false,
+      method: 'GET',
+    });
+    expect(allowed.headers.get('content-type')).toBe('application/octet-stream');
+    expect(allowed.headers.get('content-disposition')).toMatch(/^attachment;/);
+
+    const downloadLarge = secureFileResponse(new Response('x'.repeat(10), {
+      headers: { 'content-length': String(TEXT_PREVIEW_MAX_BYTES + 1) },
+    }), {
+      filename: 'notes.txt',
+      contentType: 'text/plain',
+      download: true,
+      publicFile: false,
+      method: 'GET',
+    });
+    expect(downloadLarge.headers.get('content-disposition')).toMatch(/^attachment;/);
   });
 
   it('forces explicit downloads and filters untrusted provider headers', () => {

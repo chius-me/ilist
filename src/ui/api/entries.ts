@@ -1,8 +1,10 @@
 import { jsonRequest, unwrap } from './client';
 import type { BatchResult, DirectoryResponse, Entry, EntryPatch } from '../types/entries';
 
-export async function listDirectory(path: string, signal?: AbortSignal): Promise<DirectoryResponse> {
+export async function listDirectory(path: string, signal?: AbortSignal, nameFilter?: string): Promise<DirectoryResponse> {
   const query = new URLSearchParams({ path });
+  const needle = nameFilter?.trim();
+  if (needle) query.set('q', needle);
   return unwrap<DirectoryResponse>(await fetch(`/api/fs/list?${query}`, { signal, credentials: 'same-origin' }));
 }
 
@@ -22,6 +24,10 @@ export function moveEntries(ids: string[], destinationId: string): Promise<Batch
   return jsonRequest('/api/admin/entries/move', { method: 'POST', body: JSON.stringify({ ids, destinationId }) });
 }
 
+export function copyEntries(ids: string[], destinationId: string): Promise<BatchResult> {
+  return jsonRequest('/api/admin/entries/copy', { method: 'POST', body: JSON.stringify({ ids, destinationId }) });
+}
+
 export function deleteEntries(ids: string[]): Promise<BatchResult> {
   return jsonRequest('/api/admin/entries/delete', { method: 'POST', body: JSON.stringify({ ids }) });
 }
@@ -30,11 +36,17 @@ export function setVisibility(ids: string[], isPublic: boolean): Promise<BatchRe
   return jsonRequest('/api/admin/entries/visibility', { method: 'POST', body: JSON.stringify({ ids, isPublic }) });
 }
 
-export function fileUrl(entry: Pick<Entry, 'id' | 'name'>, download = false, exportFormat?: string): string {
+export function fileUrl(
+  entry: Pick<Entry, 'id' | 'name'>,
+  download = false,
+  exportFormat?: string,
+  options?: { sandboxedPreview?: boolean },
+): string {
   const url = `/file/${encodeURIComponent(entry.id)}/${encodeURIComponent(entry.name)}`;
   const query = new URLSearchParams();
   if (download) query.set('download', '1');
   if (exportFormat) query.set('export', exportFormat);
+  if (options?.sandboxedPreview) query.set('preview', '1');
   const suffix = query.toString();
   return suffix ? `${url}?${suffix}` : url;
 }

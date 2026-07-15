@@ -13,6 +13,7 @@ import {
   getEntryById,
   insertEntryUnderReadyParent,
   listAncestorRows,
+  listChildRows,
   listDescendantRows,
   listStorageRecoveryOperations,
   moveReadyEntry,
@@ -55,6 +56,7 @@ const READ_ONLY_FOLDER_CAPABILITIES: EntryCapabilities = {
   createFolder: false,
   rename: false,
   move: false,
+  copy: false,
   delete: false,
   changeVisibility: false,
 };
@@ -128,6 +130,7 @@ export async function listVirtualDirectory(
   env: Env,
   pathname: string,
   admin: boolean,
+  nameFilter: string | null = null,
 ): Promise<VirtualDirectoryResponse> {
   const mounts = await listMounts(env.DB);
   if (pathname === '/') {
@@ -136,6 +139,10 @@ export async function listVirtualDirectory(
       breadcrumbs: [{ id: VIRTUAL_ROOT_ID, name: 'ilist', path: '/' }],
       items: mounts
         .filter((mount) => mount.enabled && (admin || mount.isPublic))
+        .filter((mount) => {
+          const needle = nameFilter?.trim().toLocaleLowerCase() ?? '';
+          return !needle || mount.name.toLocaleLowerCase().includes(needle);
+        })
         .map(mountEntry),
     };
   }
@@ -143,10 +150,10 @@ export async function listVirtualDirectory(
   const resolvableMounts = admin ? mounts : mounts.filter((mount) => mount.isPublic);
   const { mount, relativePath } = resolveVirtualPath(pathname, resolvableMounts);
   if (mount.driverType !== 'native-r2') {
-    return listExternalDirectory(env, mount, relativePath, admin);
+    return listExternalDirectory(env, mount, relativePath, admin, nameFilter);
   }
 
-  const directory = await listDirectory(env.DB, relativePath, admin);
+  const directory = await listDirectory(env.DB, relativePath, admin, nameFilter);
   return {
     current: withMountIdentity(directory.current, mount),
     breadcrumbs: mountedBreadcrumbs(mount, directory.breadcrumbs),
@@ -374,6 +381,99 @@ export async function moveEntries(db: D1Database, ids: string[], destinationId: 
       result.succeeded.push(row.id);
     } catch (error) {
       const known = error instanceof HttpError ? error : entryNameConflict(error, name) ?? new HttpError(500, 'MOVE_FAILED', 'Move failed');
+      result.failed.push({ id, code: known.code, message: known.message });
+    }
+  }
+  return result;
+}
+
+async function copyNativeEntryTree(
+  env: Env,
+  source: EntryRow,
+  destinationParentId: string,
+): Promise<string> {
+  const name = validateEntryName(source.name, destinationParentId === 'root');
+  await ensureNameAvailable(env.DB, destinationParentId, name);
+  const now = new Date().toISOString();
+  const newId = crypto.randomUUID();
+  if (source.kind === 'folder') {
+    const folder: EntryRow = {
+      id: newId,
+      parent_id: destinationParentId,
+      name,
+      kind: 'folder',
+      storage_key: null,
+      size: 0,
+      content_type: null,
+      etag: null,
+      status: 'ready',
+      lifecycle_owner: null,
+      is_public: source.is_public,
+      sort_order: source.sort_order,
+      description: source.description,
+      created_at: now,
+      updated_at: now,
+    };
+    if (!await insertEntryUnderReadyParent(env.DB, folder)) {
+      throw new HttpError(404, 'ENTRY_NOT_FOUND', 'Folder not found');
+    }
+    for (const child of await listChildRows(env.DB, source.id)) {
+      await copyNativeEntryTree(env, child, newId);
+    }
+    return newId;
+  }
+
+  if (!source.storage_key) throw new HttpError(500, 'STORAGE_KEY_MISSING', 'File storage key is missing');
+  const object = await env.R2_BUCKET.get(source.storage_key);
+  if (!object) throw new HttpError(404, 'ENTRY_NOT_FOUND', 'Entry not found');
+  const owner = crypto.randomUUID();
+  const storageKey = storageKeyForEntry(newId, owner);
+  await env.R2_BUCKET.put(storageKey, object.body, {
+    httpMetadata: { contentType: source.content_type ?? 'application/octet-stream' },
+  });
+  const file: EntryRow = {
+    id: newId,
+    parent_id: destinationParentId,
+    name,
+    kind: 'file',
+    storage_key: storageKey,
+    size: source.size,
+    content_type: source.content_type,
+    etag: object.etag ?? source.etag,
+    status: 'ready',
+    lifecycle_owner: null,
+    is_public: source.is_public,
+    sort_order: source.sort_order,
+    description: source.description,
+    created_at: now,
+    updated_at: now,
+  };
+  if (!await insertEntryUnderReadyParent(env.DB, file)) {
+    await env.R2_BUCKET.delete(storageKey).catch(() => undefined);
+    throw new HttpError(404, 'ENTRY_NOT_FOUND', 'Folder not found');
+  }
+  return newId;
+}
+
+export async function copyEntries(env: Env, ids: string[], destinationId: string): Promise<BatchResult> {
+  const destination = await requireFolder(env.DB, destinationId);
+  const result: BatchResult = { succeeded: [], failed: [] };
+  for (const id of [...new Set(ids)]) {
+    let name = '';
+    try {
+      const row = await requireMutable(env.DB, id);
+      name = validateEntryName(row.name, destination.id === 'root');
+      if (row.kind === 'folder') {
+        const ancestorIds = new Set((await listAncestorRows(env.DB, destination.id)).map((entry) => entry.id));
+        if (ancestorIds.has(row.id)) {
+          throw new HttpError(400, 'INVALID_COPY_TARGET', 'Folder cannot copy into itself or a descendant');
+        }
+      }
+      await ensureNameAvailable(env.DB, destination.id, name);
+      await copyNativeEntryTree(env, row, destination.id);
+      result.succeeded.push(row.id);
+    } catch (error) {
+      const known = error instanceof HttpError ? error : entryNameConflict(error, name) ?? new HttpError(500, 'COPY_FAILED', 'Copy failed');
       result.failed.push({ id, code: known.code, message: known.message });
     }
   }

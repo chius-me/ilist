@@ -15,6 +15,7 @@ const capabilities = {
   createFolder: false,
   rename: true,
   move: true,
+  copy: false,
   delete: true,
   changeVisibility: true,
 };
@@ -47,7 +48,8 @@ const root = {
       kind: 'folder' as const,
       size: 0,
       contentType: null,
-      capabilities: { ...capabilities, open: true, preview: false, download: false, rename: false, move: false, delete: false, changeVisibility: false },
+      capabilities: { ...capabilities, open: true, preview: false, download: false, rename: false, move: false,
+    copy: false, delete: false, changeVisibility: false },
     },
     breadcrumbs: [{ id: 'root', name: 'ilist', path: '/' }],
     items: [report, entry('first', 'first.txt'), entry('second', 'second.txt')],

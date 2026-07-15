@@ -105,7 +105,7 @@ function isRecord(value: unknown): value is Record<string, unknown> {
 }
 
 export class S3Driver implements StorageDriver {
-  readonly capabilities = new Set(['list', 'download', 'upload', 'multipartUpload', 'createFolder', 'rename', 'move', 'delete'] as const);
+  readonly capabilities = new Set(['list', 'download', 'upload', 'multipartUpload', 'createFolder', 'rename', 'move', 'copy', 'delete'] as const);
   readonly rootId: string;
   readonly resumableUpload: ResumableUploadAdapter = {
     create: async (input) => {
@@ -315,6 +315,27 @@ export class S3Driver implements StorageDriver {
     const target = `${destination.key}${basename(identity.key)}${identity.kind === 'folder' ? '/' : ''}`;
     await this.relocate(identity, target);
     return this.toItem(target, identity.kind, destinationId);
+  }
+
+  async copy(itemId: string, destinationParentId: string): Promise<StorageItem> {
+    const identity = this.decodeItemId(itemId);
+    const destination = this.requireFolder(destinationParentId);
+    if (itemId === this.rootId) throw new HttpError(400, 'INVALID_STORAGE_OPERATION', 'Mount root cannot be copied');
+    if (identity.kind === 'folder' && destination.key.startsWith(identity.key)) {
+      throw new HttpError(409, 'INVALID_STORAGE_DESTINATION', 'Folder cannot be copied inside itself');
+    }
+    const target = `${destination.key}${basename(identity.key)}${identity.kind === 'folder' ? '/' : ''}`;
+    this.assertScopedKey(target, identity.kind);
+    await this.assertNameAvailable(target, identity.kind);
+    if (identity.kind === 'file') {
+      await this.copyWithoutOverwrite(identity.key, target);
+      return this.toItem(target, 'file', destinationParentId);
+    }
+    const sources = await this.listAllKeys(identity.key);
+    for (const source of sources) {
+      await this.copyWithoutOverwrite(source, `${target}${source.slice(identity.key.length)}`);
+    }
+    return this.toItem(target, 'folder', destinationParentId);
   }
 
   async remove(itemId: string): Promise<void> {

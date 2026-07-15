@@ -283,6 +283,38 @@ export async function getOwnedUploadSession(
   return row ? rowToRecord(env, row) : null;
 }
 
+/** List resumable sessions that can still be resumed for the administrator session. */
+export async function listOwnedActiveUploadSessions(
+  env: Env,
+  ownerSessionId: string,
+  now = Date.now(),
+  limit = 50,
+): Promise<UploadSessionRecord[]> {
+  if (!ownerSessionId || !isSafeInteger(now, 0) || !isSafeInteger(limit, 1)) {
+    throw new Error('Upload session list query is invalid');
+  }
+  const result = await env.DB.prepare(
+    `SELECT * FROM upload_sessions
+     WHERE owner_session_id = ?
+       AND status IN ('active', 'completing')
+       AND expires_at > ?
+     ORDER BY updated_at DESC, created_at DESC, id DESC
+     LIMIT ?`,
+  )
+    .bind(ownerSessionId, now, limit)
+    .all<UploadSessionRow>();
+
+  const records: UploadSessionRecord[] = [];
+  for (const row of result.results ?? []) {
+    try {
+      records.push(await rowToRecord(env, row));
+    } catch {
+      // Skip rows that cannot be decrypted or parsed; they are not resumable.
+    }
+  }
+  return records;
+}
+
 export async function claimUploadPart(
   env: Env,
   ownerSessionId: string,
