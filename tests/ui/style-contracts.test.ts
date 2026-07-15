@@ -3,6 +3,10 @@ import { describe, expect, it } from 'vitest';
 
 const tokens = readFileSync('src/ui/styles/tokens.css', 'utf8');
 const explorer = readFileSync('src/ui/styles/explorer.css', 'utf8');
+const admin = readFileSync('src/ui/styles/admin.css', 'utf8');
+const overlays = readFileSync('src/ui/styles/overlays.css', 'utf8');
+const shell = readFileSync('src/ui/styles/shell.css', 'utf8');
+const base = readFileSync('src/ui/styles/base.css', 'utf8');
 
 function hex(name: string): string {
   const match = tokens.match(new RegExp(`${name}:\\s*(#[0-9a-f]{6})`, 'i'));
@@ -41,6 +45,22 @@ describe('visual style contracts', () => {
     expect(darkHover).not.toBe(hex('--color-primary-hover'));
     expect(contrast(darkPrimary, hex('--color-primary-text'))).toBeGreaterThanOrEqual(4.5);
     expect(contrast(darkHover, hex('--color-primary-text'))).toBeGreaterThanOrEqual(4.5);
+  });
+
+  it('uses accessible semantic accent foregrounds on real dark surfaces', () => {
+    const foreground = darkHex('--color-accent-foreground');
+    const strongForeground = darkHex('--color-accent-foreground-strong');
+    for (const surface of ['--color-surface', '--color-surface-raised', '--color-selected']) {
+      expect(contrast(foreground, darkHex(surface))).toBeGreaterThanOrEqual(4.5);
+      expect(contrast(strongForeground, darkHex(surface))).toBeGreaterThanOrEqual(4.5);
+    }
+
+    expect(admin).toContain('color: var(--color-accent-foreground);');
+    expect(explorer).toContain('background: var(--accent-soft); color: var(--color-accent-foreground-strong);');
+    expect(overlays).toContain('.previewError a { color: var(--color-accent-foreground);');
+    expect(overlays).toContain('color: var(--color-accent-foreground-strong);');
+    expect(shell).toContain('.siteName:hover { color: var(--color-accent-foreground-strong); }');
+    expect(base).toContain('background: var(--color-primary); color: var(--color-primary-text);');
   });
 
   it('keeps selection controls visible and mobile actions at least 48px', () => {

@@ -2,7 +2,7 @@
 
 ## Status
 
-DONE - the original fix wave and second re-review follow-up are implemented, verified, visually inspected, and ready to commit.
+DONE - the independent accent-foreground follow-up is implemented, browser verified, and ready to commit.
 
 Base HEAD: `d5f8018ae085deef3632322960262e280209c1f4`
 
@@ -132,3 +132,49 @@ PLAYWRIGHT_BROWSER_CHANNEL=chrome npm run test:e2e
 - Visual update: PASS, 15/15 across desktop/tablet/mobile. Seven mobile baselines were refreshed for the 48px activation target and inspected by the parent.
 - E2E: PASS, 15/15 across desktop/tablet/mobile.
 - No browser or environment installation was performed.
+
+## Independent Accent Foreground Follow-up
+
+Status: DONE. Parent visual/E2E verification and review are complete.
+
+Finding and fix:
+
+- Button background tokens remain `--color-primary` / `--color-primary-hover`, preserving white-on-button contrast and existing primary button/view-toggle behavior.
+- Added `--color-accent-foreground` and `--color-accent-foreground-strong` as separate semantic foreground tokens in both themes. Dark values are `#f59a75` and `#ffad8a`.
+- Replaced foreground primary usage in `admin.css`, `explorer.css`, `overlays.css`, and `shell.css`: active admin navigation, mount identity icons, operation notices, preview error links, picker breadcrumbs, and site-name hover.
+- Reviewed every `var(--color-primary*)` and `var(--accent*)` usage with `rg`. Remaining background-primary references are button/view-toggle backgrounds and upload progress; remaining non-text references are borders, focus/selection outlines, checkbox accent color, and decorative rails.
+
+Dark contrast contracts in `tests/ui/style-contracts.test.ts` calculate both foreground tokens against every real surface involved:
+
+- `--color-accent-foreground`: 7.65:1 on surface, 6.92:1 on raised surface, 6.25:1 on selected surface.
+- `--color-accent-foreground-strong`: 9.09:1 on surface, 8.22:1 on raised surface, 7.43:1 on selected surface.
+- Existing tests continue to require at least 4.5:1 for white text on dark primary and primary-hover button backgrounds.
+- CSS usage assertions preserve primary button background tokens and require semantic foreground tokens at each text/icon consumer.
+
+TDD and verification:
+
+- RED: `npx vitest run --config vitest.ui.config.ts tests/ui/style-contracts.test.ts`
+  - Expected failure: dark `--color-accent-foreground` was absent.
+- GREEN: `npx vitest run --config vitest.ui.config.ts tests/ui/style-contracts.test.ts`
+  - PASS: 1 file, 4 tests.
+- `npm run check`
+  - PASS: TypeScript, production build, 22 worker files / 177 tests, and 14 UI files / 77 tests.
+  - Existing missing-development-secret warnings were emitted by worker tests; no environment changes were made.
+- `git diff --check`
+  - PASS: no whitespace errors.
+
+Parent browser verification:
+
+- `PLAYWRIGHT_BROWSER_CHANNEL=chrome npm run test:visual -- --update-snapshots`: PASS, 15/15 across desktop/tablet/mobile; no snapshot changes were produced.
+- `PLAYWRIGHT_BROWSER_CHANNEL=chrome npm run test:e2e`: PASS, 15/15 across desktop/tablet/mobile.
+- No browser installation or environment change was performed.
+
+Changed files:
+
+- `.superpowers/sdd/final-review-fix-report.md`
+- `src/ui/styles/admin.css`
+- `src/ui/styles/explorer.css`
+- `src/ui/styles/overlays.css`
+- `src/ui/styles/shell.css`
+- `src/ui/styles/tokens.css`
+- `tests/ui/style-contracts.test.ts`

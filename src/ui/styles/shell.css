@@ -32,7 +32,7 @@
   letter-spacing: 0;
 }
 
-.siteName:hover { color: var(--color-primary-hover); }
+.siteName:hover { color: var(--color-accent-foreground-strong); }
 
 .headerControls {
   display: flex;
