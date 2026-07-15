@@ -13,8 +13,17 @@ export function FileList({
   handlers: EntryHandlers;
 }) {
   return (
-    <ul className="fileList" aria-label="Files and folders">
-      {entries.map((entry) => <EntryRow key={entry.id} entry={entry} selected={selectedIds.has(entry.id)} admin={admin} {...handlers} />)}
-    </ul>
+    <div className="fileListFrame">
+      <div className="fileListHeader" aria-hidden="true">
+        <span />
+        <span>Name</span>
+        <span>Modified</span>
+        <span>Size</span>
+        <span>Actions</span>
+      </div>
+      <ul className="fileList" aria-label="Files and folders">
+        {entries.map((entry) => <EntryRow key={entry.id} entry={entry} selected={selectedIds.has(entry.id)} admin={admin} {...handlers} />)}
+      </ul>
+    </div>
   );
 }
