@@ -116,4 +116,18 @@ describe('OneDrive OAuth routes', () => {
     expect(response.status).toBe(403);
     expect((await response.json() as { error: { code: string } }).error.code).toBe('ORIGIN_NOT_ALLOWED');
   });
+
+  it('consumes denied authorization state and returns to storage settings with an error status', async () => {
+    const mountId = await createOneDriveMount();
+    const authorization = new URL((await start(mountId)).headers.get('location')!);
+    const cookie = await login();
+    const response = await SELF.fetch(`${origin}/api/admin/oauth/onedrive/callback?error=access_denied&state=${authorization.searchParams.get('state')}`, {
+      headers: { cookie }, redirect: 'manual',
+    });
+
+    expect(response.status).toBe(302);
+    expect(response.headers.get('location')).toBe(`${origin}/admin/storages?onedrive=error`);
+    const remaining = await workerEnv().DB.prepare('SELECT state_hash FROM oauth_states WHERE mount_id = ?').bind(mountId).first();
+    expect(remaining).toBeNull();
+  });
 });

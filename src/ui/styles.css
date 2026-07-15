@@ -506,6 +506,7 @@ button:focus-visible, a:focus-visible, input:focus-visible, select:focus-visible
 .confirmDialog p { color: var(--muted); line-height: 1.5; }
 .dangerButton { border-color: #b42318; background: #b42318; color: #fff; }
 .formError { margin-top: 14px; color: #b42318; font-size: 13px; }
+.oneDriveConnectNote { grid-column: 1 / -1; border-left: 3px solid var(--accent); padding: 8px 10px; color: var(--muted); font-size: 13px; line-height: 1.5; }
 @media (max-width: 760px) {
   .storageManager { width: 100%; margin: 12px 0; }
   .storageManagerHeader { align-items: start; padding: 10px 14px 16px; }

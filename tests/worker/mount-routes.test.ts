@@ -81,6 +81,7 @@ describe('mount administration API', () => {
     expect(JSON.stringify(body)).not.toContain('initial-secret');
     expect(JSON.stringify(body)).not.toContain('secretAccessKey');
     expect(JSON.stringify(body)).not.toContain('accessKeyId');
+    expect((body as { data: Array<{ connected: boolean }> }).data[0]!.connected).toBe(true);
   });
 
   it('creates an S3 mount and preserves a blank secret on update', async () => {

@@ -21,3 +21,11 @@ export async function removeMount(id: string): Promise<void> {
 export function testMount(id: string): Promise<unknown> {
   return jsonRequest(`/api/admin/mounts/${encodeURIComponent(id)}/test`, { method: 'POST', body: '{}' });
 }
+
+export function disconnectMount(id: string): Promise<Mount> {
+  return jsonRequest(`/api/admin/mounts/${encodeURIComponent(id)}/disconnect`, { method: 'POST', body: '{}' });
+}
+
+export function oneDriveConnectUrl(id: string): string {
+  return `/api/admin/oauth/onedrive/start?mountId=${encodeURIComponent(id)}`;
+}

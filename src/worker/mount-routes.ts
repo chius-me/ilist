@@ -148,8 +148,13 @@ function sanitizedConfig(mount: Mount): Record<string, unknown> {
   return result;
 }
 
-function mountToApi(mount: Mount): Omit<Mount, 'config'> & { config: Record<string, unknown> } {
-  return { ...mount, config: sanitizedConfig(mount) };
+function mountToApi(mount: Mount, connected = mount.driverType === 'native-r2'): Omit<Mount, 'config'> & { config: Record<string, unknown>; connected: boolean } {
+  return { ...mount, config: sanitizedConfig(mount), connected };
+}
+
+async function connectedMountIds(env: Env): Promise<Set<string>> {
+  const result = await env.DB.prepare('SELECT mount_id FROM storage_credentials').all<{ mount_id: string }>();
+  return new Set(result.results.map((row) => row.mount_id));
 }
 
 function existingS3Credentials(value: StorageCredentials | null): S3Credentials | null {
@@ -243,7 +248,10 @@ async function requireMount(env: Env, id: string): Promise<Mount> {
 
 export async function handleMountRoutes(request: Request, env: Env, url: URL): Promise<Response | null> {
   if (url.pathname === '/api/admin/mounts') {
-    if (request.method === 'GET') return ok((await listMounts(env.DB)).map(mountToApi));
+    if (request.method === 'GET') {
+      const connected = await connectedMountIds(env);
+      return ok((await listMounts(env.DB)).map((mount) => mountToApi(mount, mount.driverType === 'native-r2' || connected.has(mount.id))));
+    }
     if (request.method !== 'POST') return methodNotAllowed();
 
     const body = requestBody(await readJson<unknown>(request));
@@ -256,7 +264,7 @@ export async function handleMountRoutes(request: Request, env: Env, url: URL): P
       await deleteMount(env.DB, mount.id);
       throw error;
     }
-    return ok(mountToApi(mount));
+    return ok(mountToApi(mount, Boolean(credentials)));
   }
 
   const disconnectId = mountIdFromPath(url.pathname, '/disconnect');
@@ -264,7 +272,7 @@ export async function handleMountRoutes(request: Request, env: Env, url: URL): P
     if (request.method !== 'POST') return methodNotAllowed();
     const mount = await requireMount(env, disconnectId);
     await deleteCredentials(env, mount.id);
-    return ok(mountToApi(mount));
+    return ok(mountToApi(mount, false));
   }
 
   const testId = mountIdFromPath(url.pathname, '/test');
@@ -312,5 +320,5 @@ export async function handleMountRoutes(request: Request, env: Env, url: URL): P
   }
   const mount = await getMount(env.DB, update.id);
   if (!mount) throw new HttpError(404, 'MOUNT_NOT_FOUND', 'Mount not found');
-  return ok(mountToApi(mount));
+  return ok(mountToApi(mount, mount.driverType === 'native-r2' || Boolean(await getCredentials(env, mount.id))));
 }
