@@ -202,7 +202,7 @@ function s3Client(overrides: Partial<S3DriverClient> = {}): S3DriverClient {
     listObjectsV2: vi.fn(async () => ({
       objects: [], commonPrefixes: [], nextContinuationToken: null, isTruncated: false, keyCount: 0,
     })),
-    headObject: vi.fn(async () => new Response(null)),
+    headObject: vi.fn(async () => { throw new S3Error(404, 'NoSuchKey', 'not found'); }),
     getObject: vi.fn(async () => new Response()),
     putObject: vi.fn(async () => new Response()),
     copyObject: vi.fn(async () => new Response()),
@@ -686,11 +686,13 @@ describe('upload lifecycle service', () => {
         return { uploadId: 'upload-123' };
       }),
       completeMultipartUpload: complete,
-      headObject: vi.fn(async () => new Response(null, { headers: {
-        'content-length': String(25 * 1024 * 1024),
-        'x-amz-meta-ilist-upload-marker': marker,
-        etag: '"complete"',
-      } })),
+      headObject: vi.fn()
+        .mockRejectedValueOnce(new S3Error(404, 'NoSuchKey', 'not found'))
+        .mockImplementation(async () => new Response(null, { headers: {
+          'content-length': String(25 * 1024 * 1024),
+          'x-amz-meta-ilist-upload-marker': marker,
+          etag: '"complete"',
+        } })),
     });
     const driver = new S3Driver(mounted, api);
     driverRegistry.s3 = () => driver;
@@ -710,7 +712,7 @@ describe('upload lifecycle service', () => {
     const result = await completeResumableUpload(workerEnv(), ownerSessionId, session.id);
     expect(result.entry).toMatchObject({ name: 'archive.bin', size: 25 * 1024 * 1024 });
     expect(complete).toHaveBeenCalledTimes(2);
-    expect(api.headObject).toHaveBeenCalledTimes(1);
+    expect(api.headObject).toHaveBeenCalledTimes(2);
     expect(JSON.stringify(result)).not.toContain(marker);
   });
 

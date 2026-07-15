@@ -1,6 +1,6 @@
 import { HttpError } from '../../http';
 import type { Mount } from '../../types';
-import { S3Client, S3Error, type GetObjectOptions, type ListObjectsV2Options, type PutObjectOptions, type S3ListObjectsResult, type S3UploadPartOptions } from './client';
+import { S3Client, S3Error, type GetObjectOptions, type ListObjectsV2Options, type PutObjectOptions, type S3ListObjectsResult, type S3RequestOptions, type S3UploadPartOptions } from './client';
 import { UPLOAD_PART_SIZE_BYTES, type CompletedUploadPart, type DownloadResult, type ListResult, type ResumableUploadAdapter, type StorageDriver, type StorageItem } from '../types';
 
 export interface S3DriverClient {
@@ -8,7 +8,7 @@ export interface S3DriverClient {
   headObject(key: string): Promise<Response>;
   getObject(key: string, options?: GetObjectOptions): Promise<Response>;
   putObject(key: string, body: BodyInit | null, options?: PutObjectOptions): Promise<Response>;
-  copyObject(sourceKey: string, destinationKey: string): Promise<Response>;
+  copyObject(sourceKey: string, destinationKey: string, options?: S3RequestOptions): Promise<Response>;
   deleteObject(key: string): Promise<Response>;
   createMultipartUpload(key: string, contentType: string | null, marker: string): Promise<{ uploadId: string }>;
   uploadPart(key: string, uploadId: string, partNumber: number, body: BodyInit, options?: S3UploadPartOptions): Promise<{ etag: string }>;
@@ -90,6 +90,16 @@ function invalidUploadState(): HttpError {
   return new HttpError(400, 'INVALID_UPLOAD_STATE', 'S3 upload session state is invalid');
 }
 
+function nameConflict(): HttpError {
+  return new HttpError(409, 'ENTRY_NAME_CONFLICT', 'Current folder already contains that name');
+}
+
+function isConditionalConflict(error: unknown): boolean {
+  return error instanceof S3Error
+    && (error.status === 409 || error.status === 412
+      || error.code === 'PreconditionFailed' || error.code === 'ConditionalRequestConflict');
+}
+
 function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === 'object' && value !== null && !Array.isArray(value);
 }
@@ -106,6 +116,7 @@ export class S3Driver implements StorageDriver {
       }
       const contentType = this.requireContentType(input.contentType);
       const key = `${parent.key}${name}`;
+      await this.assertNameAvailable(key, 'file');
       const marker = crypto.randomUUID();
       const { uploadId } = await this.client.createMultipartUpload(key, contentType, marker);
       return {
@@ -130,6 +141,7 @@ export class S3Driver implements StorageDriver {
           etag: result.etag,
         };
       } catch (error) {
+        if (isConditionalConflict(error)) throw nameConflict();
         if (!(error instanceof S3Error) || error.code !== 'NoSuchUpload') throw error;
         let response: Response;
         try {
@@ -253,15 +265,35 @@ export class S3Driver implements StorageDriver {
   async createFolder(parentId: string, name: string): Promise<StorageItem> {
     const parent = this.requireFolder(parentId);
     const key = `${parent.key}${validateName(name)}/`;
+    await this.assertNameAvailable(key, 'folder');
     const marker = new ReadableStream({ start(controller) { controller.close(); } });
-    const response = await this.client.putObject(key, marker, { contentType: 'application/x-directory' });
+    let response: Response;
+    try {
+      response = await this.client.putObject(key, marker, {
+        contentType: 'application/x-directory',
+        headers: { 'if-none-match': '*' },
+      });
+    } catch (error) {
+      if (isConditionalConflict(error)) throw nameConflict();
+      throw error;
+    }
     return { ...this.toItem(key, 'folder', parentId), etag: response.headers.get('etag') };
   }
 
   async upload(parentId: string, name: string, body: ReadableStream, contentType: string | null): Promise<StorageItem> {
     const parent = this.requireFolder(parentId);
     const key = `${parent.key}${validateName(name)}`;
-    const response = await this.client.putObject(key, body, { ...(contentType ? { contentType } : {}) });
+    await this.assertNameAvailable(key, 'file');
+    let response: Response;
+    try {
+      response = await this.client.putObject(key, body, {
+        ...(contentType ? { contentType } : {}),
+        headers: { 'if-none-match': '*' },
+      });
+    } catch (error) {
+      if (isConditionalConflict(error)) throw nameConflict();
+      throw error;
+    }
     return { ...this.toItem(key, 'file', parentId), contentType, etag: response.headers.get('etag') };
   }
 
@@ -298,14 +330,53 @@ export class S3Driver implements StorageDriver {
     if (destination === identity.key) {
       throw new HttpError(409, 'INVALID_STORAGE_DESTINATION', 'Source and destination are the same');
     }
+    await this.assertNameAvailable(destination, identity.kind);
     if (identity.kind === 'file') {
-      await this.client.copyObject(identity.key, destination);
+      await this.copyWithoutOverwrite(identity.key, destination);
       await this.client.deleteObject(identity.key);
       return;
     }
     const sources = await this.listAllKeys(identity.key);
-    for (const source of sources) await this.client.copyObject(source, `${destination}${source.slice(identity.key.length)}`);
+    for (const source of sources) await this.copyWithoutOverwrite(source, `${destination}${source.slice(identity.key.length)}`);
     for (const source of sources.sort((left, right) => right.length - left.length)) await this.client.deleteObject(source);
+  }
+
+  private async copyWithoutOverwrite(source: string, destination: string): Promise<void> {
+    const headers = new Headers({ 'if-none-match': '*' });
+    if (this.mount.provider === 'cloudflare-r2') {
+      headers.set('cf-copy-destination-if-none-match', '*');
+    }
+    try {
+      await this.client.copyObject(source, destination, { headers });
+    } catch (error) {
+      if (isConditionalConflict(error)) throw nameConflict();
+      throw error;
+    }
+  }
+
+  private async assertNameAvailable(key: string, kind: ItemKind): Promise<void> {
+    const fileKey = kind === 'folder' ? key.slice(0, -1) : key;
+    const folderPrefix = kind === 'folder' ? key : `${key}/`;
+    const [fileExists, folderExists] = await Promise.all([
+      this.objectExists(fileKey),
+      this.prefixExists(folderPrefix),
+    ]);
+    if (fileExists || folderExists) throw nameConflict();
+  }
+
+  private async objectExists(key: string): Promise<boolean> {
+    try {
+      await this.client.headObject(key);
+      return true;
+    } catch (error) {
+      if (error instanceof S3Error && error.status === 404) return false;
+      throw error;
+    }
+  }
+
+  private async prefixExists(prefix: string): Promise<boolean> {
+    const result = await this.client.listObjectsV2({ prefix, maxKeys: 1 });
+    return result.objects.length > 0 || result.commonPrefixes.length > 0;
   }
 
   private async listAllKeys(prefix: string): Promise<string[]> {

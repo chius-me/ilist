@@ -36,8 +36,17 @@ jobs:
       - name: Install dependencies
         run: npm ci
 
+      - name: Audit production dependencies
+        run: npm audit --omit=dev --audit-level=high
+
       - name: Type-check, build, and test
         run: npm run check
+
+      - name: Install Chromium
+        run: npx playwright install --with-deps chromium
+
+      - name: Run non-visual browser tests
+        run: npm run test:e2e:ci
 
       - name: Upload production assets
         if: github.ref == 'refs/heads/main' && (github.event_name == 'push' || github.event_name == 'workflow_dispatch')

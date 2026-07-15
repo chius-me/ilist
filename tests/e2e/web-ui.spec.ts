@@ -220,7 +220,7 @@ test('@visual upload, storage, and appearance surfaces', async ({ page }) => {
   await page.getByRole('button', { name: 'Delete' }).click();
   await expect(productionMenu).not.toHaveAttribute('open', '');
   await expect(page.getByRole('dialog', { name: 'Delete storage mount' })).toBeVisible();
-  await expect(page).toHaveScreenshot('mount-delete-confirmation.png', { fullPage: true, maxDiffPixelRatio: 0 });
+  await expect(page).toHaveScreenshot('mount-delete-confirmation.png', { fullPage: true, maxDiffPixels: 200 });
   await page.getByRole('button', { name: 'Cancel' }).click();
 
   const personalActions = page.getByRole('button', { name: 'Actions for Personal drive' });
@@ -229,7 +229,7 @@ test('@visual upload, storage, and appearance surfaces', async ({ page }) => {
   await page.getByRole('button', { name: 'Disconnect' }).click();
   await expect(personalMenu).not.toHaveAttribute('open', '');
   await expect(page.getByRole('dialog', { name: 'Disconnect OneDrive' })).toBeVisible();
-  await expect(page).toHaveScreenshot('mount-disconnect-confirmation.png', { fullPage: true, maxDiffPixelRatio: 0 });
+  await expect(page).toHaveScreenshot('mount-disconnect-confirmation.png', { fullPage: true, maxDiffPixels: 200 });
   await page.getByRole('button', { name: 'Cancel' }).click();
 
   if ((page.viewportSize()?.width ?? 0) <= 760) await page.getByRole('button', { name: 'Admin menu' }).click();

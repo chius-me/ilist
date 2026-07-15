@@ -60,7 +60,7 @@ async function activeShare(env: Env, token: string, now = Math.floor(Date.now() 
 
 async function requirePasswordAuthorization(env: Env, request: Request, share: Share, token: string): Promise<void> {
   if (share.passwordHash === null) return;
-  if (!await hasShareAuthorization(env, request, share.id, token)) {
+  if (!await hasShareAuthorization(env, request, share.id, share.authRevision, token)) {
     throw new HttpError(401, 'SHARE_PASSWORD_REQUIRED', 'Share password is required');
   }
 }
@@ -131,7 +131,7 @@ async function authenticate(
     reservationFinalized = true;
     const now = Math.floor(Date.now() / 1000);
     const expiresAt = Math.min(now + SHARE_AUTH_TTL_SECONDS, share.expiresAt ?? Number.MAX_SAFE_INTEGER);
-    const authorization = await createShareAuthorization(env, share.id, expiresAt);
+    const authorization = await createShareAuthorization(env, share.id, share.authRevision, expiresAt);
     return privateNoStore(ok({}, {
       headers: { 'set-cookie': await shareAuthorizationCookie(request, token, authorization, expiresAt, now) },
     }));

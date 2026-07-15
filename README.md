@@ -161,7 +161,7 @@ Use a bucket-scoped R2 API token with only the permissions ilist requires.
 - The built-in `R2` Worker binding remains compatible with existing deployments but does not implement resumable upload; use an S3-configured R2 mount for multipart uploads.
 - Configure an incomplete multipart upload lifecycle rule on S3-compatible buckets so abandoned provider uploads are removed if Worker cleanup cannot reach them.
 
-OneDrive resumable upload uses the same delegated `Files.ReadWrite` permission documented above. Google Drive uses the full Drive OAuth scope documented above. Apply all D1 migrations, including `0012_upload_sessions.sql`, `0013_upload_terminal_leases.sql`, `0014_shares.sql`, `0015_auth_rate_limits.sql`, and `0016_mounts_private_default.sql`, before deploying v0.1.7.
+OneDrive resumable upload uses the same delegated `Files.ReadWrite` permission documented above. Google Drive uses the full Drive OAuth scope documented above. Apply all D1 migrations, including `0012_upload_sessions.sql`, `0013_upload_terminal_leases.sql`, `0014_shares.sql`, `0015_auth_rate_limits.sql`, `0016_mounts_private_default.sql`, and `0017_share_auth_revision.sql`, before deploying the current build.
 
 ## Controlled Shares
 
@@ -169,7 +169,7 @@ Administrators can create a share from any file or folder action menu and manage
 
 Google Docs, Sheets, and Slides expose explicit export formats in both the main explorer and controlled shares. PDF is used for preview when available; downloads remain subject to the share's current download policy.
 
-The raw `/s/:token` URL is returned only once when the share is created. D1 stores only its SHA-256 hash, so the management page cannot recover or copy an existing link. Public item IDs are share-scoped encrypted handles rather than mount or provider IDs. Password authorization uses a short-lived, `HttpOnly`, `SameSite=Lax` cookie scoped to that share path.
+The raw `/s/:token` URL is returned only once when the share is created. D1 stores only its SHA-256 hash, so the management page cannot recover or copy an existing link. Public item IDs are share-scoped encrypted handles rather than mount or provider IDs. Password authorization uses a short-lived, `HttpOnly`, `SameSite=Lax` cookie scoped to that share path. Changing or removing the share password revokes every authorization cookie issued under the previous password policy.
 
 Every metadata, listing, preview, and file request rechecks the current password, enabled, expiration, target, and download policy. Share responses use `Cache-Control: private, no-store`; do not add a Cloudflare cache rule that overrides this policy. Disabling or deleting a share therefore takes effect on the next request.
 
@@ -226,6 +226,7 @@ Do not put `ADMIN_PASSWORD_HASH`, `CREDENTIAL_MASTER_KEY`, OAuth client secrets,
 - Rotate any credential that has appeared in a terminal recording, screenshot, issue, or chat.
 - Back up D1 before applying migrations or deploying a new release.
 - Use least-privilege, bucket-scoped S3 or R2 credentials.
+- S3-compatible create, upload, multipart completion, rename, and move operations reject an existing destination instead of overwriting it. Conditional-copy support is required to close the final concurrent-write window; AWS S3 and Cloudflare R2 are supported.
 - Do not commit `.dev.vars`, D1 exports, access tokens, client secrets, or temporary uploads.
 - Private mounts rely on ilist authorization; review Cloudflare logs, Access policies, and caching rules for your deployment.
 - Share links are bearer credentials. Send them through an appropriate private channel and add a password for sensitive targets.
