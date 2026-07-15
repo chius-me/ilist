@@ -12,9 +12,9 @@ interface AppHeaderProps {
 }
 
 export function AppHeader({ admin, username, onHome, onStorage, onSignIn, onSignOut }: AppHeaderProps) {
-  const { preferences, updatePreferences } = usePreferences();
+  const { resolvedTheme, updatePreferences } = usePreferences();
   const { locale, t } = useI18n();
-  const dark = preferences.theme === 'dark';
+  const dark = resolvedTheme === 'dark';
 
   const changeLanguage = () => {
     updatePreferences({ locale: locale === 'en' ? 'zh-CN' : 'en' });
@@ -35,24 +35,24 @@ export function AppHeader({ admin, username, onHome, onStorage, onSignIn, onSign
   return (
     <header className="siteHeader">
       <div className="headerInner">
-        <button className="siteName" type="button" onClick={onHome} aria-label="Open ilist root" title="Open ilist root">
+        <button className="siteName" type="button" onClick={onHome} aria-label={t('shell.openRoot')} title={t('shell.openRoot')}>
           <Folder aria-hidden="true" size={19} />
           <span>ilist</span>
         </button>
         <div className="headerControls">
-          <button className="headerControl languageControl" type="button" onClick={changeLanguage} aria-label="Change language" title="Change language">
+          <button className="headerControl languageControl" type="button" onClick={changeLanguage} aria-label={t('shell.changeLanguage')} title={t('shell.changeLanguage')}>
             <Languages aria-hidden="true" size={17} />
-            <span>{preferences.locale === 'en' ? 'EN' : '中文'}</span>
+            <span>{t('shell.localeLabel')}</span>
           </button>
-          <button className="headerControl" type="button" onClick={changeTheme} aria-label="Change theme" title="Change theme">
+          <button className="headerControl" type="button" onClick={changeTheme} aria-label={t('shell.changeTheme')} title={t('shell.changeTheme')}>
             {dark ? <Sun aria-hidden="true" size={17} /> : <Moon aria-hidden="true" size={17} />}
           </button>
           {admin ? (
             <>
-              <button className="headerControl" type="button" onClick={onStorage} aria-label={t('nav.storage')} title={t('nav.storage')}>
+              <button className="headerControl" type="button" onClick={onStorage} aria-label={t('shell.storageSettings')} title={t('shell.storageSettings')}>
                 <Settings aria-hidden="true" size={17} />
               </button>
-              <span className="sessionIndicator">{username || 'Admin'}</span>
+              <span className="sessionIndicator">{username || t('shell.admin')}</span>
               <button className="headerControl" type="button" onClick={() => void signOut()} aria-label={t('nav.signOut')} title={t('nav.signOut')}>
                 <LogOut aria-hidden="true" size={17} />
               </button>
