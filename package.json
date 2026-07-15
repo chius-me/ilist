@@ -1,6 +1,7 @@
 {
   "name": "ilist",
-  "version": "0.1.0",
+  "version": "0.1.1",
+  "license": "GPL-3.0-only",
   "private": true,
   "type": "module",
   "scripts": {
