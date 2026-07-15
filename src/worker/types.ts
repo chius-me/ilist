@@ -7,6 +7,9 @@ export interface Env {
   CREDENTIAL_MASTER_KEY: string;
   SESSION_SECRET: string;
   SESSION_TTL_SECONDS?: string;
+  MICROSOFT_CLIENT_ID: string;
+  MICROSOFT_CLIENT_SECRET: string;
+  PUBLIC_ORIGIN: string;
 }
 
 export interface ObjectRow {
