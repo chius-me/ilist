@@ -49,6 +49,8 @@ export interface S3UploadPartOptions {
   signal?: AbortSignal;
 }
 
+const MAX_S3_XML_BYTES = 1024 * 1024;
+
 export class S3Error extends Error {
   readonly status: number;
   readonly code: string;
@@ -85,7 +87,7 @@ export class S3Error extends Error {
     );
     let xml: string;
     try {
-      xml = await response.text();
+      xml = await readS3Xml(response);
     } catch {
       return fallback;
     }
@@ -149,7 +151,7 @@ export class S3Client {
       .join('&')}`;
 
     const response = await this.send('GET', url);
-    return parseListObjectsV2Xml(await response.text());
+    return parseListObjectsV2Xml(await readS3Xml(response));
   }
 
   headObject(key: string, options: S3RequestOptions = {}): Promise<Response> {
@@ -173,7 +175,7 @@ export class S3Client {
     if (contentType !== null) headers.set('content-type', contentType);
     headers.set('x-amz-meta-ilist-upload-marker', marker);
     const response = await this.send('POST', `${this.requestUrl(key)}?uploads`, { headers });
-    return parseCreateMultipartUploadResponseXml(await response.text());
+    return parseCreateMultipartUploadResponseXml(await readS3Xml(response));
   }
 
   async uploadPart(
@@ -207,8 +209,11 @@ export class S3Client {
       `<Part><PartNumber>${part.partNumber}</PartNumber><ETag>${escapeXml(part.etag!)}</ETag></Part>`
     ).join('')}</CompleteMultipartUpload>`;
     const url = `${this.requestUrl(key)}?uploadId=${encodeS3Component(uploadId)}`;
-    const response = await this.send('POST', url, { headers: { 'content-type': 'application/xml' }, body });
-    const parsed = parseCompleteMultipartUploadResponseXml(await response.clone().text());
+    const response = await this.send('POST', url, {
+      headers: { 'content-type': 'application/xml', 'if-none-match': '*' },
+      body,
+    });
+    const parsed = parseCompleteMultipartUploadResponseXml(await readS3Xml(response));
     if (parsed.kind === 'error') {
       const { error } = parsed;
       throw new S3Error(
@@ -232,12 +237,17 @@ export class S3Client {
     headers.set('x-amz-copy-source', `/${encodeS3Component(this.bucket)}/${encodeS3Path(sourceKey)}`);
     const response = await this.send('PUT', this.requestUrl(destinationKey), { headers });
 
-    const parsed = parseCopyObjectResponseXml(await response.clone().text());
+    const xml = await readS3Xml(response);
+    const parsed = parseCopyObjectResponseXml(xml);
     if (parsed.kind === 'error') {
       const { error } = parsed;
       throw new S3Error(response.status, error.code, error.message, error.resource, error.requestId);
     }
-    return response;
+    return new Response(xml, {
+      status: response.status,
+      statusText: response.statusText,
+      headers: response.headers,
+    });
   }
 
   deleteObject(key: string, options: S3RequestOptions = {}): Promise<Response> {
@@ -289,6 +299,46 @@ function escapeXml(value: string): string {
     '"': '&quot;',
     "'": '&apos;',
   })[character]!);
+}
+
+async function readS3Xml(response: Response): Promise<string> {
+  const declaredLength = response.headers.get('content-length');
+  if (declaredLength !== null && /^\d+$/.test(declaredLength)) {
+    const length = Number(declaredLength);
+    if (!Number.isSafeInteger(length) || length > MAX_S3_XML_BYTES) {
+      if (response.body) {
+        try { await response.body.cancel(); } catch { /* Preserve the bounded-response error. */ }
+      }
+      throw new S3Error(502, 'S3_RESPONSE_TOO_LARGE', 'S3 XML response exceeded the supported size');
+    }
+  }
+  if (!response.body) return '';
+
+  const reader = response.body.getReader();
+  const chunks: Uint8Array[] = [];
+  let total = 0;
+  try {
+    while (true) {
+      const { done, value } = await reader.read();
+      if (done) break;
+      total += value.byteLength;
+      if (total > MAX_S3_XML_BYTES) {
+        try { await reader.cancel(); } catch { /* Preserve the bounded-response error. */ }
+        throw new S3Error(502, 'S3_RESPONSE_TOO_LARGE', 'S3 XML response exceeded the supported size');
+      }
+      chunks.push(value);
+    }
+  } finally {
+    reader.releaseLock();
+  }
+
+  const bytes = new Uint8Array(total);
+  let offset = 0;
+  for (const chunk of chunks) {
+    bytes.set(chunk, offset);
+    offset += chunk.byteLength;
+  }
+  return new TextDecoder('utf-8', { fatal: true }).decode(bytes);
 }
 
 export type { S3ListedObject, S3ListObjectsResult } from './xml';

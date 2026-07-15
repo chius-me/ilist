@@ -167,6 +167,32 @@ describe('S3Client listings and XML', () => {
     await expect(client.listObjectsV2()).rejects.toThrow('Invalid S3 XML response');
   });
 
+  it('rejects oversized XML from declared and streamed response lengths', async () => {
+    const oversizedStream = () => new ReadableStream<Uint8Array>({
+      start(controller) {
+        controller.enqueue(new Uint8Array(600 * 1024));
+        controller.enqueue(new Uint8Array(600 * 1024));
+        controller.close();
+      },
+    });
+    const fetcher = vi.fn<typeof fetch>()
+      .mockResolvedValueOnce(new Response('<ListBucketResult />', {
+        status: 200,
+        headers: { 'content-length': String(1024 * 1024 + 1) },
+      }))
+      .mockResolvedValueOnce(new Response(oversizedStream(), { status: 200 }));
+    const client = createClient(fetcher);
+
+    await expect(client.listObjectsV2()).rejects.toMatchObject({
+      status: 502,
+      code: 'S3_RESPONSE_TOO_LARGE',
+    });
+    await expect(client.listObjectsV2()).rejects.toMatchObject({
+      status: 502,
+      code: 'S3_RESPONSE_TOO_LARGE',
+    });
+  });
+
   it('parses structured S3 XML errors without exposing raw response bodies', async () => {
     const fetcher = vi.fn<typeof fetch>(async () =>
       new Response(
@@ -371,6 +397,7 @@ describe('S3Client multipart requests', () => {
     expect(seen[2]!.body).toBe(
       '<CompleteMultipartUpload><Part><PartNumber>1</PartNumber><ETag>&quot;etag-1&quot;</ETag></Part><Part><PartNumber>2</PartNumber><ETag>&quot;etag-2&amp;&lt;&quot;</ETag></Part></CompleteMultipartUpload>',
     );
+    expect(seen[2]!.headers.get('if-none-match')).toBe('*');
     for (const request of seen) expect(request.headers.get('authorization')).toContain('AWS4-HMAC-SHA256');
   });
 

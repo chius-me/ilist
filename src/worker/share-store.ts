@@ -28,6 +28,7 @@ function toShare(row: ShareRow): Share {
     targetKind: row.target_kind,
     name: row.name,
     passwordHash: row.password_hash,
+    authRevision: row.auth_revision,
     expiresAt: row.expires_at,
     allowDownload: row.allow_download === 1,
     enabled: row.enabled === 1,
@@ -84,9 +85,15 @@ export async function updateShareRecord(
   const current = await getShareById(db, id);
   if (!current) return null;
   await db.prepare(`UPDATE shares
-    SET password_hash = ?, expires_at = ?, allow_download = ?, enabled = ?, updated_at = ?
+    SET password_hash = ?,
+        auth_revision = auth_revision + ?,
+        expires_at = ?,
+        allow_download = ?,
+        enabled = ?,
+        updated_at = ?
     WHERE id = ?`).bind(
     input.passwordHash === undefined ? current.passwordHash : input.passwordHash,
+    input.passwordHash === undefined ? 0 : 1,
     input.expiresAt === undefined ? current.expiresAt : input.expiresAt,
     input.allowDownload === undefined ? (current.allowDownload ? 1 : 0) : (input.allowDownload ? 1 : 0),
     input.enabled === undefined ? (current.enabled ? 1 : 0) : (input.enabled ? 1 : 0),

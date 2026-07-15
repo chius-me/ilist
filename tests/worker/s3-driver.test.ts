@@ -30,7 +30,7 @@ function response(headers: HeadersInit = {}): Response {
 function client(overrides: Partial<S3DriverClient> = {}): S3DriverClient {
   return {
     listObjectsV2: vi.fn(async () => listResult()),
-    headObject: vi.fn(async () => response()),
+    headObject: vi.fn(async () => { throw new S3Error(404, 'NoSuchKey', 'not found'); }),
     getObject: vi.fn(async () => new Response('content')),
     putObject: vi.fn(async () => response({ etag: '"new"' })),
     copyObject: vi.fn(async () => response()),
@@ -72,8 +72,14 @@ describe('S3Driver', () => {
     const folder = await driver.createFolder(driver.rootId, 'Empty');
     const file = await driver.upload(folder.id, 'video.bin', body, 'application/octet-stream');
 
-    expect(api.putObject).toHaveBeenNthCalledWith(1, 'tenant/root/Empty/', expect.any(ReadableStream), { contentType: 'application/x-directory' });
-    expect(api.putObject).toHaveBeenNthCalledWith(2, 'tenant/root/Empty/video.bin', body, { contentType: 'application/octet-stream' });
+    expect(api.putObject).toHaveBeenNthCalledWith(1, 'tenant/root/Empty/', expect.any(ReadableStream), {
+      contentType: 'application/x-directory',
+      headers: { 'if-none-match': '*' },
+    });
+    expect(api.putObject).toHaveBeenNthCalledWith(2, 'tenant/root/Empty/video.bin', body, {
+      contentType: 'application/octet-stream',
+      headers: { 'if-none-match': '*' },
+    });
     expect(file.name).toBe('video.bin');
   });
 
@@ -113,6 +119,14 @@ describe('S3Driver', () => {
     const renamed = await driver.rename(driver.itemId('tenant/root/old.txt', 'file'), 'new.txt');
 
     expect(order).toEqual(['copy:tenant/root/old.txt:tenant/root/new.txt', 'delete:tenant/root/old.txt']);
+    expect(api.copyObject).toHaveBeenCalledWith(
+      'tenant/root/old.txt',
+      'tenant/root/new.txt',
+      { headers: expect.any(Headers) },
+    );
+    const copyHeaders = new Headers(vi.mocked(api.copyObject).mock.calls[0]![2]?.headers);
+    expect(copyHeaders.get('if-none-match')).toBe('*');
+    expect(copyHeaders.get('cf-copy-destination-if-none-match')).toBe('*');
     expect(renamed.name).toBe('new.txt');
   });
 
@@ -123,6 +137,27 @@ describe('S3Driver', () => {
     const destination = driver.itemId('tenant/root/destination/', 'folder');
 
     await expect(driver.move(source, destination)).rejects.toThrow('copy failed');
+    expect(api.deleteObject).not.toHaveBeenCalled();
+  });
+
+  it('rejects an existing destination before rename and maps a concurrent copy conflict', async () => {
+    const destination = 'tenant/root/new.txt';
+    const api = client({
+      headObject: vi.fn(async (key) => {
+        if (key === destination) return response();
+        throw new S3Error(404, 'NoSuchKey', 'not found');
+      }),
+    });
+    const driver = new S3Driver(mount, api);
+    const source = driver.itemId('tenant/root/old.txt', 'file');
+
+    await expect(driver.rename(source, 'new.txt')).rejects.toMatchObject({ code: 'ENTRY_NAME_CONFLICT' });
+    expect(api.copyObject).not.toHaveBeenCalled();
+    expect(api.deleteObject).not.toHaveBeenCalled();
+
+    vi.mocked(api.headObject).mockRejectedValue(new S3Error(404, 'NoSuchKey', 'not found'));
+    vi.mocked(api.copyObject).mockRejectedValue(new S3Error(412, 'PreconditionFailed', 'destination appeared'));
+    await expect(driver.rename(source, 'new.txt')).rejects.toMatchObject({ code: 'ENTRY_NAME_CONFLICT' });
     expect(api.deleteObject).not.toHaveBeenCalled();
   });
 
@@ -139,10 +174,12 @@ describe('S3Driver', () => {
 
   it('preserves every folder source when a later recursive copy fails', async () => {
     const api = client({
-      listObjectsV2: vi.fn(async () => listResult({ objects: [
-        { key: 'tenant/root/source/a.txt', lastModified: null, etag: null, size: 1, storageClass: null },
-        { key: 'tenant/root/source/b.txt', lastModified: null, etag: null, size: 1, storageClass: null },
-      ] })),
+      listObjectsV2: vi.fn(async (options = {}) => options.prefix === 'tenant/root/source/'
+        ? listResult({ objects: [
+          { key: 'tenant/root/source/a.txt', lastModified: null, etag: null, size: 1, storageClass: null },
+          { key: 'tenant/root/source/b.txt', lastModified: null, etag: null, size: 1, storageClass: null },
+        ] })
+        : listResult()),
       copyObject: vi.fn()
         .mockResolvedValueOnce(response())
         .mockRejectedValueOnce(new S3Error(500, 'InternalError', 'second copy failed')),
@@ -159,10 +196,12 @@ describe('S3Driver', () => {
   it('moves folders recursively and deletes sources only after every copy succeeds', async () => {
     const order: string[] = [];
     const api = client({
-      listObjectsV2: vi.fn(async () => listResult({ objects: [
-        { key: 'tenant/root/source/', lastModified: null, etag: null, size: 0, storageClass: null },
-        { key: 'tenant/root/source/a.txt', lastModified: null, etag: null, size: 1, storageClass: null },
-      ] })),
+      listObjectsV2: vi.fn(async (options = {}) => options.prefix === 'tenant/root/source/'
+        ? listResult({ objects: [
+          { key: 'tenant/root/source/', lastModified: null, etag: null, size: 0, storageClass: null },
+          { key: 'tenant/root/source/a.txt', lastModified: null, etag: null, size: 1, storageClass: null },
+        ] })
+        : listResult()),
       copyObject: vi.fn(async (source, destination) => { order.push(`copy:${source}:${destination}`); return response(); }),
       deleteObject: vi.fn(async (key) => { order.push(`delete:${key}`); return response(); }),
     });
@@ -250,6 +289,7 @@ describe('S3Driver', () => {
         'application/octet-stream',
         marker,
       );
+      vi.mocked(api.headObject).mockClear();
 
       await expect(adapter.uploadPart({
         state: session.state,

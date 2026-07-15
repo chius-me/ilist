@@ -4,8 +4,9 @@ import type { Env } from './types';
 const encoder = new TextEncoder();
 
 interface AuthorizationPayload {
-  v: 1;
+  v: 2;
   shareId: string;
+  authRevision: number;
   exp: number;
 }
 
@@ -63,8 +64,18 @@ function cookiePath(token: string): string {
   return `/s/${encodeURIComponent(token)}`;
 }
 
-export async function createShareAuthorization(env: Env, shareId: string, expiresAt: number): Promise<string> {
-  const encoded = bytesToBase64Url(encoder.encode(JSON.stringify({ v: 1, shareId, exp: expiresAt })));
+export async function createShareAuthorization(
+  env: Env,
+  shareId: string,
+  authRevision: number,
+  expiresAt: number,
+): Promise<string> {
+  const encoded = bytesToBase64Url(encoder.encode(JSON.stringify({
+    v: 2,
+    shareId,
+    authRevision,
+    exp: expiresAt,
+  })));
   return `${encoded}.${bytesToBase64Url(await signature(env, encoded))}`;
 }
 
@@ -72,6 +83,7 @@ export async function hasShareAuthorization(
   env: Env,
   request: Request,
   shareId: string,
+  authRevision: number,
   token: string,
   now = Math.floor(Date.now() / 1000),
 ): Promise<boolean> {
@@ -82,8 +94,10 @@ export async function hasShareAuthorization(
     if (!encoded || !encodedSignature || extra !== undefined) return false;
     if (!timingSafeEqual(await signature(env, encoded), base64UrlToBytes(encodedSignature))) return false;
     const payload = JSON.parse(new TextDecoder().decode(base64UrlToBytes(encoded))) as AuthorizationPayload;
-    return payload.v === 1
+    return payload.v === 2
       && payload.shareId === shareId
+      && Number.isSafeInteger(payload.authRevision)
+      && payload.authRevision === authRevision
       && Number.isSafeInteger(payload.exp)
       && payload.exp > now;
   } catch {

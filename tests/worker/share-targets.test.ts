@@ -45,6 +45,7 @@ function shareFor(mountId: string, providerItemId: string, targetKind: 'file' | 
     targetKind,
     name,
     passwordHash: null,
+    authRevision: 1,
     expiresAt: null,
     allowDownload: false,
     enabled: true,

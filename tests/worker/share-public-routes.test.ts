@@ -161,6 +161,38 @@ describe('public share routes', () => {
     expect(authorized.status).toBe(200);
   });
 
+  it('revokes existing share authorization when the password changes', async () => {
+    const { fileId } = await nativeTree();
+    const { token, id } = await createShare(fileId, { password: 'old-password' });
+    const unlocked = await SELF.fetch(`${origin}/s/${token}/auth`, {
+      method: 'POST',
+      headers: { 'CF-Connecting-IP': '203.0.113.45', origin, 'content-type': 'application/json' },
+      body: JSON.stringify({ password: 'old-password' }),
+    });
+    expect(unlocked.status).toBe(200);
+    const oldCookie = unlocked.headers.get('set-cookie')!.split(';')[0];
+    expect((await SELF.fetch(`${origin}/s/${token}/api`, { headers: { cookie: oldCookie } })).status).toBe(200);
+
+    const adminCookie = await login();
+    const updated = await SELF.fetch(`${origin}/api/admin/shares/${id}`, {
+      method: 'PATCH',
+      headers: { cookie: adminCookie, origin, 'content-type': 'application/json' },
+      body: JSON.stringify({ password: 'new-password' }),
+    });
+    expect(updated.status).toBe(200);
+
+    const revoked = await SELF.fetch(`${origin}/s/${token}/api`, { headers: { cookie: oldCookie } });
+    expect(revoked.status).toBe(401);
+    expect(await revoked.json()).toMatchObject({ error: { code: 'SHARE_PASSWORD_REQUIRED' } });
+
+    const renewed = await SELF.fetch(`${origin}/s/${token}/auth`, {
+      method: 'POST',
+      headers: { 'CF-Connecting-IP': '203.0.113.46', origin, 'content-type': 'application/json' },
+      body: JSON.stringify({ password: 'new-password' }),
+    });
+    expect(renewed.status).toBe(200);
+  });
+
   it('upgrades only a successfully verified legacy share password hash', async () => {
     const { fileId } = await nativeTree();
     const { token, id } = await createShare(fileId, { password: 'temporary-password' });
@@ -183,9 +215,10 @@ describe('public share routes', () => {
 
     expect(unlocked.status).toBe(200);
     expect(verifiedHash).toBe(LEGACY_SHARE_PASSWORD_HASH);
-    const upgraded = await workerEnv().DB.prepare('SELECT password_hash FROM shares WHERE id = ?')
-      .bind(id).first<{ password_hash: string }>();
+    const upgraded = await workerEnv().DB.prepare('SELECT password_hash, auth_revision FROM shares WHERE id = ?')
+      .bind(id).first<{ password_hash: string; auth_revision: number }>();
     expect(upgraded?.password_hash).toMatch(/^pbkdf2-sha256:600000:[0-9a-f]{32}:[0-9a-f]{64}$/);
+    expect(upgraded?.auth_revision).toBe(1);
   });
 
   it('never rewrites a legacy share password hash after failed authentication', async () => {

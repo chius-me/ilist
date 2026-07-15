@@ -1,6 +1,6 @@
 {
   "name": "ilist",
-  "version": "0.1.7",
+  "version": "0.1.8",
   "license": "GPL-3.0-only",
   "private": true,
   "type": "module",
@@ -15,13 +15,14 @@
     "test:ui": "vitest run --config vitest.ui.config.ts",
     "test:scripts": "vitest run --config vitest.scripts.config.ts",
     "test:e2e": "playwright test",
+    "test:e2e:ci": "playwright test --grep-invert @visual",
     "test:visual": "playwright test --grep @visual",
     "check": "tsc --noEmit && npm run build && npm run test",
     "migrate:objects": "node scripts/migrate-objects.mjs",
     "hash-password": "node scripts/hash-password.mjs"
   },
   "dependencies": {
-    "fast-xml-parser": "^5.10.0",
+    "fast-xml-parser": "^5.10.1",
     "lucide-react": "^0.468.0",
     "react": "^19.1.1",
     "react-dom": "^19.1.1"

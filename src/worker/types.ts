@@ -66,6 +66,7 @@ export interface ShareRow {
   target_kind: EntryKind;
   name: string;
   password_hash: string | null;
+  auth_revision: number;
   expires_at: number | null;
   allow_download: number;
   enabled: number;
@@ -81,6 +82,7 @@ export interface Share {
   targetKind: EntryKind;
   name: string;
   passwordHash: string | null;
+  authRevision: number;
   expiresAt: number | null;
   allowDownload: boolean;
   enabled: boolean;

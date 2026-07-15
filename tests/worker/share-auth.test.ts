@@ -15,7 +15,7 @@ function workerEnv(): Env {
 describe('share password authorization', () => {
   it('issues an HttpOnly token-scoped cookie and accepts it for the same share', async () => {
     const expiresAt = 2_000_000_000;
-    const authorization = await createShareAuthorization(workerEnv(), 'share-a', expiresAt);
+    const authorization = await createShareAuthorization(workerEnv(), 'share-a', 1, expiresAt);
     const request = new Request('https://ilist.example/s/public-token');
     const header = await shareAuthorizationCookie(request, 'public-token', authorization, expiresAt, 1_900_000_000);
 
@@ -24,11 +24,11 @@ describe('share password authorization', () => {
     expect(header).toContain('SameSite=Lax');
     expect(header).toContain('Secure');
     const cookie = header.split(';')[0];
-    await expect(hasShareAuthorization(workerEnv(), new Request(request, { headers: { cookie } }), 'share-a', 'public-token', 1_900_000_000)).resolves.toBe(true);
+    await expect(hasShareAuthorization(workerEnv(), new Request(request, { headers: { cookie } }), 'share-a', 1, 'public-token', 1_900_000_000)).resolves.toBe(true);
   });
 
   it('rejects expired, wrong-share, wrong-token, and tampered authorization', async () => {
-    const authorization = await createShareAuthorization(workerEnv(), 'share-a', 2_000_000_000);
+    const authorization = await createShareAuthorization(workerEnv(), 'share-a', 1, 2_000_000_000);
     const header = await shareAuthorizationCookie(
       new Request('https://ilist.example/s/public-token'),
       'public-token',
@@ -38,18 +38,19 @@ describe('share password authorization', () => {
     );
     const cookie = header.split(';')[0];
 
-    await expect(hasShareAuthorization(workerEnv(), new Request('https://ilist.example/s/public-token', { headers: { cookie } }), 'share-a', 'public-token', 2_000_000_001)).resolves.toBe(false);
-    await expect(hasShareAuthorization(workerEnv(), new Request('https://ilist.example/s/public-token', { headers: { cookie } }), 'share-b', 'public-token', 1_900_000_000)).resolves.toBe(false);
-    await expect(hasShareAuthorization(workerEnv(), new Request('https://ilist.example/s/other-token', { headers: { cookie } }), 'share-a', 'other-token', 1_900_000_000)).resolves.toBe(false);
+    await expect(hasShareAuthorization(workerEnv(), new Request('https://ilist.example/s/public-token', { headers: { cookie } }), 'share-a', 1, 'public-token', 2_000_000_001)).resolves.toBe(false);
+    await expect(hasShareAuthorization(workerEnv(), new Request('https://ilist.example/s/public-token', { headers: { cookie } }), 'share-b', 1, 'public-token', 1_900_000_000)).resolves.toBe(false);
+    await expect(hasShareAuthorization(workerEnv(), new Request('https://ilist.example/s/public-token', { headers: { cookie } }), 'share-a', 2, 'public-token', 1_900_000_000)).resolves.toBe(false);
+    await expect(hasShareAuthorization(workerEnv(), new Request('https://ilist.example/s/other-token', { headers: { cookie } }), 'share-a', 1, 'other-token', 1_900_000_000)).resolves.toBe(false);
 
     const [name, value] = cookie.split('=');
     const tampered = `${name}=${value.slice(0, -1)}${value.endsWith('A') ? 'B' : 'A'}`;
-    await expect(hasShareAuthorization(workerEnv(), new Request('https://ilist.example/s/public-token', { headers: { cookie: tampered } }), 'share-a', 'public-token', 1_900_000_000)).resolves.toBe(false);
+    await expect(hasShareAuthorization(workerEnv(), new Request('https://ilist.example/s/public-token', { headers: { cookie: tampered } }), 'share-a', 1, 'public-token', 1_900_000_000)).resolves.toBe(false);
   });
 
   it('uses separate cookie names per token and clears the matching path', async () => {
     const request = new Request('http://localhost:8787/s/token-a');
-    const authorization = await createShareAuthorization(workerEnv(), 'share-a', 2_000_000_000);
+    const authorization = await createShareAuthorization(workerEnv(), 'share-a', 1, 2_000_000_000);
     const first = await shareAuthorizationCookie(request, 'token-a', authorization, 2_000_000_000, 1_900_000_000);
     const second = await shareAuthorizationCookie(request, 'token-b', authorization, 2_000_000_000, 1_900_000_000);
     const cleared = await clearShareAuthorizationCookie(request, 'token-a');

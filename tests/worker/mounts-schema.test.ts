@@ -48,6 +48,8 @@ describe('mounts schema', () => {
   });
 
   it('preserves upgraded mount visibility, dependent rows, constraints, and indexes', async () => {
+    // Recreate the schema state that existed immediately before migration 0016.
+    await db().prepare('ALTER TABLE shares DROP COLUMN auth_revision').run();
     const legacyPublicDefault = mountsPrivateDefault.replace(
       'is_public INTEGER NOT NULL DEFAULT 0 CHECK',
       'is_public INTEGER NOT NULL DEFAULT 1 CHECK',

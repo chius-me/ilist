@@ -36,6 +36,7 @@ describe('share store', () => {
       targetKind: 'file',
       name: 'private.txt',
       passwordHash: null,
+      authRevision: 1,
       expiresAt: null,
       allowDownload: false,
       enabled: true,
@@ -71,6 +72,7 @@ describe('share store', () => {
       id: created.id,
       tokenHash,
       passwordHash,
+      authRevision: 2,
       expiresAt: 2_000_000_000,
       allowDownload: false,
       enabled: false,
@@ -79,6 +81,29 @@ describe('share store', () => {
     await expect(deleteShareRecord(workerEnv().DB, created.id)).resolves.toBe(true);
     await expect(getShareById(workerEnv().DB, created.id)).resolves.toBeNull();
     await expect(deleteShareRecord(workerEnv().DB, created.id)).resolves.toBe(false);
+  });
+
+  it('revises password authorization only when the password policy changes', async () => {
+    const created = await createShareRecord(workerEnv().DB, {
+      tokenHash: await sha256Hex('revision-token'),
+      mountId: 'native-r2',
+      providerItemId: 'folder-id',
+      targetKind: 'folder',
+      name: 'Folder',
+      passwordHash: null,
+      expiresAt: null,
+      allowDownload: true,
+      enabled: true,
+    });
+
+    const policyOnly = await updateShareRecord(workerEnv().DB, created.id, { allowDownload: false });
+    expect(policyOnly?.authRevision).toBe(1);
+    const passwordChanged = await updateShareRecord(workerEnv().DB, created.id, {
+      passwordHash: await hashPassword('new-password'),
+    });
+    expect(passwordChanged?.authRevision).toBe(2);
+    const passwordRemoved = await updateShareRecord(workerEnv().DB, created.id, { passwordHash: null });
+    expect(passwordRemoved?.authRevision).toBe(3);
   });
 
   it('cascades shares when their mount is deleted', async () => {
