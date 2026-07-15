@@ -28,6 +28,8 @@ describe('explorer operations', () => {
       if (url.includes('/api/admin/me')) return new Response(JSON.stringify({ ok: true, data: { username: 'admin' } }));
       if (url.includes('/api/fs/list')) return new Response(JSON.stringify(root));
       if (url.includes('/api/admin/entries/visibility')) return new Response(JSON.stringify({ ok: true, data: { succeeded: ['report'], failed: [] } }));
+      if (url.includes('/api/admin/entries/report')) return Response.json({ ok: true, data: entry('report', 'renamed.pdf', 'file') });
+      if (url.includes('/api/admin/folders')) return Response.json({ ok: true, data: entry('folder-new', 'New folder', 'folder') });
       throw new Error(`Unexpected fetch: ${url}`);
     }));
   });
@@ -50,6 +52,33 @@ describe('explorer operations', () => {
     fireEvent.click(screen.getByRole('menuitem', { name: 'Delete' }));
     expect(screen.getByRole('dialog', { name: 'Delete report.pdf' })).toBeVisible();
     expect(confirmSpy).not.toHaveBeenCalled();
+  });
+
+  it('announces successful rename, folder creation, and property updates', async () => {
+    render(<App />);
+    fireEvent.click(await screen.findByRole('button', { name: 'Actions for report.pdf' }));
+    fireEvent.click(screen.getByRole('menuitem', { name: 'Rename' }));
+    fireEvent.change(screen.getByLabelText('Name'), { target: { value: 'renamed.pdf' } });
+    fireEvent.click(screen.getByRole('button', { name: 'Save' }));
+    expect(await screen.findByText('Renamed successfully.')).toBeVisible();
+
+    fireEvent.click(screen.getByRole('button', { name: 'Create folder' }));
+    fireEvent.change(screen.getByLabelText('Name'), { target: { value: 'New folder' } });
+    fireEvent.click(screen.getByRole('button', { name: 'Save' }));
+    expect(await screen.findByText('Folder created.')).toBeVisible();
+
+    fireEvent.click(screen.getByRole('button', { name: 'Actions for report.pdf' }));
+    fireEvent.click(screen.getByRole('menuitem', { name: 'Properties' }));
+    fireEvent.click(screen.getByRole('button', { name: 'Save' }));
+    expect(await screen.findByText('Properties saved.')).toBeVisible();
+  });
+
+  it('announces clipboard failures', async () => {
+    Object.defineProperty(navigator, 'clipboard', { configurable: true, value: { writeText: vi.fn().mockRejectedValue(new Error('denied')) } });
+    render(<App />);
+    fireEvent.click(await screen.findByRole('button', { name: 'Actions for report.pdf' }));
+    fireEvent.click(screen.getByRole('menuitem', { name: 'Copy link' }));
+    expect(await screen.findByText('Unable to copy the link.')).toBeVisible();
   });
 
   it('keeps the virtual root read-only for administrators', async () => {

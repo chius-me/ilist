@@ -1,6 +1,7 @@
-import { ArrowDownAZ, Grid2X2, List, LogIn, Plus, Search, Upload } from 'lucide-react';
+import { ArrowDownAZ, Grid2X2, List, Plus, Search, Upload } from 'lucide-react';
 import { useRef, type ChangeEvent } from 'react';
 import type { SessionStatus } from '../../hooks/useSession';
+import { useI18n } from '../../i18n/I18nProvider';
 
 export type ExplorerView = 'list' | 'grid';
 export type ExplorerSortField = 'name' | 'size' | 'updated';
@@ -17,7 +18,6 @@ interface ExplorerToolbarProps {
   onQuery: (query: string) => void;
   onSort: (sort: ExplorerSort) => void;
   onView: (view: ExplorerView) => void;
-  onLogin: () => void;
   onUpload: (files: File[]) => void;
   onCreateFolder: () => void;
 }
@@ -33,10 +33,10 @@ export function ExplorerToolbar({
   onQuery,
   onSort,
   onView,
-  onLogin,
   onUpload,
   onCreateFolder,
 }: ExplorerToolbarProps) {
+  const { t } = useI18n();
   const admin = sessionStatus === 'admin';
   const uploadInput = useRef<HTMLInputElement>(null);
 
@@ -45,36 +45,36 @@ export function ExplorerToolbar({
   }
 
   return (
-    <section className="explorerToolbar" aria-label="File controls">
+    <section className="explorerToolbar" aria-label={t('toolbar.controls')}>
       <label className="searchControl">
         <Search aria-hidden="true" size={17} />
-        <span className="srOnly">Search this folder</span>
-        <input value={query} onChange={(event) => onQuery(event.target.value)} placeholder="Search this folder" />
+        <span className="srOnly">{t('toolbar.search')}</span>
+        <input value={query} onChange={(event) => onQuery(event.target.value)} placeholder={t('toolbar.search')} />
       </label>
       <div className="toolbarActions">
         <label className="sortControl">
-          <span className="srOnly">Sort files</span>
-          <select value={sort.field} onChange={updateSort} aria-label="Sort files">
-            <option value="name">Name</option>
-            <option value="updated">Modified</option>
-            <option value="size">Size</option>
+          <span className="srOnly">{t('toolbar.sort')}</span>
+          <select value={sort.field} onChange={updateSort} aria-label={t('toolbar.sort')}>
+            <option value="name">{t('toolbar.name')}</option>
+            <option value="updated">{t('toolbar.modified')}</option>
+            <option value="size">{t('toolbar.size')}</option>
           </select>
         </label>
         <button
           className="iconButton"
           type="button"
-          title={sort.order === 'asc' ? 'Ascending' : 'Descending'}
-          aria-label={sort.order === 'asc' ? 'Sort ascending' : 'Sort descending'}
+          title={sort.order === 'asc' ? t('toolbar.ascending') : t('toolbar.descending')}
+          aria-label={sort.order === 'asc' ? t('toolbar.sortAscending') : t('toolbar.sortDescending')}
           onClick={() => onSort({ ...sort, order: sort.order === 'asc' ? 'desc' : 'asc' })}
         >
           <ArrowDownAZ aria-hidden="true" size={17} className={sort.order === 'desc' ? 'sortDescending' : undefined} />
         </button>
-        <div className="viewToggle" role="group" aria-label="View mode">
+        <div className="viewToggle" role="group" aria-label={t('toolbar.viewMode')}>
           <button
             className={view === 'list' ? 'active' : undefined}
             type="button"
-            title="List view"
-            aria-label="List view"
+            title={t('toolbar.list')}
+            aria-label={t('toolbar.list')}
             aria-pressed={view === 'list'}
             onClick={() => onView('list')}
           >
@@ -83,8 +83,8 @@ export function ExplorerToolbar({
           <button
             className={view === 'grid' ? 'active' : undefined}
             type="button"
-            title="Grid view"
-            aria-label="Grid view"
+            title={t('toolbar.grid')}
+            aria-label={t('toolbar.grid')}
             aria-pressed={view === 'grid'}
             onClick={() => onView('grid')}
           >
@@ -98,20 +98,16 @@ export function ExplorerToolbar({
                 onUpload(Array.from(event.target.files ?? []));
                 event.target.value = '';
               }} />
-              <button className="iconButton" type="button" title="Upload files" aria-label="Upload files" onClick={() => uploadInput.current?.click()}>
+              <button className="iconButton" type="button" title={t('toolbar.upload')} aria-label={t('toolbar.upload')} onClick={() => uploadInput.current?.click()}>
                 <Upload aria-hidden="true" size={17} />
               </button>
             </> : null}
-            {canCreateFolder ? <button className="iconButton" type="button" title="Create folder" aria-label="Create folder" onClick={onCreateFolder}>
+            {canCreateFolder ? <button className="iconButton" type="button" title={t('toolbar.createFolder')} aria-label={t('toolbar.createFolder')} onClick={onCreateFolder}>
               <Plus aria-hidden="true" size={17} />
             </button> : null}
-            {selectionCount > 0 ? <span className="selectionCount">{selectionCount} selected</span> : null}
+            {selectionCount > 0 ? <span className="selectionCount">{t('selection.count', { count: selectionCount })}</span> : null}
           </>
-        ) : (
-          <button className="iconButton" type="button" title="Admin sign in" aria-label="Admin sign in" onClick={onLogin}>
-            <LogIn aria-hidden="true" size={17} />
-          </button>
-        )}
+        ) : null}
       </div>
     </section>
   );

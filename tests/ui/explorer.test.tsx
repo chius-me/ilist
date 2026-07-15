@@ -75,8 +75,47 @@ describe('ExplorerApp', () => {
     expect(screen.queryByText('listed size')).not.toBeInTheDocument();
     fireEvent.click(screen.getByRole('button', { name: /README.txt/ }));
     expect(new URL(location.href).searchParams.get('preview')).toBe('readme-file');
+    fireEvent.click(screen.getByRole('button', { name: 'Close preview' }));
     fireEvent.click(screen.getByRole('button', { name: /Docs/ }));
     await waitFor(() => expect(location.pathname).toBe('/Docs'));
+  });
+
+  it('orders path, controls, and collection and keeps actions separate', async () => {
+    const reportRoot = {
+      ...root,
+      data: {
+        ...root.data,
+        items: [{
+          ...root.data.items[1],
+          id: 'report-file',
+          name: 'report.pdf',
+          contentType: 'application/pdf',
+        }],
+      },
+    };
+    vi.stubGlobal('fetch', vi.fn(async (input: RequestInfo | URL) => {
+      const url = String(input);
+      if (url.includes('/api/admin/me')) return new Response(JSON.stringify({ ok: true, data: { username: 'admin' } }));
+      if (url.includes('/api/fs/list')) return new Response(JSON.stringify(reportRoot));
+      throw new Error(`Unexpected fetch: ${url}`);
+    }));
+
+    render(<App />);
+    const path = await screen.findByRole('navigation', { name: 'Path' });
+    const controls = screen.getByRole('region', { name: 'File controls' });
+    const files = screen.getByRole('list', { name: 'Files and folders' });
+    expect(path.compareDocumentPosition(controls) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+    expect(controls.compareDocumentPosition(files) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+    const open = screen.getByRole('button', { name: 'Open report.pdf' });
+    expect(open).not.toContainElement(screen.getByRole('button', { name: 'Actions for report.pdf' }));
+  });
+
+  it('persists view changes only in versioned preferences', async () => {
+    render(<App />);
+    fireEvent.click(await screen.findByRole('button', { name: 'Grid view' }));
+
+    await waitFor(() => expect(JSON.parse(localStorage.getItem('ilist.ui.preferences')!)).toMatchObject({ defaultView: 'grid' }));
+    expect(localStorage.getItem('ilist.explorer.view')).toBeNull();
   });
 
   it('uses a root mount path for navigation and child names below the mount', async () => {

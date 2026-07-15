@@ -1,0 +1,47 @@
+@media (max-width: 900px) {
+  .adminLayout { grid-template-columns: 180px minmax(0, 1fr); gap: 20px; }
+  .mountTable thead th:first-child { width: 27%; }
+  .mountIdentity small { display: block; }
+}
+
+@media (max-width: 760px) {
+  .adminLayout { display: block; width: 100%; }
+  .adminContent { padding: 12px 14px 40px; }
+  .adminMenuButton { display: inline-flex; margin: 12px 14px 0; }
+  .adminSidebar { position: fixed; z-index: var(--layer-overlay); top: 56px; bottom: 0; left: 0; width: min(280px, calc(100vw - 48px)); transform: translateX(-105%); border-right: 1px solid var(--color-border-strong); background: var(--color-surface-raised); padding: 18px 14px; box-shadow: var(--shadow-raised); transition: transform var(--transition); }
+  .adminDrawerOpen .adminSidebar { transform: translateX(0); }
+  .adminSidebar nav { position: static; }
+  .adminDrawerScrim { position: fixed; z-index: calc(var(--layer-overlay) - 1); inset: 56px 0 0; display: block; border: 0; background: var(--color-scrim); }
+  .adminPageHeader { align-items: flex-start; min-height: 0; padding-bottom: 14px; }
+  .adminPageHeader h1 { font-size: 20px; }
+  .preferencesForm > label { grid-template-columns: 1fr; gap: 10px; padding: 16px 4px; }
+
+  .mountTableWrap { overflow: visible; }
+  .mountTable, .mountTable tbody, .mountTable tr, .mountTable th, .mountTable td { display: block; width: 100%; }
+  .mountTable { table-layout: auto; }
+  .mountTable thead { position: absolute; width: 1px; height: 1px; overflow: hidden; clip: rect(0, 0, 0, 0); white-space: nowrap; }
+  .mountTable tr { position: relative; border-bottom: 1px solid var(--color-border); padding: 14px 44px 14px 0; }
+  .mountTable tbody th, .mountTable tbody td { display: grid; grid-template-columns: 104px minmax(0, 1fr); align-items: baseline; height: auto; min-height: 30px; border: 0; padding: 4px 0; font-size: 13px; text-align: left; }
+  .mountTable tbody th::before, .mountTable tbody td::before { color: var(--color-muted); content: attr(data-label); font-size: 11px; font-weight: 700; }
+  .mountIdentity { align-items: flex-start; }
+  .mountActionCell { position: absolute; top: 12px; right: 0; display: block !important; width: 36px !important; padding: 0 !important; }
+  .mountActionCell::before { display: none; }
+  .mountActionMenu > div { position: fixed; top: auto; right: 12px; bottom: 12px; left: 12px; min-width: 0; padding: 6px; }
+  .mountActionMenu button { min-height: 44px; }
+
+  .previewBackdrop { padding: 0; }
+  .previewOverlay { width: 100%; height: 100dvh; border: 0; border-radius: 0; }
+  .uploadPanel { right: 0; bottom: 0; width: 100%; border-right: 0; border-bottom: 0; border-left: 0; border-radius: var(--radius-panel) var(--radius-panel) 0 0; }
+  .uploadTasks { max-height: min(52vh, 400px); }
+  .operationDialog, .loginDialog { align-self: end; width: 100%; max-height: calc(100dvh - 16px); overflow-y: auto; border-radius: var(--radius-panel) var(--radius-panel) 0 0; }
+  .dialogBackdrop { align-items: end; padding: 16px 0 0; }
+  .mountFormGrid { grid-template-columns: 1fr; }
+  .mountDialog { align-self: end; width: 100%; max-height: calc(100dvh - 8px); border-radius: var(--radius-panel) var(--radius-panel) 0 0; }
+}
+
+@media (max-width: 480px) {
+  .adminPageHeader { align-items: stretch; flex-direction: column; }
+  .adminPageHeader .button { align-self: flex-start; }
+  .mountTable tbody th, .mountTable tbody td { grid-template-columns: 90px minmax(0, 1fr); }
+  .mountSwitches { align-items: flex-start; flex-direction: column; gap: 10px; }
+}
