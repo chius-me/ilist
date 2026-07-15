@@ -170,7 +170,7 @@ npm run dev
 - 单个管理员；不支持注册或多用户权限模型
 - 仅支持 OneDrive Personal；暂不支持工作和学校租户
 - 不支持 Google Drive、WebDAV、FTP、SFTP、SMB 或本地文件系统驱动
-- 上传使用一个不可恢复的 Worker 请求，并受 Cloudflare 请求体限制
+- 上传使用单个不可续传的 Worker 请求，并受 Cloudflare 请求体限制
 - 暂不支持 multipart S3 上传或 OneDrive 上传会话
 - 不支持跨挂载复制或移动
 - 不支持离线下载、归档解压、媒体转码或后台任务系统
@@ -211,7 +211,7 @@ docs/                         Setup and implementation documentation
 ## 路线图
 
 - 工作和学校 Microsoft 账户
-- 可恢复及 multipart 上传
+- 可续传上传和 multipart 上传
 - 跨挂载复制和移动
 - 更多存储驱动和后台操作
 
