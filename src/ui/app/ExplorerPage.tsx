@@ -3,7 +3,6 @@ import { useCallback, useEffect, useMemo, useRef, useState, type DragEvent } fro
 import { createFolder, deleteEntries, entryPath, getEntry, moveEntries, patchEntry, setVisibility } from '../api/entries';
 import { ApiError } from '../api/client';
 import { ToastRegion, type ToastMessage, type ToastTone } from '../components/ToastRegion';
-import { Breadcrumbs } from '../features/explorer/Breadcrumbs';
 import { EmptyState } from '../features/explorer/EmptyState';
 import { entryActions, EntryActionMenu, type EntryActionId } from '../features/explorer/EntryActionMenu';
 import { ExplorerCollection } from '../features/explorer/ExplorerCollection';
@@ -237,17 +236,20 @@ export function ExplorerPage({
     <>
       <main className="explorerPage" id="file-explorer">
         <div className="explorerBrowser">
-          {directory.data ? <Breadcrumbs items={directory.data.breadcrumbs} onOpen={onOpenPath} /> : <div className="breadcrumbPlaceholder" aria-hidden="true" />}
           <div className="explorerToolbarSlot">
             {admin && selectedEntries.length > 0 ? <SelectionToolbar count={selectedEntries.length} pending={operationPending} onMove={() => setDialog({ type: 'move', entries: selectedEntries })} onPublish={() => void runBatch(() => setVisibility(selectedEntries.map((entry) => entry.id), true))} onHide={() => void runBatch(() => setVisibility(selectedEntries.map((entry) => entry.id), false))} onDelete={() => setDialog({ type: 'delete', entries: selectedEntries })} onClear={selection.clear} /> : <ExplorerToolbar
+              breadcrumbs={directory.data?.breadcrumbs ?? []}
               query={query}
               sort={sort}
               view={view}
+              refreshing={directory.loading}
               sessionStatus={session.status}
               selectionCount={selectedEntries.length}
               canUpload={canUpload}
               canCreateFolder={canCreateFolder}
               onQuery={setQuery}
+              onOpenPath={onOpenPath}
+              onRefresh={directory.refresh}
               onSort={setSort}
               onView={(nextView) => updatePreferences({ defaultView: nextView })}
               onUpload={enqueueFiles}
@@ -255,7 +257,6 @@ export function ExplorerPage({
             />}
           </div>
           <section className={`explorerContent${dragOver ? ' isDragOver' : ''}`} id="file-list" tabIndex={-1} aria-label={previewId ? t('explorer.filesWithPreview', { id: previewId }) : t('nav.files')} onDragEnter={onDragEnter} onDragOver={onDragOver} onDragLeave={onDragLeave} onDrop={onDrop}>
-            <div className="directoryCommands"><button className="iconButton" type="button" onClick={directory.refresh} disabled={directory.loading} aria-label={t('action.refresh')} title={t('action.refresh')}><RefreshCw aria-hidden="true" size={16} /></button></div>
             {directory.error && directory.data ? <div className="retryBanner" role="alert"><AlertCircle aria-hidden="true" size={18} /><span>{directoryErrorHint(directory.error, t)}</span><button type="button" onClick={directory.refresh}><RefreshCw aria-hidden="true" size={15} />{t('action.retry')}</button></div> : null}
             {directory.loading && !directory.data ? <LoadingCollection view={view} label={t('state.loadingFiles')} /> : null}
             {directory.error && !directory.data ? <div className="errorState" role="alert"><AlertCircle aria-hidden="true" size={32} /><strong>{directoryErrorTitle(directory.error, t)}</strong><span>{directoryErrorHint(directory.error, t)}</span><button className="button" type="button" onClick={directory.refresh}><RefreshCw aria-hidden="true" size={16} />{t('action.retry')}</button></div> : null}
