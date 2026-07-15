@@ -2,7 +2,7 @@
 
 ## Status
 
-DONE - implementation, unit/integration validation, parent browser verification, baseline inspection, and parent re-review are complete.
+DONE - the original fix wave and second re-review follow-up are implemented, verified, visually inspected, and ready to commit.
 
 Base HEAD: `d5f8018ae085deef3632322960262e280209c1f4`
 
@@ -99,3 +99,36 @@ PLAYWRIGHT_BROWSER_CHANNEL=chrome npm run test:e2e
 ```
 
 Both commands passed 15/15. The parent manually inspected all expanded baselines and completed re-review. The final robustness edits use explicit summary `onClick` state control and assert closed mount menus plus zero-diff confirmation screenshots.
+
+## Second Re-review Follow-up
+
+Status: DONE. Parent visual/E2E verification and follow-up baseline review are complete.
+
+Finding map:
+
+1. Dark-theme primary contrast: dark primary changed to `#b24725` (5.50:1 with white) and dark hover to `#c0522e` (4.68:1 with white). `tests/ui/style-contracts.test.ts` extracts the dark theme block separately, verifies both tokens differ from the light tokens, and calculates at least 4.5:1 for each.
+2. Preview metadata localization: the real `getEntry()` rejection now passes through `localizedApiError()` before an `Error` enters preview state. `tests/ui/states-and-feedback.test.tsx` opens a file in Chinese, returns an `UPSTREAM_ERROR` with a raw server message from `/api/fs/entries/file-report`, and verifies the localized storage failure is rendered while the raw message is absent.
+3. Mobile activation target: the mobile `.entryOpen` control is now 48px high while `.entrySize` remains in grid row 2 below the name. `tests/ui/style-contracts.test.ts` directly asserts the 48px `.entryOpen` rule and retained metadata-row contract.
+
+TDD evidence:
+
+- RED: `npx vitest run --config vitest.ui.config.ts tests/ui/style-contracts.test.ts tests/ui/states-and-feedback.test.tsx`
+  - Expected failures: dark primary contrast was 2.76:1, preview rendered `Raw preview metadata failure`, and `.entryOpen` was 32px high.
+- GREEN: `npx vitest run --config vitest.ui.config.ts tests/ui/style-contracts.test.ts tests/ui/states-and-feedback.test.tsx`
+  - PASS: 2 files, 11 tests.
+- `npm run check`
+  - PASS: TypeScript, production build, 22 worker files / 177 tests, and 14 UI files / 76 tests.
+  - Existing missing-development-secret warnings were emitted by worker tests; no environment changes were made.
+- `git diff --check`
+  - PASS: no whitespace errors.
+
+Parent browser verification completed using the existing system Chrome without installing a browser:
+
+```sh
+PLAYWRIGHT_BROWSER_CHANNEL=chrome npm run test:visual -- --update-snapshots
+PLAYWRIGHT_BROWSER_CHANNEL=chrome npm run test:e2e
+```
+
+- Visual update: PASS, 15/15 across desktop/tablet/mobile. Seven mobile baselines were refreshed for the 48px activation target and inspected by the parent.
+- E2E: PASS, 15/15 across desktop/tablet/mobile.
+- No browser or environment installation was performed.
