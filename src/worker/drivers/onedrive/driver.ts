@@ -7,6 +7,7 @@ import { graphItemKind, hasSupportedGraphItemType, mapGraphItem } from './mapper
 export interface OneDriveDriverClient {
   list(parentId: string, cursor?: string): Promise<GraphListResult>;
   stat(itemId: string): Promise<GraphDriveItem>;
+  getDownloadUrl(itemId: string): Promise<string>;
   createFolder(parentId: string, name: string): Promise<GraphDriveItem>;
   upload(parentId: string, name: string, body: ReadableStream, contentType: string | null): Promise<GraphDriveItem>;
   update(itemId: string, update: GraphItemUpdate): Promise<GraphDriveItem>;
@@ -48,11 +49,7 @@ export class OneDriveDriver implements StorageDriver {
     const item = await this.client.stat(itemId);
     await this.assertInScope(itemId, item);
     if (graphItemKind(item) !== 'file') throw new HttpError(400, 'INVALID_STORAGE_OPERATION', 'Folders cannot be downloaded');
-    const url = item['@microsoft.graph.downloadUrl'];
-    if (typeof url !== 'string' || !url.startsWith('https://')) {
-      throw new HttpError(502, 'ONEDRIVE_DOWNLOAD_UNAVAILABLE', 'OneDrive download is unavailable');
-    }
-    return { kind: 'redirect', url };
+    return { kind: 'redirect', url: await this.client.getDownloadUrl(itemId) };
   }
 
   async createFolder(parentId: string, name: string): Promise<StorageItem> {

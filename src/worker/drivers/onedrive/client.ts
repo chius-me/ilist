@@ -117,6 +117,10 @@ export class OneDriveClient {
       : `/me/drive/items/${encodeURIComponent(itemId)}`));
   }
 
+  getDownloadUrl(itemId: string): Promise<string> {
+    return this.requestDownloadUrl(`${GRAPH_BASE}/me/drive/items/${encodeURIComponent(itemId)}/content`);
+  }
+
   createFolder(parentId: string, name: string): Promise<GraphDriveItem> {
     const path = parentId === 'root'
       ? '/me/drive/root/children'
@@ -152,6 +156,43 @@ export class OneDriveClient {
 
   async remove(itemId: string): Promise<void> {
     await this.requestJson<void>(`${GRAPH_BASE}/me/drive/items/${encodeURIComponent(itemId)}`, { method: 'DELETE' });
+  }
+
+  private async requestDownloadUrl(url: string, retried = false): Promise<string> {
+    const accessToken = await this.tokenProvider(this.env, this.mountId);
+    let response: Response;
+    try {
+      const fetcher = this.fetcher;
+      response = await fetcher.call(globalThis, url, {
+        method: 'GET',
+        redirect: 'manual',
+        headers: { authorization: `Bearer ${accessToken}` },
+      });
+    } catch (error) {
+      console.error('OneDrive Graph fetch failed', {
+        path: new URL(url).pathname,
+        errorName: error instanceof Error ? error.name : undefined,
+        errorMessage: error instanceof Error ? error.message : String(error),
+      });
+      throw new HttpError(502, 'ONEDRIVE_UPSTREAM_FAILED', 'OneDrive request failed');
+    }
+    if (response.status === 401 && !retried) {
+      await refreshOneDriveAccessToken(this.env, this.mountId, accessToken, this.fetcher);
+      return this.requestDownloadUrl(url, true);
+    }
+    if (response.status !== 302) {
+      await logGraphError(response, url);
+      throw graphError(response.status);
+    }
+    const location = response.headers.get('location');
+    if (!location) throw new HttpError(502, 'ONEDRIVE_DOWNLOAD_UNAVAILABLE', 'OneDrive download is unavailable');
+    try {
+      const downloadUrl = new URL(location);
+      if (downloadUrl.protocol !== 'https:') throw new Error('Invalid download protocol');
+      return downloadUrl.toString();
+    } catch {
+      throw new HttpError(502, 'ONEDRIVE_DOWNLOAD_UNAVAILABLE', 'OneDrive download is unavailable');
+    }
   }
 
   private async requestJson<T>(url: string, init: RequestInit = {}, retried = false): Promise<T> {

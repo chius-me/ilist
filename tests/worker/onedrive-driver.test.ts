@@ -26,6 +26,7 @@ function driverClient(overrides: Partial<OneDriveDriverClient> = {}): OneDriveDr
   return {
     list: vi.fn(async () => ({ items: [], nextCursor: null })),
     stat: vi.fn(async () => graphItem()),
+    getDownloadUrl: vi.fn(async () => 'https://download.example/default'),
     createFolder: vi.fn(async () => graphItem({ id: 'new-folder', file: undefined, folder: { childCount: 0 } })),
     upload: vi.fn(async () => graphItem({ id: 'new-file' })),
     update: vi.fn(async () => graphItem()),
@@ -76,15 +77,18 @@ describe('OneDrive read driver', () => {
 
   it('fetches a fresh preauthenticated download URL and rejects folder downloads', async () => {
     const stat = vi.fn()
-      .mockResolvedValueOnce(graphItem({ '@microsoft.graph.downloadUrl': 'https://download.example/one' }))
+      .mockResolvedValueOnce(graphItem())
       .mockResolvedValueOnce(graphItem({ id: 'folder', file: undefined, folder: { childCount: 1 } }));
-    const driver = new OneDriveDriver(mount, driverClient({ stat }));
+    const getDownloadUrl = vi.fn(async () => 'https://download.example/one');
+    const driver = new OneDriveDriver(mount, driverClient({ stat, getDownloadUrl }));
 
     await expect(driver.getDownload('item-1', new Request('https://ilist.example/file'))).resolves.toEqual({
       kind: 'redirect', url: 'https://download.example/one',
     });
     await expect(driver.getDownload('folder', new Request('https://ilist.example/file'))).rejects.toMatchObject({ code: 'INVALID_STORAGE_OPERATION' });
     expect(stat).toHaveBeenCalledTimes(2);
+    expect(getDownloadUrl).toHaveBeenCalledOnce();
+    expect(getDownloadUrl).toHaveBeenCalledWith('item-1');
   });
 
   it('rejects item IDs outside a configured OneDrive sub-root', async () => {
@@ -128,6 +132,19 @@ describe('OneDrive read driver', () => {
     await client.list('root');
 
     expect(calledWithWorkerGlobal).toBe(true);
+  });
+
+  it('gets a download URL from the Graph content endpoint without following the redirect', async () => {
+    const fetcher = vi.fn(async (_input: RequestInfo | URL, _init?: RequestInit) => new Response(null, {
+      status: 302,
+      headers: { location: 'https://public.dm.files.1drv.com/download' },
+    }));
+    const client = new OneDriveClient(workerEnv(), mount.id, fetcher, async () => 'test-access');
+
+    await expect(client.getDownloadUrl('item/id')).resolves.toBe('https://public.dm.files.1drv.com/download');
+    expect(String(fetcher.mock.calls[0]![0])).toContain('/me/drive/items/item%2Fid/content');
+    expect(fetcher.mock.calls[0]![1]).toMatchObject({ method: 'GET', redirect: 'manual' });
+    expect(new Headers(fetcher.mock.calls[0]![1]?.headers).get('authorization')).toBe('Bearer test-access');
   });
 
   it('maps Graph errors and retries one 401 with a refreshed access token', async () => {
