@@ -1,20 +1,28 @@
 import { HttpError } from '../../http';
 import type { Mount } from '../../types';
 import type { DownloadResult, ListResult, StorageDriver, StorageItem } from '../types';
-import type { GraphDriveItem, GraphListResult } from './client';
+import type { GraphDriveItem, GraphItemUpdate, GraphListResult } from './client';
 import { graphItemKind, mapGraphItem } from './mapper';
 
 export interface OneDriveDriverClient {
   list(parentId: string, cursor?: string): Promise<GraphListResult>;
   stat(itemId: string): Promise<GraphDriveItem>;
+  createFolder(parentId: string, name: string): Promise<GraphDriveItem>;
+  upload(parentId: string, name: string, body: ReadableStream, contentType: string | null): Promise<GraphDriveItem>;
+  update(itemId: string, update: GraphItemUpdate): Promise<GraphDriveItem>;
+  remove(itemId: string): Promise<void>;
 }
 
-function unsupported(): never {
-  throw new HttpError(405, 'STORAGE_OPERATION_UNSUPPORTED', 'OneDrive write operations are not enabled');
+function validName(name: string): string {
+  const normalized = name.trim();
+  if (!normalized || normalized === '.' || normalized === '..' || normalized.includes('/') || normalized.includes('\\') || /[\u0000-\u001f\u007f]/.test(normalized)) {
+    throw new HttpError(400, 'INVALID_ENTRY_NAME', 'Storage item name is invalid');
+  }
+  return normalized;
 }
 
 export class OneDriveDriver implements StorageDriver {
-  readonly capabilities = new Set(['list', 'download'] as const);
+  readonly capabilities = new Set(['list', 'download', 'upload', 'createFolder', 'rename', 'move', 'delete'] as const);
   readonly rootId: string;
 
   constructor(private readonly mount: Mount, private readonly client: OneDriveDriverClient) {
@@ -41,9 +49,26 @@ export class OneDriveDriver implements StorageDriver {
     return { kind: 'redirect', url };
   }
 
-  async createFolder(_parentId: string, _name: string): Promise<StorageItem> { return unsupported(); }
-  async upload(_parentId: string, _name: string, _body: ReadableStream, _contentType: string | null): Promise<StorageItem> { return unsupported(); }
-  async rename(_itemId: string, _name: string): Promise<StorageItem> { return unsupported(); }
-  async move(_itemId: string, _destinationId: string): Promise<StorageItem> { return unsupported(); }
-  async remove(_itemId: string): Promise<void> { return unsupported(); }
+  async createFolder(parentId: string, name: string): Promise<StorageItem> {
+    return mapGraphItem(await this.client.createFolder(parentId, validName(name)), parentId);
+  }
+
+  async upload(parentId: string, name: string, body: ReadableStream, contentType: string | null): Promise<StorageItem> {
+    return mapGraphItem(await this.client.upload(parentId, validName(name), body, contentType), parentId);
+  }
+
+  async rename(itemId: string, name: string): Promise<StorageItem> {
+    if (itemId === this.rootId) throw new HttpError(400, 'INVALID_STORAGE_OPERATION', 'Mount root cannot be renamed');
+    return mapGraphItem(await this.client.update(itemId, { name: validName(name) }), null);
+  }
+
+  async move(itemId: string, destinationId: string): Promise<StorageItem> {
+    if (itemId === this.rootId) throw new HttpError(400, 'INVALID_STORAGE_OPERATION', 'Mount root cannot be moved');
+    return mapGraphItem(await this.client.update(itemId, { parentReference: { id: destinationId } }), destinationId);
+  }
+
+  async remove(itemId: string): Promise<void> {
+    if (itemId === this.rootId) throw new HttpError(400, 'INVALID_STORAGE_OPERATION', 'Mount root cannot be deleted');
+    await this.client.remove(itemId);
+  }
 }

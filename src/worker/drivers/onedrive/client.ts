@@ -25,6 +25,11 @@ export interface GraphListResult {
   nextCursor: string | null;
 }
 
+export interface GraphItemUpdate {
+  name?: string;
+  parentReference?: { id: string };
+}
+
 interface GraphListPayload {
   value?: GraphDriveItem[];
   '@odata.nextLink'?: string;
@@ -83,19 +88,60 @@ export class OneDriveClient {
       : `/me/drive/items/${encodeURIComponent(itemId)}`));
   }
 
-  private async requestJson<T>(url: string, retried = false): Promise<T> {
+  createFolder(parentId: string, name: string): Promise<GraphDriveItem> {
+    const path = parentId === 'root'
+      ? '/me/drive/root/children'
+      : `/me/drive/items/${encodeURIComponent(parentId)}/children`;
+    return this.requestJson<GraphDriveItem>(withSelect(path), {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ name, folder: {}, '@microsoft.graph.conflictBehavior': 'fail' }),
+    });
+  }
+
+  upload(parentId: string, name: string, body: ReadableStream, contentType: string | null): Promise<GraphDriveItem> {
+    const encodedName = encodeURIComponent(name);
+    const path = parentId === 'root'
+      ? `/me/drive/root:/${encodedName}:/content`
+      : `/me/drive/items/${encodeURIComponent(parentId)}:/${encodedName}:/content`;
+    const url = new URL(`${GRAPH_BASE}${path}`);
+    url.searchParams.set('@microsoft.graph.conflictBehavior', 'fail');
+    return this.requestJson<GraphDriveItem>(url.toString(), {
+      method: 'PUT',
+      headers: { 'content-type': contentType ?? 'application/octet-stream' },
+      body: body as BodyInit,
+    });
+  }
+
+  update(itemId: string, update: GraphItemUpdate): Promise<GraphDriveItem> {
+    return this.requestJson<GraphDriveItem>(withSelect(`/me/drive/items/${encodeURIComponent(itemId)}`), {
+      method: 'PATCH',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify(update),
+    });
+  }
+
+  async remove(itemId: string): Promise<void> {
+    await this.requestJson<void>(`${GRAPH_BASE}/me/drive/items/${encodeURIComponent(itemId)}`, { method: 'DELETE' });
+  }
+
+  private async requestJson<T>(url: string, init: RequestInit = {}, retried = false): Promise<T> {
     const accessToken = await this.tokenProvider(this.env, this.mountId);
+    const headers = new Headers(init.headers);
+    headers.set('authorization', `Bearer ${accessToken}`);
     let response: Response;
     try {
-      response = await this.fetcher(url, { headers: { authorization: `Bearer ${accessToken}` } });
+      response = await this.fetcher(url, { ...init, headers });
     } catch {
       throw new HttpError(502, 'ONEDRIVE_UPSTREAM_FAILED', 'OneDrive request failed');
     }
     if (response.status === 401 && !retried) {
       await refreshOneDriveAccessToken(this.env, this.mountId, accessToken, this.fetcher);
-      return this.requestJson<T>(url, true);
+      if (init.body instanceof ReadableStream) throw graphError(401);
+      return this.requestJson<T>(url, init, true);
     }
     if (!response.ok) throw graphError(response.status);
+    if (response.status === 204) return undefined as T;
     try { return await response.json<T>(); } catch {
       throw new HttpError(502, 'ONEDRIVE_UPSTREAM_INVALID', 'OneDrive response was invalid');
     }

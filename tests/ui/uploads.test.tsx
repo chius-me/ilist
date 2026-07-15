@@ -38,4 +38,17 @@ describe('upload queue', () => {
     expect(transport).toHaveBeenCalledTimes(1);
     expect(result.current.tasks.map((task) => task.error)).toEqual(['Invalid file name', undefined, 'Another queued file already has this name']);
   });
+
+  it('refreshes the uploaded parent only after a transport completes', async () => {
+    let finish!: () => void;
+    const transport = vi.fn(() => new Promise<void>((resolve) => { finish = resolve; }));
+    const onCompleted = vi.fn();
+    const { result } = renderHook(() => useUploadQueue({ transport, onCompleted }));
+
+    act(() => result.current.enqueue('onedrive-folder', [new File(['content'], 'report.txt')]));
+    await waitFor(() => expect(transport).toHaveBeenCalledOnce());
+    expect(onCompleted).not.toHaveBeenCalled();
+    act(() => finish());
+    await waitFor(() => expect(onCompleted).toHaveBeenCalledWith('onedrive-folder'));
+  });
 });

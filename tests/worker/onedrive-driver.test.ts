@@ -26,6 +26,10 @@ function driverClient(overrides: Partial<OneDriveDriverClient> = {}): OneDriveDr
   return {
     list: vi.fn(async () => ({ items: [], nextCursor: null })),
     stat: vi.fn(async () => graphItem()),
+    createFolder: vi.fn(async () => graphItem({ id: 'new-folder', file: undefined, folder: { childCount: 0 } })),
+    upload: vi.fn(async () => graphItem({ id: 'new-file' })),
+    update: vi.fn(async () => graphItem()),
+    remove: vi.fn(async () => undefined),
     ...overrides,
   };
 }
@@ -116,5 +120,50 @@ describe('OneDrive read driver', () => {
     const error = await denied.stat('missing').catch((cause: unknown) => cause);
     expect(error).toMatchObject({ status: 403, code: 'ONEDRIVE_ACCESS_DENIED' });
     expect(String(error)).not.toContain('private upstream detail');
+  });
+
+  it('delegates create, streamed upload, rename, move, and delete through the common driver contract', async () => {
+    const api = driverClient();
+    const driver = new OneDriveDriver(mount, api);
+    const stream = new ReadableStream({ start(controller) { controller.enqueue(new Uint8Array([1, 2])); controller.close(); } });
+
+    await expect(driver.createFolder(driver.rootId, '项目')).resolves.toMatchObject({ id: 'new-folder', kind: 'folder' });
+    await expect(driver.upload('folder-id', '文件.txt', stream, 'text/plain')).resolves.toMatchObject({ id: 'new-file', kind: 'file' });
+    await driver.rename('item-1', 'renamed.txt');
+    await driver.move('item-1', 'destination');
+    await driver.remove('item-1');
+
+    expect(api.createFolder).toHaveBeenCalledWith('root', '项目');
+    expect(api.upload).toHaveBeenCalledWith('folder-id', '文件.txt', stream, 'text/plain');
+    expect(api.update).toHaveBeenNthCalledWith(1, 'item-1', { name: 'renamed.txt' });
+    expect(api.update).toHaveBeenNthCalledWith(2, 'item-1', { parentReference: { id: 'destination' } });
+    expect(api.remove).toHaveBeenCalledWith('item-1');
+    expect(driver.capabilities).toEqual(new Set(['list', 'download', 'upload', 'createFolder', 'rename', 'move', 'delete']));
+  });
+
+  it('sends correctly encoded Graph write requests and preserves streamed bodies', async () => {
+    const calls: Array<{ url: string; init: RequestInit }> = [];
+    const fetcher = vi.fn(async (input: RequestInfo | URL, init: RequestInit = {}) => {
+      calls.push({ url: String(input), init });
+      if (init.method === 'DELETE') return new Response(null, { status: 204 });
+      return Response.json(graphItem({ id: 'written' }));
+    });
+    const client = new OneDriveClient(workerEnv(), mount.id, fetcher, async () => 'test-access');
+    const stream = new ReadableStream({ start(controller) { controller.enqueue(new Uint8Array([7])); controller.close(); } });
+
+    await client.createFolder('root', '新目录');
+    await client.upload('parent/id', '空 格.txt', stream, 'text/plain');
+    await client.update('item/id', { name: '新名称.txt' });
+    await client.update('item/id', { parentReference: { id: 'new-parent' } });
+    await client.remove('item/id');
+
+    expect(calls[0]!.url).toContain('/me/drive/root/children');
+    expect(JSON.parse(String(calls[0]!.init.body))).toEqual({ name: '新目录', folder: {}, '@microsoft.graph.conflictBehavior': 'fail' });
+    expect(calls[1]!.url).toContain('/me/drive/items/parent%2Fid:/%E7%A9%BA%20%E6%A0%BC.txt:/content');
+    expect(new URL(calls[1]!.url).searchParams.get('@microsoft.graph.conflictBehavior')).toBe('fail');
+    expect(calls[1]!.init).toMatchObject({ method: 'PUT', body: stream });
+    expect(calls[2]!.url).toContain('/me/drive/items/item%2Fid');
+    expect(JSON.parse(String(calls[3]!.init.body))).toEqual({ parentReference: { id: 'new-parent' } });
+    expect(calls[4]!.init.method).toBe('DELETE');
   });
 });
