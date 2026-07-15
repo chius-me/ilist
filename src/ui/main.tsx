@@ -6,6 +6,7 @@ import './styles/base.css';
 import './styles/shell.css';
 import './styles/explorer.css';
 import './styles.css';
+import './styles/overlays.css';
 
 createRoot(document.getElementById('root')!).render(
   <StrictMode>

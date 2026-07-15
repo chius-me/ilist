@@ -1,6 +1,8 @@
 import { AlertCircle, LoaderCircle, RefreshCw } from 'lucide-react';
-import { useEffect, useMemo, useRef, useState, type DragEvent } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState, type DragEvent } from 'react';
 import { createFolder, deleteEntries, entryPath, getEntry, moveEntries, patchEntry, setVisibility } from '../api/entries';
+import { ApiError } from '../api/client';
+import { ToastRegion, type ToastMessage, type ToastTone } from '../components/ToastRegion';
 import { Breadcrumbs } from '../features/explorer/Breadcrumbs';
 import { EmptyState } from '../features/explorer/EmptyState';
 import { entryActions, EntryActionMenu, type EntryActionId } from '../features/explorer/EntryActionMenu';
@@ -46,12 +48,29 @@ function compareEntries(left: Entry, right: Entry, sort: ExplorerSort): number {
   return (result || left.name.localeCompare(right.name, undefined, { numeric: true, sensitivity: 'base' })) * direction;
 }
 
-function LoadingRows() {
+function LoadingCollection({ view, label }: { view: ExplorerView; label: string }) {
+  if (view === 'grid') {
+    return <div className="loadingGrid" aria-label={label} aria-busy="true">
+      {[0, 1, 2, 3, 4, 5].map((card) => <div className="loadingCard" key={card}><span /><span /><span /></div>)}
+    </div>;
+  }
   return (
-    <div className="loadingRows" aria-label="Loading files" aria-busy="true">
+    <div className="loadingRows" aria-label={label} aria-busy="true">
       {[0, 1, 2, 3, 4].map((row) => <div className="loadingRow" key={row}><span /><span /><span /></div>)}
     </div>
   );
+}
+
+function directoryErrorTitle(error: Error, t: ReturnType<typeof useI18n>['t']): string {
+  if (error instanceof ApiError && error.code === 'MOUNT_DISABLED') return t('state.disconnected');
+  if (error instanceof ApiError && (error.status === 404 || error.code === 'ENTRY_NOT_FOUND' || error.code === 'MOUNT_NOT_FOUND')) return t('state.unavailable');
+  return t('state.loadFailed');
+}
+
+function directoryErrorHint(error: Error, t: ReturnType<typeof useI18n>['t']): string {
+  if (error instanceof ApiError && error.code === 'MOUNT_DISABLED') return t('state.disconnectedHint');
+  if (error instanceof ApiError && (error.status === 404 || error.code === 'ENTRY_NOT_FOUND' || error.code === 'MOUNT_NOT_FOUND')) return t('state.unavailableHint');
+  return error.message;
 }
 
 export interface ExplorerPageProps {
@@ -85,10 +104,16 @@ export function ExplorerPage({
   const [menu, setMenu] = useState<{ entry: Entry; anchor: HTMLElement | null } | null>(null);
   const [dialog, setDialog] = useState<{ type: 'rename' | 'create' | 'move' | 'delete' | 'properties'; entries: Entry[] } | null>(null);
   const [operationPending, setOperationPending] = useState(false);
-  const [operationNotice, setOperationNotice] = useState<string | null>(null);
+  const [toasts, setToasts] = useState<ToastMessage[]>([]);
+  const toastSequence = useRef(0);
   const [dragOver, setDragOver] = useState(false);
   const dragDepth = useRef(0);
   const mobileActions = useMobileActions();
+  const dismissToast = useCallback((id: string) => setToasts((current) => current.filter((toast) => toast.id !== id)), []);
+  const pushToast = useCallback((tone: ToastTone, message: string) => {
+    toastSequence.current += 1;
+    setToasts((current) => [...current, { id: `toast-${toastSequence.current}`, tone, message }].slice(-4));
+  }, []);
 
   useEffect(() => {
     if (!previewId) {
@@ -180,19 +205,18 @@ export function ExplorerPage({
 
   async function runBatch(operation: () => Promise<{ succeeded: string[]; failed: { id: string }[] }>) {
     setOperationPending(true);
-    setOperationNotice(null);
     try {
       const result = await operation();
       if (result.failed.length) {
         selection.replace(result.failed.map((failure) => failure.id));
-        setOperationNotice(`${result.succeeded.length} completed, ${result.failed.length} failed`);
+        pushToast('error', t('feedback.batchPartial', { completed: result.succeeded.length, failed: result.failed.length }));
       } else {
         selection.clear();
-        setOperationNotice(`${result.succeeded.length} completed`);
+        pushToast('success', t('feedback.batchComplete', { completed: result.succeeded.length }));
       }
       directory.refresh();
     } catch (error) {
-      setOperationNotice(error instanceof Error ? error.message : 'Operation failed.');
+      pushToast('error', error instanceof Error ? error.message : t('feedback.operationFailed'));
       throw error;
     } finally {
       setOperationPending(false);
@@ -228,10 +252,10 @@ export function ExplorerPage({
             />}
           </div>
           <section className={`explorerContent${dragOver ? ' isDragOver' : ''}`} id="file-list" tabIndex={-1} aria-label={previewId ? `Files with preview ${previewId} selected` : 'Files'} onDragEnter={onDragEnter} onDragOver={onDragOver} onDragLeave={onDragLeave} onDrop={onDrop}>
-            {directory.error && directory.data ? <div className="retryBanner" role="alert"><AlertCircle aria-hidden="true" size={18} /><span>{directory.error.message}</span><button type="button" onClick={directory.refresh}><RefreshCw aria-hidden="true" size={15} />Retry</button></div> : null}
-            {operationNotice ? <div className="operationNotice" role="status" aria-live="polite">{operationNotice}</div> : null}
-            {directory.loading && !directory.data ? <LoadingRows /> : null}
-            {directory.error && !directory.data ? <div className="errorState" role="alert"><AlertCircle aria-hidden="true" size={32} /><strong>Unable to load this folder</strong><span>{directory.error.message}</span><button className="button" type="button" onClick={directory.refresh}><RefreshCw aria-hidden="true" size={16} />Retry</button></div> : null}
+            <div className="directoryCommands"><button className="iconButton" type="button" onClick={directory.refresh} disabled={directory.loading} aria-label={t('action.refresh')} title={t('action.refresh')}><RefreshCw aria-hidden="true" size={16} /></button></div>
+            {directory.error && directory.data ? <div className="retryBanner" role="alert"><AlertCircle aria-hidden="true" size={18} /><span>{directory.error.message}</span><button type="button" onClick={directory.refresh}><RefreshCw aria-hidden="true" size={15} />{t('action.retry')}</button></div> : null}
+            {directory.loading && !directory.data ? <LoadingCollection view={view} label={t('state.loadingFiles')} /> : null}
+            {directory.error && !directory.data ? <div className="errorState" role="alert"><AlertCircle aria-hidden="true" size={32} /><strong>{directoryErrorTitle(directory.error, t)}</strong><span>{directoryErrorHint(directory.error, t)}</span><button className="button" type="button" onClick={directory.refresh}><RefreshCw aria-hidden="true" size={16} />{t('action.retry')}</button></div> : null}
             {directory.data && !directory.loading && !directory.error && entries.length === 0 ? <EmptyState query={query} admin={admin} /> : null}
             {directory.data && entries.length > 0 ? <ExplorerCollection
               view={view}
@@ -243,15 +267,16 @@ export function ExplorerPage({
               onReplaceSelection={selection.replace}
               onClearSelection={selection.clear}
             /> : null}
-            {directory.loading && directory.data ? <div className="refreshing" role="status"><LoaderCircle aria-hidden="true" size={16} />Refreshing</div> : null}
+            {directory.loading && directory.data ? <div className="refreshing" role="status" aria-label={t('state.refreshing')}><LoaderCircle aria-hidden="true" size={16} />{t('state.refreshing')}</div> : null}
           </section>
         </div>
       </main>
       <UploadPanel tasks={uploads.tasks} onCancel={uploads.cancel} onRetry={uploads.retry} onRemove={uploads.remove} onClearCompleted={uploads.clearCompleted} />
+      <ToastRegion toasts={toasts} onDismiss={dismissToast} />
       {menu && !mobileActions ? <EntryActionMenu entry={menu.entry} anchor={menu.anchor} actions={currentEntryActions} onClose={() => setMenu(null)} /> : null}
       {menu && mobileActions ? <MobileActionSheet open title={t('entry.actions', { name: menu.entry.name })} anchor={menu.anchor} actions={currentEntryActions} translate={t} cancelLabel={t('action.cancel')} onClose={() => setMenu(null)} /> : null}
-      {dialog?.type === 'rename' ? <RenameDialog open title={`Rename ${dialog.entries[0].name}`} initialName={dialog.entries[0].name} onClose={() => setDialog(null)} onSubmit={async (name) => { await patchEntry(dialog.entries[0].id, { name }); directory.refresh(); }} /> : null}
-      {dialog?.type === 'create' && directory.data && canCreateFolder ? <RenameDialog open title="Create folder" submitLabel="Create" onClose={() => setDialog(null)} onSubmit={async (name) => { await createFolder(directory.data!.current.id, name); directory.refresh(); }} /> : null}
+      {dialog?.type === 'rename' ? <RenameDialog open title={t('dialog.renameTitle', { name: dialog.entries[0].name })} initialName={dialog.entries[0].name} onClose={() => setDialog(null)} onSubmit={async (name) => { await patchEntry(dialog.entries[0].id, { name }); directory.refresh(); }} /> : null}
+      {dialog?.type === 'create' && directory.data && canCreateFolder ? <RenameDialog open title={t('toolbar.createFolder')} submitLabel={t('common.save')} onClose={() => setDialog(null)} onSubmit={async (name) => { await createFolder(directory.data!.current.id, name); directory.refresh(); }} /> : null}
       {dialog?.type === 'move' ? <FolderPickerDialog entries={dialog.entries} onClose={() => setDialog(null)} onSubmit={(destinationId) => runBatch(() => moveEntries(dialog.entries.map((entry) => entry.id), destinationId))} /> : null}
       {dialog?.type === 'delete' ? <DeleteDialog entries={dialog.entries} onClose={() => setDialog(null)} onSubmit={() => runBatch(() => deleteEntries(dialog.entries.map((entry) => entry.id)))} /> : null}
       {dialog?.type === 'properties' ? <PropertiesDialog entry={dialog.entries[0]} onClose={() => setDialog(null)} onSubmit={async (entryPatch) => { await patchEntry(dialog.entries[0].id, entryPatch); directory.refresh(); }} /> : null}
