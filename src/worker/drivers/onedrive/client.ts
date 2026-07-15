@@ -4,7 +4,7 @@ import { getOneDriveAccessToken, refreshOneDriveAccessToken } from './tokens';
 
 const GRAPH_ORIGIN = 'https://graph.microsoft.com';
 const GRAPH_BASE = `${GRAPH_ORIGIN}/v1.0`;
-const DRIVE_ITEM_SELECT = 'id,name,size,lastModifiedDateTime,eTag,cTag,parentReference,file,folder,package,@microsoft.graph.downloadUrl';
+const DRIVE_ITEM_SELECT = 'id,name,size,lastModifiedDateTime,eTag,cTag,parentReference,file,folder,package,root,specialFolder,@microsoft.graph.downloadUrl';
 
 export interface GraphDriveItem {
   id: string;
@@ -17,6 +17,8 @@ export interface GraphDriveItem {
   file?: { mimeType?: string };
   folder?: { childCount?: number };
   package?: { type?: string };
+  root?: Record<string, never>;
+  specialFolder?: { name?: string };
   '@microsoft.graph.downloadUrl'?: string;
 }
 
@@ -33,6 +35,13 @@ export interface GraphItemUpdate {
 interface GraphListPayload {
   value?: GraphDriveItem[];
   '@odata.nextLink'?: string;
+}
+
+interface GraphErrorPayload {
+  error?: {
+    code?: string;
+    message?: string;
+  };
 }
 
 type AccessTokenProvider = (env: Env, mountId: string) => Promise<string>;
@@ -59,6 +68,26 @@ function withSelect(path: string): string {
   const url = new URL(`${GRAPH_BASE}${path}`);
   url.searchParams.set('$select', DRIVE_ITEM_SELECT);
   return url.toString();
+}
+
+async function logGraphError(response: Response, requestUrl: string): Promise<void> {
+  let upstreamCode: string | undefined;
+  let upstreamMessage: string | undefined;
+  try {
+    const payload = await response.clone().json<GraphErrorPayload>();
+    upstreamCode = payload.error?.code;
+    upstreamMessage = payload.error?.message;
+  } catch {
+    // Some Graph failures do not include a JSON response body.
+  }
+  const url = new URL(requestUrl);
+  console.error('OneDrive Graph request failed', {
+    status: response.status,
+    path: url.pathname,
+    upstreamCode,
+    upstreamMessage,
+    requestId: response.headers.get('request-id'),
+  });
 }
 
 export class OneDriveClient {
@@ -131,8 +160,14 @@ export class OneDriveClient {
     headers.set('authorization', `Bearer ${accessToken}`);
     let response: Response;
     try {
-      response = await this.fetcher(url, { ...init, headers });
-    } catch {
+      const fetcher = this.fetcher;
+      response = await fetcher.call(globalThis, url, { ...init, headers });
+    } catch (error) {
+      console.error('OneDrive Graph fetch failed', {
+        path: new URL(url).pathname,
+        errorName: error instanceof Error ? error.name : undefined,
+        errorMessage: error instanceof Error ? error.message : String(error),
+      });
       throw new HttpError(502, 'ONEDRIVE_UPSTREAM_FAILED', 'OneDrive request failed');
     }
     if (response.status === 401 && !retried) {
@@ -140,7 +175,10 @@ export class OneDriveClient {
       if (init.body instanceof ReadableStream) throw graphError(401);
       return this.requestJson<T>(url, init, true);
     }
-    if (!response.ok) throw graphError(response.status);
+    if (!response.ok) {
+      await logGraphError(response, url);
+      throw graphError(response.status);
+    }
     if (response.status === 204) return undefined as T;
     try { return await response.json<T>(); } catch {
       throw new HttpError(502, 'ONEDRIVE_UPSTREAM_INVALID', 'OneDrive response was invalid');

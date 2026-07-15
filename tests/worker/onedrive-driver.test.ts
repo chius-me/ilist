@@ -47,11 +47,20 @@ describe('OneDrive read driver', () => {
     expect(mapGraphItem(graphItem({ id: 'notebook', file: undefined, package: { type: 'oneNote' } }), 'root')).toMatchObject({
       id: 'notebook', kind: 'folder', contentType: null,
     });
+    expect(mapGraphItem({ id: 'drive-root', name: 'OneDrive', root: {} } as GraphDriveItem, null)).toMatchObject({
+      id: 'drive-root', kind: 'folder', parentId: null,
+    });
+    expect(mapGraphItem({ id: 'vault', name: 'Personal Vault', specialFolder: { name: 'vault' } } as GraphDriveItem, 'root')).toMatchObject({
+      id: 'vault', kind: 'folder', parentId: 'root',
+    });
   });
 
   it('lists root and child items while preserving opaque nextLink cursors', async () => {
     const api = driverClient({
-      list: vi.fn(async (parentId, cursor) => ({ items: [graphItem()], nextCursor: cursor ? null : 'https://graph.microsoft.com/v1.0/me/drive/root/children?$skiptoken=opaque' })),
+      list: vi.fn(async (parentId, cursor) => ({
+        items: [graphItem(), { id: 'vault', name: 'Personal Vault', size: 0 }],
+        nextCursor: cursor ? null : 'https://graph.microsoft.com/v1.0/me/drive/root/children?$skiptoken=opaque',
+      })),
     });
     const driver = new OneDriveDriver(mount, api);
 
@@ -61,6 +70,7 @@ describe('OneDrive read driver', () => {
     expect(api.list).toHaveBeenNthCalledWith(1, 'root', undefined);
     expect(api.list).toHaveBeenNthCalledWith(2, 'folder-id', root.nextCursor);
     expect(root.items[0]).toMatchObject({ name: '文档.txt', kind: 'file' });
+    expect(root.items).toHaveLength(1);
     expect(child.nextCursor).toBeNull();
   });
 
@@ -105,6 +115,19 @@ describe('OneDrive read driver', () => {
     expect(String(fetcher.mock.calls[0]![0])).toContain('/me/drive/items/folder%2Fid%20%3F/children');
     expect(result.nextCursor).toContain('$skiptoken=next');
     await expect(client.list('root', 'https://attacker.example/steal')).rejects.toMatchObject({ code: 'INVALID_ONEDRIVE_CURSOR' });
+  });
+
+  it('invokes the Graph fetcher with the Worker global as its receiver', async () => {
+    let calledWithWorkerGlobal = false;
+    async function fetcher(this: unknown, _input: RequestInfo | URL, _init?: RequestInit): Promise<Response> {
+      calledWithWorkerGlobal = this === globalThis;
+      return Response.json({ value: [] });
+    }
+    const client = new OneDriveClient(workerEnv(), mount.id, fetcher, async () => 'test-access');
+
+    await client.list('root');
+
+    expect(calledWithWorkerGlobal).toBe(true);
   });
 
   it('maps Graph errors and retries one 401 with a refreshed access token', async () => {

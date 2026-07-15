@@ -2,7 +2,7 @@ import { HttpError } from '../../http';
 import type { Mount } from '../../types';
 import type { DownloadResult, ListResult, StorageDriver, StorageItem } from '../types';
 import type { GraphDriveItem, GraphItemUpdate, GraphListResult } from './client';
-import { graphItemKind, mapGraphItem } from './mapper';
+import { graphItemKind, hasSupportedGraphItemType, mapGraphItem } from './mapper';
 
 export interface OneDriveDriverClient {
   list(parentId: string, cursor?: string): Promise<GraphListResult>;
@@ -32,7 +32,10 @@ export class OneDriveDriver implements StorageDriver {
   async list(parentId: string, cursor?: string): Promise<ListResult> {
     await this.assertInScope(parentId);
     const result = await this.client.list(parentId, cursor);
-    return { items: result.items.map((item) => mapGraphItem(item, parentId)), nextCursor: result.nextCursor };
+    return {
+      items: result.items.filter(hasSupportedGraphItemType).map((item) => mapGraphItem(item, parentId)),
+      nextCursor: result.nextCursor,
+    };
   }
 
   async stat(itemId: string): Promise<StorageItem> {
