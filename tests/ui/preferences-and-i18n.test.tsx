@@ -65,4 +65,25 @@ describe('preferences and localization', () => {
     expect(preferences).toMatchObject({ version: 1, theme: 'system', defaultView: 'list' });
     expect(() => writePreferences(preferences, failingStorage)).not.toThrow();
   });
+
+  it('renders and updates when the localStorage property getter throws', async () => {
+    const descriptor = Object.getOwnPropertyDescriptor(window, 'localStorage');
+    expect(descriptor).toBeDefined();
+    Object.defineProperty(window, 'localStorage', {
+      configurable: true,
+      get: () => { throw new Error('unavailable'); },
+    });
+
+    try {
+      render(<AppProviders><Probe /></AppProviders>);
+      expect(screen.getByTestId('theme')).toHaveTextContent('system');
+
+      await userEvent.click(screen.getByRole('button', { name: 'change' }));
+
+      expect(screen.getByTestId('theme')).toHaveTextContent('dark');
+      expect(screen.getByText('文件')).toBeVisible();
+    } finally {
+      Object.defineProperty(window, 'localStorage', descriptor!);
+    }
+  });
 });

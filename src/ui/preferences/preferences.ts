@@ -20,9 +20,9 @@ export function defaultPreferences(): UiPreferences {
   };
 }
 
-export function readPreferences(storage: Storage = window.localStorage): UiPreferences {
+export function readPreferences(storage?: Storage): UiPreferences {
   try {
-    const value = JSON.parse(storage.getItem(PREFERENCES_KEY) ?? 'null') as Partial<UiPreferences> | null;
+    const value = JSON.parse((storage ?? window.localStorage).getItem(PREFERENCES_KEY) ?? 'null') as Partial<UiPreferences> | null;
     if (
       value?.version !== 1
       || !['en', 'zh-CN'].includes(value.locale ?? '')
@@ -37,9 +37,9 @@ export function readPreferences(storage: Storage = window.localStorage): UiPrefe
   }
 }
 
-export function writePreferences(value: UiPreferences, storage: Storage = window.localStorage): void {
+export function writePreferences(value: UiPreferences, storage?: Storage): void {
   try {
-    storage.setItem(PREFERENCES_KEY, JSON.stringify(value));
+    (storage ?? window.localStorage).setItem(PREFERENCES_KEY, JSON.stringify(value));
   } catch {
     // Browser storage can be unavailable.
   }
