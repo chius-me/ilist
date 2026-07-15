@@ -13,12 +13,13 @@ export interface EntryHandlers {
 export function EntryRow({
   entry,
   selected,
+  focused = false,
   admin,
   onOpen,
   onPreview,
   onToggle,
   onMenu,
-}: EntryHandlers & { entry: Entry; selected: boolean; admin: boolean }) {
+}: EntryHandlers & { entry: Entry; selected: boolean; focused?: boolean; admin: boolean }) {
   const { formatBytes, formatDate, t } = useI18n();
   const isFolder = entry.kind === 'folder';
   const selectable = admin && isEntryMutable(entry);
@@ -26,11 +27,23 @@ export function EntryRow({
   const openLabel = `${t('action.open')} ${entry.name}`;
 
   return (
-    <li className={`entryRow${selected ? ' isSelected' : ''}`} onContextMenu={(event) => { if (admin) { event.preventDefault(); onMenu(entry, event.currentTarget); } }}>
+    <li
+      id={`explorer-entry-${entry.id}`}
+      data-entry-id={entry.id}
+      tabIndex={-1}
+      className={`entryRow${selected ? ' isSelected' : ''}${focused ? ' isFocused' : ''}`}
+      onContextMenu={(event) => {
+        if (!admin) return;
+        event.preventDefault();
+        const anchor = event.target instanceof HTMLElement ? event.target.closest<HTMLElement>('button, a, input') ?? event.currentTarget : event.currentTarget;
+        anchor.focus();
+        onMenu(entry, anchor);
+      }}
+    >
       {selectable ? (
         <label className="entrySelect">
           <span className="srOnly">Select {entry.name}</span>
-          <input type="checkbox" checked={selected} onChange={() => onToggle(entry)} />
+          <input type="checkbox" checked={selected} onChange={(event) => onToggle(entry, { range: (event.nativeEvent as MouseEvent).shiftKey })} />
         </label>
       ) : <span className="entrySelectPlaceholder" aria-hidden="true" />}
       <button className="entryOpen" type="button" onClick={activate} aria-label={openLabel}>

@@ -19,6 +19,7 @@ import { useUploadQueue } from '../features/uploads/useUploadQueue';
 import { useDirectory } from '../hooks/useDirectory';
 import { useSelection } from '../hooks/useSelection';
 import type { useSession } from '../hooks/useSession';
+import { useI18n } from '../i18n/I18nProvider';
 import { usePreferences } from '../preferences/PreferencesProvider';
 import { isEntryMutable, type Entry } from '../types/entries';
 
@@ -73,6 +74,7 @@ export function ExplorerPage({
 }: ExplorerPageProps) {
   const directory = useDirectory(path, session.status);
   const selection = useSelection();
+  const { t } = useI18n();
   const { preferences, updatePreferences } = usePreferences();
   const view: ExplorerView = preferences.defaultView;
   const [query, setQuery] = useState('');
@@ -80,7 +82,7 @@ export function ExplorerPage({
   const [previewEntry, setPreviewEntry] = useState<Entry | null>(null);
   const [previewLoading, setPreviewLoading] = useState(false);
   const [previewError, setPreviewError] = useState<Error | null>(null);
-  const [menuEntry, setMenuEntry] = useState<Entry | null>(null);
+  const [menu, setMenu] = useState<{ entry: Entry; anchor: HTMLElement | null } | null>(null);
   const [dialog, setDialog] = useState<{ type: 'rename' | 'create' | 'move' | 'delete' | 'properties'; entries: Entry[] } | null>(null);
   const [operationPending, setOperationPending] = useState(false);
   const [operationNotice, setOperationNotice] = useState<string | null>(null);
@@ -110,7 +112,7 @@ export function ExplorerPage({
   useEffect(() => {
     selection.clear();
     setQuery('');
-    setMenuEntry(null);
+    setMenu(null);
   }, [path, selection.clear]);
 
   const entries = useMemo(() => {
@@ -121,6 +123,7 @@ export function ExplorerPage({
   }, [directory.data, query, sort]);
 
   const admin = session.status === 'admin';
+  const mutableVisibleIds = useMemo(() => admin ? entries.filter(isEntryMutable).map((entry) => entry.id) : [], [admin, entries]);
   const canUpload = admin && directory.data?.current.capabilities.upload === true;
   const canCreateFolder = admin && directory.data?.current.capabilities.createFolder === true;
   const uploads = useUploadQueue({
@@ -133,8 +136,12 @@ export function ExplorerPage({
   const handlers: EntryHandlers = {
     onOpen: (entry) => onOpenPath(entryPath(path, entry)),
     onPreview: (entry) => onOpenPreview(entry.id),
-    onToggle: (entry) => { if (isEntryMutable(entry)) selection.toggle(entry.id); },
-    onMenu: (entry) => setMenuEntry(entry),
+    onToggle: (entry, options) => {
+      if (!isEntryMutable(entry)) return;
+      if (options?.range) selection.range(mutableVisibleIds, entry.id);
+      else selection.toggle(entry.id);
+    },
+    onMenu: (entry, anchor) => setMenu({ entry, anchor: anchor ?? null }),
   };
   const selectedEntries = entries.filter((entry) => selection.selectedIds.has(entry.id) && isEntryMutable(entry));
 
@@ -197,7 +204,7 @@ export function ExplorerPage({
     if (action === 'publish' || action === 'hide') void runBatch(() => setVisibility([entry.id], action === 'publish'));
   }
 
-  const currentEntryActions = menuEntry ? entryActions(menuEntry, { onOpen: handlers.onOpen, onPreview: handlers.onPreview, onAction: openEntryAction }) : [];
+  const currentEntryActions = menu ? entryActions(menu.entry, { onOpen: handlers.onOpen, onPreview: handlers.onPreview, onAction: openEntryAction }) : [];
 
   return (
     <>
@@ -226,14 +233,23 @@ export function ExplorerPage({
             {directory.loading && !directory.data ? <LoadingRows /> : null}
             {directory.error && !directory.data ? <div className="errorState" role="alert"><AlertCircle aria-hidden="true" size={32} /><strong>Unable to load this folder</strong><span>{directory.error.message}</span><button className="button" type="button" onClick={directory.refresh}><RefreshCw aria-hidden="true" size={16} />Retry</button></div> : null}
             {directory.data && !directory.loading && !directory.error && entries.length === 0 ? <EmptyState query={query} admin={admin} /> : null}
-            {directory.data && entries.length > 0 ? <ExplorerCollection view={view} entries={entries} selectedIds={selection.selectedIds} admin={admin} handlers={handlers} /> : null}
+            {directory.data && entries.length > 0 ? <ExplorerCollection
+              view={view}
+              entries={entries}
+              selectedIds={selection.selectedIds}
+              admin={admin}
+              handlers={handlers}
+              onSelectAll={selection.selectAll}
+              onReplaceSelection={selection.replace}
+              onClearSelection={selection.clear}
+            /> : null}
             {directory.loading && directory.data ? <div className="refreshing" role="status"><LoaderCircle aria-hidden="true" size={16} />Refreshing</div> : null}
           </section>
         </div>
       </main>
       <UploadPanel tasks={uploads.tasks} onCancel={uploads.cancel} onRetry={uploads.retry} onRemove={uploads.remove} onClearCompleted={uploads.clearCompleted} />
-      {menuEntry && !mobileActions ? <EntryActionMenu entry={menuEntry} actions={currentEntryActions} onClose={() => setMenuEntry(null)} /> : null}
-      {menuEntry && mobileActions ? <MobileActionSheet open title={`Actions for ${menuEntry.name}`} actions={currentEntryActions} onClose={() => setMenuEntry(null)} /> : null}
+      {menu && !mobileActions ? <EntryActionMenu entry={menu.entry} anchor={menu.anchor} actions={currentEntryActions} onClose={() => setMenu(null)} /> : null}
+      {menu && mobileActions ? <MobileActionSheet open title={t('entry.actions', { name: menu.entry.name })} anchor={menu.anchor} actions={currentEntryActions} translate={t} cancelLabel={t('action.cancel')} onClose={() => setMenu(null)} /> : null}
       {dialog?.type === 'rename' ? <RenameDialog open title={`Rename ${dialog.entries[0].name}`} initialName={dialog.entries[0].name} onClose={() => setDialog(null)} onSubmit={async (name) => { await patchEntry(dialog.entries[0].id, { name }); directory.refresh(); }} /> : null}
       {dialog?.type === 'create' && directory.data && canCreateFolder ? <RenameDialog open title="Create folder" submitLabel="Create" onClose={() => setDialog(null)} onSubmit={async (name) => { await createFolder(directory.data!.current.id, name); directory.refresh(); }} /> : null}
       {dialog?.type === 'move' ? <FolderPickerDialog entries={dialog.entries} onClose={() => setDialog(null)} onSubmit={(destinationId) => runBatch(() => moveEntries(dialog.entries.map((entry) => entry.id), destinationId))} /> : null}
