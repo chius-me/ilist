@@ -57,7 +57,7 @@ describe('resolveVirtualPath', () => {
 
 describe('createDriver', () => {
   it('rejects a mount whose driver has not been registered', async () => {
-    await expect(createDriver({} as Env, mounts[0])).rejects.toMatchObject({
+    await expect(createDriver({} as Env, { ...mounts[0], driverType: 'onedrive' })).rejects.toMatchObject({
       code: 'DRIVER_UNAVAILABLE',
       status: 503,
     });
