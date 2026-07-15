@@ -119,6 +119,63 @@
 .uploadPanelHeader { height: 44px; min-height: 44px; box-sizing: border-box; }
 .uploadTask { background: var(--color-surface-raised); }
 
+.operationDialog { width: min(100%, 440px); }
+.operationDialog form, .dialogBody { display: grid; gap: 14px; padding: 16px; }
+.operationDialog label { display: grid; gap: 6px; color: var(--color-text); font-size: 13px; font-weight: 650; }
+.operationDialog input, .operationDialog textarea { width: 100%; border: 1px solid var(--color-border-strong); border-radius: var(--radius-control); background: var(--color-surface); padding: 8px 9px; color: var(--color-text); }
+.operationDialog input { height: 38px; }
+.operationDialog textarea { min-height: 84px; resize: vertical; }
+.operationDialog .checkboxLabel { display: flex; align-items: center; gap: 8px; }
+.operationDialog .checkboxLabel input { width: 16px; height: 16px; }
+.dialogBody p { margin: 0; color: var(--color-muted); font-size: 13px; line-height: 1.45; }
+.dialogButtons { display: flex; justify-content: flex-end; gap: 8px; }
+.pickerBreadcrumbs { display: flex; min-height: 28px; overflow-x: auto; }
+.pickerBreadcrumbs button { display: inline-flex; align-items: center; flex: 0 0 auto; border: 0; background: transparent; color: var(--color-primary-hover); padding: 3px 2px; font-size: 13px; }
+.folderPicker { display: grid; max-height: 220px; overflow: auto; border: 1px solid var(--color-border); border-radius: var(--radius-control); }
+.folderPicker button { display: flex; align-items: center; min-height: 38px; gap: 8px; border: 0; border-bottom: 1px solid var(--color-border); background: var(--color-surface); padding: 7px 10px; text-align: left; }
+.folderPicker button:hover:not(:disabled) { background: var(--color-hover); }
+.folderPicker span { padding: 12px; color: var(--color-muted); font-size: 13px; }
+
+.loginDialog { width: min(100%, 360px); }
+.loginDialog form { display: grid; gap: 14px; padding: 16px; }
+.loginDialog label { display: grid; gap: 6px; color: var(--color-text); font-size: 13px; font-weight: 650; }
+.loginDialog input { height: 38px; border: 1px solid var(--color-border-strong); border-radius: var(--radius-control); background: var(--color-surface); padding: 0 9px; color: var(--color-text); }
+.formError { margin: -3px 0 0; color: var(--color-danger-text); font-size: 13px; }
+
+.previewBackdrop { position: fixed; inset: 0; display: grid; place-items: center; padding: 20px; }
+.previewOverlay { display: grid; grid-template-rows: auto minmax(0, 1fr); width: min(100%, 1040px); height: min(calc(100dvh - 40px), 760px); }
+.previewHeader { min-width: 0; }
+.previewHeader h2 { flex: 1 1 auto; }
+.previewHeaderActions { display: flex; flex: 0 0 auto; gap: 6px; }
+.previewBody { display: grid; min-height: 0; }
+.previewImage, .previewVideo { display: block; width: 100%; height: 100%; min-height: 0; object-fit: contain; background: var(--color-media-canvas); }
+.previewAudio { align-self: center; justify-self: center; width: min(440px, calc(100% - 32px)); }
+.previewPdf { width: 100%; height: 100%; border: 0; background: var(--color-surface); }
+.previewText { min-width: 0; margin: 0; overflow: auto; padding: 20px; color: var(--color-text); font-family: "SFMono-Regular", Consolas, "Liberation Mono", monospace; font-size: 13px; line-height: 1.5; tab-size: 2; white-space: pre-wrap; overflow-wrap: anywhere; }
+.previewStatus, .previewFallback { display: grid; align-self: center; justify-self: center; justify-items: center; gap: 10px; max-width: 440px; padding: 24px; color: var(--color-muted); text-align: center; }
+.previewStatus svg { animation: spin 0.9s linear infinite; }
+.previewError { color: var(--color-danger-text); }
+.previewError svg { animation: none; }
+.previewFallback strong { color: var(--color-text); font-size: 15px; }
+.previewFallback dl { display: grid; width: 100%; gap: 6px; margin: 4px 0 0; font-size: 13px; text-align: left; }
+.previewFallback dl div { display: flex; justify-content: space-between; gap: 16px; border-top: 1px solid var(--color-border); padding-top: 6px; }
+.previewFallback dt { color: var(--color-muted); }
+.previewFallback dd { min-width: 0; margin: 0; overflow-wrap: anywhere; color: var(--color-text); }
+
+.uploadPanel { position: fixed; right: max(16px, calc((100vw - 1080px) / 2)); bottom: 16px; width: min(380px, calc(100vw - 32px)); overflow: hidden; border: 1px solid var(--color-border-strong); background: var(--color-surface-raised); box-shadow: var(--shadow-raised); }
+.uploadPanelHeader { display: flex; align-items: center; border-bottom: 1px solid var(--color-border); background: var(--color-surface-muted); padding: 5px 6px 5px 12px; }
+.uploadPanelToggle { display: inline-flex; flex: 1 1 auto; align-items: center; justify-content: space-between; min-width: 0; gap: 8px; border: 0; background: transparent; color: var(--color-text); padding: 5px 2px; font-size: 13px; font-weight: 700; text-align: left; }
+.uploadTasks { max-height: min(360px, calc(100dvh - 120px)); margin: 0; overflow-y: auto; padding: 0; list-style: none; }
+.uploadTask { display: flex; align-items: center; min-height: 66px; gap: 8px; border-bottom: 1px solid var(--color-border); padding: 8px 8px 8px 12px; }
+.uploadTask:last-child { border-bottom: 0; }
+.uploadTaskDetails { display: grid; flex: 1 1 auto; min-width: 0; gap: 3px; }
+.uploadTaskDetails strong, .uploadTaskDetails span { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.uploadTaskDetails strong { font-size: 13px; font-weight: 650; }
+.uploadTaskDetails span { color: var(--color-muted); font-size: 12px; }
+.uploadTask-failed .uploadTaskDetails span { color: var(--color-danger-text); }
+.uploadProgress { height: 4px; overflow: hidden; border-radius: 2px; background: var(--color-progress-track); }
+.uploadProgress span { display: block; height: 100%; background: var(--color-primary); transition: width 120ms linear; }
+
 @media (max-width: 760px) {
   .overlayScrim { align-items: end; padding: 16px 0 0; }
   .operationDialog, .loginDialog { width: 100%; max-height: calc(100dvh - 16px); border-radius: var(--radius-panel) var(--radius-panel) 0 0; }

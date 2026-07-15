@@ -4,14 +4,18 @@ import { MountManager } from '../features/mounts/MountManager';
 import { useExplorerLocation } from '../hooks/useExplorerLocation';
 import { useSession } from '../hooks/useSession';
 import { AppShell } from './AppShell';
+import { AdminLayout, type AdminSection } from './AdminLayout';
 import { ExplorerPage } from './ExplorerPage';
+import { PreferencesPage } from './PreferencesPage';
 
 export function ExplorerApp() {
   const { path, previewId, openPath, openPreview, closePreview } = useExplorerLocation();
   const session = useSession();
   const lastNonAdminPath = useRef('/');
   const storageRoute = path === '/admin/storages';
-  const adminRoute = path === '/admin' || storageRoute;
+  const appearanceRoute = path === '/admin/appearance';
+  const adminSection: AdminSection | null = storageRoute ? 'storage' : appearanceRoute ? 'appearance' : null;
+  const adminRoute = path === '/admin' || adminSection !== null;
   const explorerPath = adminRoute ? lastNonAdminPath.current : path;
   const admin = session.status === 'admin';
   const [loginBusy, setLoginBusy] = useState(false);
@@ -26,7 +30,7 @@ export function ExplorerApp() {
     setLoginError(null);
     try {
       await session.signIn(username, password);
-      if (!storageRoute) openPath(lastNonAdminPath.current);
+      if (!adminSection) openPath(lastNonAdminPath.current);
     } catch (error) {
       setLoginError(error instanceof Error ? error.message : 'Unable to sign in');
     } finally {
@@ -43,14 +47,16 @@ export function ExplorerApp() {
     <AppShell
       admin={admin}
       username={session.user?.username}
-      contentId={storageRoute && admin ? 'storage-manager' : 'file-list'}
+      contentId={adminSection === 'storage' && admin ? 'storage-manager' : adminSection === 'appearance' && admin ? 'appearance-preferences' : 'file-list'}
       onHome={() => openPath('/')}
       onStorage={() => openPath('/admin/storages')}
       onSignIn={() => openPath('/admin')}
       onSignOut={session.signOut}
     >
-      {storageRoute && admin
-        ? <MountManager onBack={() => openPath(lastNonAdminPath.current)} />
+      {adminSection && admin
+        ? <AdminLayout active={adminSection} onNavigate={(section) => openPath(`/admin/${section === 'storage' ? 'storages' : 'appearance'}`)} onBack={() => openPath(lastNonAdminPath.current)}>
+            {adminSection === 'storage' ? <MountManager onBack={() => openPath(lastNonAdminPath.current)} /> : <PreferencesPage />}
+          </AdminLayout>
         : <ExplorerPage
             path={explorerPath}
             previewId={previewId}

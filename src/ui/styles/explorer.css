@@ -210,6 +210,21 @@
 .refreshing svg { animation: spin 0.9s linear infinite; }
 @keyframes spin { to { transform: rotate(360deg); } }
 
+.actionMenu { position: fixed; z-index: var(--layer-menu); right: max(16px, calc((100vw - 1080px) / 2)); top: 112px; display: grid; min-width: 190px; max-height: calc(100dvh - 128px); overflow-y: auto; border: 1px solid var(--color-border-strong); border-radius: var(--radius-control); background: var(--color-surface-raised); box-shadow: var(--shadow-raised); padding: 4px; }
+.actionMenu button, .actionMenu a { display: flex; align-items: center; min-height: 34px; gap: 8px; border: 0; border-radius: var(--radius-control); background: transparent; padding: 6px 8px; color: var(--color-text); font-size: 13px; text-align: left; text-decoration: none; }
+.actionMenu button:hover, .actionMenu a:hover { background: var(--color-hover); }
+.actionMenu .destructive { margin-top: 4px; border-top: 1px solid var(--color-border); color: var(--color-danger-text); }
+
+.mobileActionBackdrop { position: fixed; inset: 0; z-index: var(--layer-menu); display: flex; align-items: end; background: var(--color-scrim); }
+.mobileActionSheet { display: grid; width: 100%; max-height: min(80dvh, 560px); overflow-y: auto; border-radius: var(--radius-panel) var(--radius-panel) 0 0; background: var(--color-surface); box-shadow: var(--shadow-raised); padding: 8px 12px max(12px, env(safe-area-inset-bottom)); }
+.mobileActionSheetHandle { justify-self: center; width: 36px; height: 4px; border-radius: 2px; background: var(--color-border-strong); margin: 2px 0 8px; }
+.mobileActionSheet h2 { margin: 0 4px 8px; overflow: hidden; font-size: 15px; text-overflow: ellipsis; white-space: nowrap; }
+.mobileActionList { display: grid; gap: 2px; }
+.mobileAction, .mobileActionCancel { display: flex; align-items: center; width: 100%; min-height: 44px; gap: 10px; border: 0; border-radius: var(--radius-control); background: transparent; padding: 10px; color: var(--color-text); font-size: 14px; font-weight: 650; text-align: left; text-decoration: none; }
+.mobileAction:hover, .mobileActionCancel:hover { background: var(--color-hover); }
+.mobileAction.destructive { color: var(--color-danger-text); }
+.mobileActionCancel { justify-content: center; margin-top: 8px; border-top: 1px solid var(--color-border); text-align: center; }
+
 @media (max-width: 760px) {
   .explorerPage { width: calc(100% - 24px); padding-top: 12px; }
   .explorerToolbar { align-items: stretch; flex-wrap: wrap; }

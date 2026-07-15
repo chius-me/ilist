@@ -66,7 +66,7 @@ describe('responsive actions', () => {
 
   it('focuses the storage name and closes the storage sheet on Escape', () => {
     const onClose = vi.fn();
-    render(<MountDialog mount={null} busy={false} error={null} onClose={onClose} onSubmit={vi.fn()} />);
+    render(<AppProviders><MountDialog mount={null} busy={false} error={null} onClose={onClose} onSubmit={vi.fn()} /></AppProviders>);
 
     expect(screen.getByLabelText('Display name')).toHaveFocus();
     fireEvent.keyDown(document, { key: 'Escape' });
