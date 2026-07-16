@@ -27,6 +27,20 @@ export interface GraphListResult {
   nextCursor: string | null;
 }
 
+export interface GraphUploadSession {
+  uploadUrl: string;
+  expirationDateTime: string;
+  nextExpectedRanges?: string[];
+}
+
+export type GraphUploadPartResult =
+  | { completed: false; nextExpectedRanges: string[] }
+  | { completed: true; item: GraphDriveItem };
+
+export interface UploadSessionRequestOptions {
+  signal?: AbortSignal;
+}
+
 export interface GraphItemUpdate {
   name?: string;
   parentReference?: { id: string };
@@ -53,6 +67,53 @@ function graphError(status: number): HttpError {
   if (status === 409) return new HttpError(409, 'STORAGE_CONFLICT', 'OneDrive item conflicts with an existing item');
   if (status === 429) return new HttpError(503, 'ONEDRIVE_RATE_LIMITED', 'OneDrive is temporarily rate limited');
   return new HttpError(502, 'ONEDRIVE_UPSTREAM_FAILED', 'OneDrive request failed');
+}
+
+function uploadSessionError(response: Response): HttpError {
+  const retryAfter = response.headers.get('retry-after');
+  const details = retryAfter === null ? undefined : { retryAfter };
+  if (response.status === 404) return new HttpError(404, 'ONEDRIVE_UPLOAD_SESSION_NOT_FOUND', 'OneDrive upload session was not found', details);
+  if (response.status === 409) return new HttpError(409, 'ONEDRIVE_UPLOAD_SESSION_CONFLICT', 'OneDrive upload session conflicts with the current file', details);
+  if (response.status === 416) return new HttpError(409, 'ONEDRIVE_UPLOAD_SESSION_INVALID_RANGE', 'OneDrive upload part range is invalid', details);
+  if (response.status === 429) return new HttpError(503, 'ONEDRIVE_UPLOAD_SESSION_RATE_LIMITED', 'OneDrive upload session is temporarily rate limited', details);
+  return new HttpError(502, 'ONEDRIVE_UPLOAD_SESSION_FAILED', 'OneDrive upload session request failed', details);
+}
+
+function invalidUploadSession(): HttpError {
+  return new HttpError(502, 'ONEDRIVE_UPLOAD_SESSION_INVALID', 'OneDrive upload session response was invalid');
+}
+
+function validatedUploadSessionUrl(value: unknown): string {
+  if (typeof value !== 'string') throw invalidUploadSession();
+  try {
+    const url = new URL(value);
+    if (url.protocol !== 'https:') throw new Error('Invalid upload session protocol');
+    return url.toString();
+  } catch {
+    throw invalidUploadSession();
+  }
+}
+
+function validatedExpirationDateTime(value: unknown): string {
+  if (typeof value !== 'string' || !Number.isFinite(Date.parse(value))) throw invalidUploadSession();
+  return value;
+}
+
+function validatedNextExpectedRanges(value: unknown, required: boolean): string[] | undefined {
+  if (value === undefined && !required) return undefined;
+  if (!Array.isArray(value) || value.some((range) => typeof range !== 'string')) throw invalidUploadSession();
+  return value;
+}
+
+function validatedUploadSession(value: unknown): GraphUploadSession {
+  if (!value || typeof value !== 'object' || Array.isArray(value)) throw invalidUploadSession();
+  const payload = value as Record<string, unknown>;
+  const nextExpectedRanges = validatedNextExpectedRanges(payload.nextExpectedRanges, false);
+  return {
+    uploadUrl: validatedUploadSessionUrl(payload.uploadUrl),
+    expirationDateTime: validatedExpirationDateTime(payload.expirationDateTime),
+    ...(nextExpectedRanges === undefined ? {} : { nextExpectedRanges }),
+  };
 }
 
 function validatedCursor(cursor: string): string {
@@ -146,6 +207,53 @@ export class OneDriveClient {
     });
   }
 
+  async createUploadSession(parentId: string, name: string): Promise<GraphUploadSession> {
+    const encodedName = encodeURIComponent(name);
+    const path = parentId === 'root'
+      ? `/me/drive/root:/${encodedName}:/createUploadSession`
+      : `/me/drive/items/${encodeURIComponent(parentId)}:/${encodedName}:/createUploadSession`;
+    return validatedUploadSession(await this.requestJson<unknown>(`${GRAPH_BASE}${path}`, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ item: { '@microsoft.graph.conflictBehavior': 'fail' } }),
+    }));
+  }
+
+  async uploadSessionPart(
+    uploadUrl: string,
+    body: ReadableStream,
+    contentRange: string,
+    contentLength: number,
+    options: UploadSessionRequestOptions = {},
+  ): Promise<GraphUploadPartResult> {
+    const response = await this.requestUploadSession(uploadUrl, {
+      method: 'PUT',
+      headers: {
+        'content-type': 'application/octet-stream',
+        'content-length': String(contentLength),
+        'content-range': contentRange,
+      },
+      body: body as BodyInit,
+      signal: options.signal,
+    });
+    if (response.status === 202) {
+      const payload = await this.readUploadSessionJson(response);
+      return { completed: false, nextExpectedRanges: validatedNextExpectedRanges(payload.nextExpectedRanges, true)! };
+    }
+    if (response.status === 200 || response.status === 201) {
+      return { completed: true, item: await this.readUploadSessionJson<GraphDriveItem>(response) };
+    }
+    throw invalidUploadSession();
+  }
+
+  async getUploadSessionStatus(uploadUrl: string): Promise<GraphUploadSession> {
+    return validatedUploadSession(await this.readUploadSessionJson(await this.requestUploadSession(uploadUrl, { method: 'GET' })));
+  }
+
+  async cancelUploadSession(uploadUrl: string): Promise<void> {
+    await this.requestUploadSession(uploadUrl, { method: 'DELETE' });
+  }
+
   update(itemId: string, update: GraphItemUpdate): Promise<GraphDriveItem> {
     return this.requestJson<GraphDriveItem>(withSelect(`/me/drive/items/${encodeURIComponent(itemId)}`), {
       method: 'PATCH',
@@ -193,6 +301,28 @@ export class OneDriveClient {
     } catch {
       throw new HttpError(502, 'ONEDRIVE_DOWNLOAD_UNAVAILABLE', 'OneDrive download is unavailable');
     }
+  }
+
+  private async requestUploadSession(uploadUrl: string, init: RequestInit): Promise<Response> {
+    const url = validatedUploadSessionUrl(uploadUrl);
+    const headers = new Headers(init.headers);
+    headers.delete('authorization');
+    let response: Response;
+    try {
+      const fetcher = this.fetcher;
+      response = await fetcher.call(globalThis, url, { ...init, headers });
+    } catch (error) {
+      console.error('OneDrive upload session fetch failed', {
+        errorName: error instanceof Error ? error.name : undefined,
+      });
+      throw new HttpError(502, 'ONEDRIVE_UPLOAD_SESSION_FAILED', 'OneDrive upload session request failed');
+    }
+    if (!response.ok) throw uploadSessionError(response);
+    return response;
+  }
+
+  private async readUploadSessionJson<T = Record<string, unknown>>(response: Response): Promise<T> {
+    try { return await response.json<T>(); } catch { throw invalidUploadSession(); }
   }
 
   private async requestJson<T>(url: string, init: RequestInit = {}, retried = false): Promise<T> {
