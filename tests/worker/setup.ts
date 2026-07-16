@@ -11,11 +11,12 @@ import mounts from '../../migrations/0008_mounts.sql?raw';
 import storageCredentials from '../../migrations/0009_storage_credentials.sql?raw';
 import nativeR2CompatibilityMount from '../../migrations/0010_native_r2_compat_mount.sql?raw';
 import oauthStates from '../../migrations/0011_oauth_states.sql?raw';
+import uploadSessions from '../../migrations/0012_upload_sessions.sql?raw';
 import type { Env } from '../../src/worker/types';
 
 beforeEach(async () => {
   const db = (env as unknown as Env).DB;
-  for (const statement of `${initial}\n${entries}\n${lock}\n${reservations}\n${leaseExpiry}\n${storageKeyImmutable}\n${storageRecovery}\n${mounts}\n${storageCredentials}\n${nativeR2CompatibilityMount}\n${oauthStates}`.split(/;\s+(?=(?:PRAGMA|CREATE|INSERT|DROP|ALTER))/)) {
+  for (const statement of `${initial}\n${entries}\n${lock}\n${reservations}\n${leaseExpiry}\n${storageKeyImmutable}\n${storageRecovery}\n${mounts}\n${storageCredentials}\n${nativeR2CompatibilityMount}\n${oauthStates}\n${uploadSessions}`.split(/;\s+(?=(?:PRAGMA|CREATE|INSERT|DROP|ALTER))/)) {
     const sql = statement.trim();
     if (!sql) continue;
     try {
@@ -26,4 +27,7 @@ beforeEach(async () => {
       }
     }
   }
+
+  const foreignKeys = await db.prepare('PRAGMA foreign_keys').first<{ foreign_keys: number }>();
+  if (foreignKeys?.foreign_keys !== 1) throw new Error('Worker test D1 must enforce foreign keys');
 });

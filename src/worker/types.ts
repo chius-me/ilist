@@ -190,3 +190,25 @@ export interface Mount {
   createdAt: string;
   updatedAt: string;
 }
+
+export type UploadSessionStatus = 'active' | 'completing' | 'completed' | 'aborted';
+
+export interface UploadSessionRow {
+  id: string;
+  owner_session_id: string;
+  mount_id: string;
+  parent_item_id: string;
+  name: string;
+  size: number;
+  content_type: string | null;
+  part_size: number;
+  provider_state_ciphertext: string;
+  parts_json: string;
+  completed_item_json: string | null;
+  status: UploadSessionStatus;
+  active_part_number: number | null;
+  active_part_expires_at: number | null;
+  expires_at: number;
+  created_at: string;
+  updated_at: string;
+}
