@@ -3,7 +3,7 @@ import {
   createSession,
   currentUser,
   deleteSession,
-  requireAdmin,
+  requireAdminSession,
   sessionCookie,
   verifyPassword,
 } from './auth';
@@ -42,6 +42,7 @@ import { handleMountRoutes } from './mount-routes';
 import { handleOAuthRoutes } from './oauth-routes';
 import { keyFromPath, putObject, streamEntryObject } from './r2';
 import type { BatchFailure, BatchResult, Env } from './types';
+import { handleUploadRoutes } from './upload-routes';
 
 interface LoginBody {
   username?: string;
@@ -330,13 +331,16 @@ async function handleAdmin(request: Request, env: Env, url: URL, options: RouteR
   if (url.pathname === '/api/admin/login') return handleLogin(request, env);
   if (url.pathname === '/api/admin/logout') return handleLogout(request, env);
 
-  const user = await requireAdmin(env, request);
+  const session = await requireAdminSession(env, request);
   if (request.method !== 'GET') requireSameOrigin(request);
 
   if (url.pathname === '/api/admin/me') {
     if (request.method !== 'GET') return methodNotAllowed();
-    return ok(user);
+    return ok(session.user);
   }
+
+  const uploadResponse = await handleUploadRoutes(request, env, url, session.id);
+  if (uploadResponse) return uploadResponse;
 
   const oauthResponse = await handleOAuthRoutes(request, env, url);
   if (oauthResponse) return oauthResponse;

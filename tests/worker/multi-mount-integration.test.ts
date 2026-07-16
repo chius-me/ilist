@@ -80,7 +80,8 @@ describe('multi-mount filesystem integration', () => {
     const db = (env as unknown as Env).DB;
     await db.prepare("DELETE FROM mounts WHERE id <> 'native-r2'").run();
     await createMount(db, { name: 'Personal', mountPath: '/personal', driverType: 'onedrive', provider: 'onedrive' });
-    driverRegistry.onedrive = () => fakeDriver('personal', true);
+    const driver = fakeDriver('personal', true);
+    driverRegistry.onedrive = () => driver;
     const cookie = await login();
 
     const adminResponse = await SELF.fetch(`${origin}/api/fs/list?path=/personal`, { headers: { cookie } });
@@ -100,6 +101,16 @@ describe('multi-mount filesystem integration', () => {
     expect(nativeResponse.status).toBe(200);
     const nativeRoot = (await nativeResponse.json() as { data: { current: { capabilities: Record<string, boolean> } } }).data.current;
     expect(nativeRoot.capabilities.multipartUpload).toBe(false);
+
+    const listed = await SELF.fetch(`${origin}/api/fs/list?path=/personal`, { headers: { cookie } });
+    const uploadFolder = (await listed.json() as { data: { items: Array<{ id: string }> } }).data.items[0];
+    const smallUpload = await SELF.fetch(
+      `${origin}/api/admin/files/small-upload?parentId=${encodeURIComponent(uploadFolder.id)}&name=small.txt`,
+      { method: 'PUT', headers: { cookie, origin, 'content-type': 'text/plain' }, body: 'small' },
+    );
+    expect(smallUpload.status).toBe(200);
+    expect(driver.upload).toHaveBeenCalledWith('shared-folder-id', 'small.txt', expect.anything(), 'text/plain');
+    expect(driver.resumableUpload?.create).not.toHaveBeenCalled();
   });
 
   it('browses two mounts with collision-free IDs and downloads through the selected driver', async () => {
