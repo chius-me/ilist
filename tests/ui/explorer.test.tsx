@@ -138,6 +138,16 @@ describe('ExplorerApp', () => {
     expect(screen.getByRole('button', { name: 'Search this folder' })).toHaveFocus();
   });
 
+  it('closes search when another command-bar control is used', async () => {
+    render(<App />);
+    fireEvent.click(await screen.findByRole('button', { name: 'Search this folder' }));
+    expect(screen.getByRole('textbox', { name: 'Search this folder' })).toBeVisible();
+
+    fireEvent.mouseDown(screen.getByRole('combobox', { name: 'Sort files' }));
+
+    expect(screen.queryByRole('textbox', { name: 'Search this folder' })).not.toBeInTheDocument();
+  });
+
   it('refreshes the directory and disables refresh while loading', async () => {
     let listRequests = 0;
     let resolveRefresh: (response: Response) => void;

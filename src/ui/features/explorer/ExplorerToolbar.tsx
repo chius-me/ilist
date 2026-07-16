@@ -51,7 +51,7 @@ export function ExplorerToolbar({
   const uploadInput = useRef<HTMLInputElement>(null);
   const searchButton = useRef<HTMLButtonElement>(null);
   const searchInput = useRef<HTMLInputElement>(null);
-  const toolbar = useRef<HTMLElement>(null);
+  const searchControl = useRef<HTMLLabelElement>(null);
   const adminMenuButton = useRef<HTMLButtonElement>(null);
   const adminMenu = useRef<HTMLDivElement>(null);
   const restoreSearchFocus = useRef(false);
@@ -72,7 +72,7 @@ export function ExplorerToolbar({
   useEffect(() => {
     if (!searchOpen) return;
     const closeOnOutsideClick = (event: MouseEvent) => {
-      if (toolbar.current?.contains(event.target as Node)) return;
+      if (searchControl.current?.contains(event.target as Node)) return;
       restoreSearchFocus.current = true;
       setSearchOpen(false);
     };
@@ -135,9 +135,9 @@ export function ExplorerToolbar({
   }
 
   return (
-    <section ref={toolbar} className="explorerToolbar" aria-label={t('toolbar.controls')}>
+    <section className="explorerToolbar" aria-label={t('toolbar.controls')}>
       <div className="toolbarPath">
-        {searchOpen ? <label className="searchControl searchOverlay">
+        {searchOpen ? <label ref={searchControl} className="searchControl searchOverlay">
           <Search aria-hidden="true" size={17} />
           <span className="srOnly">{t('toolbar.search')}</span>
           <input ref={searchInput} value={query} onChange={(event) => onQuery(event.target.value)} onKeyDown={(event) => {
