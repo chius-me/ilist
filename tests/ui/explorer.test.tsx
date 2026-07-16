@@ -1,4 +1,4 @@
-import { fireEvent, render, screen, waitFor } from '@testing-library/react';
+import { fireEvent, render, screen, waitFor, within } from '@testing-library/react';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { App } from '../../src/ui/App';
 
@@ -80,7 +80,7 @@ describe('ExplorerApp', () => {
     await waitFor(() => expect(location.pathname).toBe('/Docs'));
   });
 
-  it('orders path, controls, and collection and keeps actions separate', async () => {
+  it('combines path navigation and file controls in command order', async () => {
     const reportRoot = {
       ...root,
       data: {
@@ -103,11 +103,77 @@ describe('ExplorerApp', () => {
     render(<App />);
     const path = await screen.findByRole('navigation', { name: 'Path' });
     const controls = screen.getByRole('region', { name: 'File controls' });
-    const files = screen.getByRole('list', { name: 'Files and folders' });
-    expect(path.compareDocumentPosition(controls) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+    const files = await screen.findByRole('list', { name: 'Files and folders' });
+    const home = within(path).getByRole('button', { name: 'Path home' });
+    const search = within(controls).getByRole('button', { name: 'Search this folder' });
+    const sort = within(controls).getByRole('combobox', { name: 'Sort files' });
+    const direction = within(controls).getByRole('button', { name: 'Sort ascending' });
+    const refresh = within(controls).getByRole('button', { name: 'Refresh' });
+    const list = within(controls).getByRole('button', { name: 'List view' });
+
+    expect(controls).toContainElement(path);
+    expect(home).not.toHaveTextContent('ilist');
+    expect(path.compareDocumentPosition(search) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+    expect(search.compareDocumentPosition(sort) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+    expect(sort.compareDocumentPosition(direction) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+    expect(direction.compareDocumentPosition(refresh) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+    expect(refresh.compareDocumentPosition(list) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
     expect(controls.compareDocumentPosition(files) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
     const open = screen.getByRole('button', { name: 'Open report.pdf' });
     expect(open).not.toContainElement(screen.getByRole('button', { name: 'Actions for report.pdf' }));
+  });
+
+  it('opens search on demand and restores focus to its button on Escape', async () => {
+    render(<App />);
+    const search = await screen.findByRole('button', { name: 'Search this folder' });
+
+    expect(screen.queryByRole('textbox', { name: 'Search this folder' })).not.toBeInTheDocument();
+    fireEvent.click(search);
+
+    const input = screen.getByRole('textbox', { name: 'Search this folder' });
+    await waitFor(() => expect(input).toHaveFocus());
+    fireEvent.keyDown(input, { key: 'Escape' });
+
+    expect(screen.queryByRole('textbox', { name: 'Search this folder' })).not.toBeInTheDocument();
+    expect(screen.getByRole('button', { name: 'Search this folder' })).toHaveFocus();
+  });
+
+  it('closes search when another command-bar control is used', async () => {
+    render(<App />);
+    fireEvent.click(await screen.findByRole('button', { name: 'Search this folder' }));
+    expect(screen.getByRole('textbox', { name: 'Search this folder' })).toBeVisible();
+
+    fireEvent.mouseDown(screen.getByRole('combobox', { name: 'Sort files' }));
+
+    expect(screen.queryByRole('textbox', { name: 'Search this folder' })).not.toBeInTheDocument();
+  });
+
+  it('refreshes the directory and disables refresh while loading', async () => {
+    let listRequests = 0;
+    let resolveRefresh: (response: Response) => void;
+    vi.stubGlobal('fetch', vi.fn(async (input: RequestInfo | URL) => {
+      const url = String(input);
+      if (url.includes('/api/admin/me')) return new Response(JSON.stringify(guestError), { status: 401 });
+      if (url.includes('/api/fs/list')) {
+        listRequests += 1;
+        if (listRequests === 1) return new Response(JSON.stringify(root), { status: 200 });
+        return new Promise<Response>((resolve) => { resolveRefresh = resolve; });
+      }
+      throw new Error(`Unexpected fetch: ${url}`);
+    }));
+
+    render(<App />);
+    await screen.findByRole('list', { name: 'Files and folders' });
+    const refresh = screen.getByRole('button', { name: 'Refresh' });
+    fireEvent.click(refresh);
+
+    await waitFor(() => expect(listRequests).toBe(2));
+    expect(refresh).toBeDisabled();
+    fireEvent.click(refresh);
+    expect(listRequests).toBe(2);
+
+    resolveRefresh!(new Response(JSON.stringify(root), { status: 200 }));
+    await waitFor(() => expect(refresh).toBeEnabled());
   });
 
   it('persists view changes only in versioned preferences', async () => {

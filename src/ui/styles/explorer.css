@@ -14,13 +14,12 @@
 .breadcrumbs {
   display: flex;
   align-items: center;
-  min-height: 42px;
-  overflow-x: auto;
-  border-bottom: 1px solid var(--line);
+  min-width: 0;
+  min-height: 38px;
+  overflow: hidden;
   color: var(--muted);
-  padding: 5px 10px;
+  padding: 0;
   font-size: 13px;
-  scrollbar-width: thin;
 }
 
 .breadcrumbItem {
@@ -51,22 +50,13 @@
 .breadcrumbPlaceholder { height: 42px; border-bottom: 1px solid var(--line); }
 .explorerToolbarSlot { min-height: 54px; }
 
-.explorerToolbar {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  gap: 12px;
-  min-height: 54px;
-  background: var(--surface);
-  padding: 8px 10px;
-}
+.explorerToolbar { position: relative; display: flex; align-items: center; min-height: 54px; gap: 12px; background: var(--surface); padding: 8px 10px; }
+.toolbarPath { display: flex; min-width: 0; flex: 1 1 auto; overflow: hidden; }
 
 .searchControl {
   display: flex;
   align-items: center;
-  flex: 1 1 260px;
-  min-width: 150px;
-  max-width: 420px;
+  min-width: min(150px, calc(100vw - 24px));
   height: 36px;
   gap: 8px;
   border: 1px solid var(--line-strong);
@@ -78,16 +68,13 @@
 
 .searchControl:focus-within { border-color: var(--accent); box-shadow: var(--focus-ring); }
 .searchControl input { min-width: 0; width: 100%; height: 34px; border: 0; outline: 0; background: transparent; color: var(--text); }
+.searchOverlay { width: 100%; min-width: 0; max-width: 360px; }
 
-.toolbarActions {
-  display: flex;
-  flex: 0 0 auto;
-  align-items: center;
-  justify-content: flex-end;
-  gap: 6px;
-}
+.toolbarActions { position: relative; z-index: 2; margin-left: auto; display: flex; flex: 0 0 auto; align-items: center; justify-content: flex-end; gap: 6px; }
 
 .sortControl select {
+  width: auto;
+  max-width: 88px;
   height: 34px;
   border: 1px solid var(--line-strong);
   border-radius: var(--radius);
@@ -103,6 +90,12 @@
 .viewToggle button:last-child { border-right: 0; }
 .viewToggle button:hover { background: var(--color-hover); }
 .viewToggle button.active { background: var(--accent); color: var(--color-primary-text); }
+.mobileViewToggle, .mobileAdminActions { display: none; }
+.desktopAdminActions { display: inline-flex; align-items: center; gap: 6px; }
+.mobileAdminActions { position: relative; }
+.mobileAdminMenu { position: absolute; z-index: var(--layer-menu); right: 0; top: calc(100% + 6px); display: grid; min-width: 176px; border: 1px solid var(--color-border-strong); border-radius: var(--radius-control); background: var(--color-surface-raised); box-shadow: var(--shadow-raised); padding: 4px; }
+.mobileAdminMenu button { display: flex; align-items: center; min-height: 48px; gap: 8px; border: 0; border-radius: var(--radius-control); background: transparent; padding: 6px 8px; color: var(--color-text); font-size: 13px; text-align: left; }
+.mobileAdminMenu button:hover { background: var(--color-hover); }
 .selectionCount { color: var(--muted); font-size: 12px; font-variant-numeric: tabular-nums; white-space: nowrap; }
 
 .selectionToolbar { display: flex; align-items: center; justify-content: space-between; min-height: 54px; gap: 10px; background: var(--accent-soft); padding: 8px 10px; }
@@ -204,6 +197,7 @@
 .loadingRow span:first-child { width: 28px; height: 28px; }
 .loadingRow span:last-child { width: 68px; justify-self: end; }
 @keyframes skeleton { to { opacity: 0.48; } }
+.explorerToolbar .isSpinning { animation: spin 0.9s linear infinite; }
 .refreshing { display: inline-flex; align-items: center; gap: 6px; margin: 10px 12px; color: var(--muted); font-size: 12px; }
 .refreshing svg { animation: spin 0.9s linear infinite; }
 @keyframes spin { to { transform: rotate(360deg); } }
@@ -224,10 +218,18 @@
 .mobileActionCancel { justify-content: center; margin-top: 8px; border-top: 1px solid var(--color-border); text-align: center; }
 
 @media (max-width: 760px) {
-  .explorerPage { width: calc(100% - 24px); padding-top: 12px; }
-  .explorerToolbar { align-items: stretch; flex-wrap: wrap; }
-  .searchControl { flex-basis: 100%; max-width: none; }
-  .toolbarActions { width: 100%; justify-content: flex-start; }
+  .explorerPage { width: 100%; padding-top: 12px; }
+  .explorerToolbar, .toolbarActions { gap: 0; }
+  .toolbarPath .breadcrumbs { overflow: hidden; }
+  .toolbarPath .breadcrumbItem:not(:last-child) { display: none; }
+  .toolbarPath .breadcrumbItem:last-child { min-width: 0; }
+  .toolbarPath .breadcrumbItem:last-child button { max-width: 100%; }
+  .explorerToolbar .iconButton, .mobileViewToggle button { width: 48px; height: 48px; flex-basis: 48px; }
+  .searchControl { height: 48px; }
+  .searchControl input { height: 46px; }
+  .sortControl select { width: 64px; max-width: 64px; height: 48px; padding: 0 20px 0 6px; }
+  .desktopViewToggle, .desktopAdminActions { display: none; }
+  .mobileViewToggle, .mobileAdminActions { display: inline-flex; }
   .selectionToolbar { align-items: flex-start; flex-direction: column; }
   .selectionActions { width: 100%; justify-content: flex-start; flex-wrap: wrap; }
   .fileListHeader, .entryRow { grid-template-columns: 48px minmax(0, 1fr) minmax(76px, auto); }
@@ -250,9 +252,6 @@
 }
 
 @media (max-width: 480px) {
-  .toolbarActions { gap: 5px; }
   .selectionActions .button { flex: 1 1 auto; }
-  .sortControl { flex: 1 1 auto; }
-  .sortControl select { width: 100%; }
   .fileListHeader, .entryRow { grid-template-columns: 48px minmax(0, 1fr) minmax(48px, auto); }
 }
