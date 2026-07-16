@@ -45,6 +45,10 @@ export interface PutObjectOptions extends S3RequestOptions {
   contentType?: string;
 }
 
+export interface S3UploadPartOptions {
+  signal?: AbortSignal;
+}
+
 export class S3Error extends Error {
   readonly status: number;
   readonly code: string;
@@ -153,12 +157,18 @@ export class S3Client {
     return parseCreateMultipartUploadResponseXml(await response.text());
   }
 
-  async uploadPart(key: string, uploadId: string, partNumber: number, body: BodyInit): Promise<{ etag: string }> {
+  async uploadPart(
+    key: string,
+    uploadId: string,
+    partNumber: number,
+    body: BodyInit,
+    options: S3UploadPartOptions = {},
+  ): Promise<{ etag: string }> {
     if (!Number.isInteger(partNumber) || partNumber <= 0) {
       throw new RangeError('S3 multipart part number must be a positive integer');
     }
     const url = `${this.requestUrl(key)}?partNumber=${encodeS3Component(String(partNumber))}&uploadId=${encodeS3Component(uploadId)}`;
-    const response = await this.send('PUT', url, { body });
+    const response = await this.send('PUT', url, { body, signal: options.signal });
     const etag = response.headers.get('etag')?.trim();
     if (!etag) throw new Error('S3 upload part response is missing ETag');
     return { etag };
@@ -223,7 +233,7 @@ export class S3Client {
   private async send(
     method: string,
     url: string,
-    init: { headers?: HeadersInit; body?: BodyInit | null } = {},
+    init: { headers?: HeadersInit; body?: BodyInit | null; signal?: AbortSignal } = {},
   ): Promise<Response> {
     const headers = await signS3Headers({
       url,
@@ -233,7 +243,7 @@ export class S3Client {
       credentials: this.credentials,
       now: this.now(),
     });
-    const response = await this.fetcher(url, { method, headers, body: init.body });
+    const response = await this.fetcher(url, { method, headers, body: init.body, signal: init.signal });
     if (!response.ok) throw await S3Error.fromResponse(response);
     return response;
   }

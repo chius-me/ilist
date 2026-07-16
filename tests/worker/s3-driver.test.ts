@@ -224,6 +224,7 @@ describe('S3Driver', () => {
         partSize: UPLOAD_PART_SIZE_BYTES,
       });
       const body = new ReadableStream();
+      const controller = new AbortController();
 
       expect(session).toMatchObject({
         state: {
@@ -243,9 +244,9 @@ describe('S3Driver', () => {
         totalSize: 20 * 1024 * 1024,
         body,
         size: UPLOAD_PART_SIZE_BYTES,
-        signal: new AbortController().signal,
+        signal: controller.signal,
       })).resolves.toEqual({ part: { partNumber: 1, size: UPLOAD_PART_SIZE_BYTES, etag: '"part-etag"' } });
-      expect(api.uploadPart).toHaveBeenCalledWith('tenant/root/archive.bin', 'upload-123', 1, body);
+      expect(api.uploadPart).toHaveBeenCalledWith('tenant/root/archive.bin', 'upload-123', 1, body, { signal: controller.signal });
 
       const completed = await adapter.complete({
         state: session.state,

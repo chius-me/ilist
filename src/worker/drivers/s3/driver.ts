@@ -1,6 +1,6 @@
 import { HttpError } from '../../http';
 import type { Mount } from '../../types';
-import { S3Client, S3Error, type GetObjectOptions, type ListObjectsV2Options, type PutObjectOptions, type S3ListObjectsResult } from './client';
+import { S3Client, S3Error, type GetObjectOptions, type ListObjectsV2Options, type PutObjectOptions, type S3ListObjectsResult, type S3UploadPartOptions } from './client';
 import { UPLOAD_PART_SIZE_BYTES, type CompletedUploadPart, type DownloadResult, type ListResult, type ResumableUploadAdapter, type StorageDriver, type StorageItem } from '../types';
 
 export interface S3DriverClient {
@@ -11,7 +11,7 @@ export interface S3DriverClient {
   copyObject(sourceKey: string, destinationKey: string): Promise<Response>;
   deleteObject(key: string): Promise<Response>;
   createMultipartUpload(key: string, contentType: string | null): Promise<{ uploadId: string }>;
-  uploadPart(key: string, uploadId: string, partNumber: number, body: BodyInit): Promise<{ etag: string }>;
+  uploadPart(key: string, uploadId: string, partNumber: number, body: BodyInit, options?: S3UploadPartOptions): Promise<{ etag: string }>;
   completeMultipartUpload(key: string, uploadId: string, parts: CompletedUploadPart[]): Promise<Response>;
   abortMultipartUpload(key: string, uploadId: string): Promise<Response>;
 }
@@ -107,7 +107,7 @@ export class S3Driver implements StorageDriver {
     },
     uploadPart: async (input) => {
       const state = this.requireMultipartUploadState(input.state);
-      const { etag } = await this.client.uploadPart(state.key, state.uploadId, input.partNumber, input.body);
+      const { etag } = await this.client.uploadPart(state.key, state.uploadId, input.partNumber, input.body, { signal: input.signal });
       return { part: { partNumber: input.partNumber, size: input.size, etag } };
     },
     complete: async (input) => {
