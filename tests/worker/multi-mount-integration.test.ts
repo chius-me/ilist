@@ -21,7 +21,7 @@ function item(input: Partial<StorageItem> & Pick<StorageItem, 'id' | 'name' | 'k
   };
 }
 
-function fakeDriver(label: string): StorageDriver {
+function fakeDriver(label: string, resumable = false): StorageDriver {
   const children = new Map<string, StorageItem[]>([
     ['root', [item({ id: 'shared-folder-id', parentId: 'root', name: 'Docs', kind: 'folder' })]],
     ['shared-folder-id', [item({ id: 'same-provider-id', parentId: 'shared-folder-id', name: `${label}.txt`, kind: 'file' })]],
@@ -32,7 +32,18 @@ function fakeDriver(label: string): StorageDriver {
   };
   return {
     rootId: 'root',
-    capabilities: new Set(['list', 'download', 'upload', 'createFolder', 'rename', 'move', 'delete']),
+    capabilities: new Set([
+      'list', 'download', 'upload', 'createFolder', 'rename', 'move', 'delete',
+      ...(resumable ? ['multipartUpload' as const] : []),
+    ]),
+    ...(resumable ? {
+      resumableUpload: {
+        create: vi.fn(async () => ({ state: {}, expiresAt: Date.now() + 60_000 })),
+        uploadPart: vi.fn(async () => ({ part: { partNumber: 1, size: 0, etag: null } })),
+        complete: vi.fn(async () => item({ id: `upload-${label}`, parentId: 'root', name: 'completed.txt', kind: 'file' })),
+        abort: vi.fn(async () => undefined),
+      },
+    } : {}),
     list: vi.fn(async (parentId) => ({ items: children.get(parentId) ?? [], nextCursor: null })),
     stat: vi.fn(async (id) => {
       if (id === 'root') return item({ id: 'root', name: label, kind: 'folder' });
@@ -65,6 +76,32 @@ afterEach(() => {
 });
 
 describe('multi-mount filesystem integration', () => {
+  it('advertises resumable uploads only for authenticated external folders with a provider adapter', async () => {
+    const db = (env as unknown as Env).DB;
+    await db.prepare("DELETE FROM mounts WHERE id <> 'native-r2'").run();
+    await createMount(db, { name: 'Personal', mountPath: '/personal', driverType: 'onedrive', provider: 'onedrive' });
+    driverRegistry.onedrive = () => fakeDriver('personal', true);
+    const cookie = await login();
+
+    const adminResponse = await SELF.fetch(`${origin}/api/fs/list?path=/personal`, { headers: { cookie } });
+    expect(adminResponse.status).toBe(200);
+    const folder = (await adminResponse.json() as { data: { items: Array<{ capabilities: Record<string, boolean> }> } }).data.items[0];
+    expect(folder.capabilities).toMatchObject({
+      upload: true,
+      multipartUpload: true,
+    });
+
+    const publicResponse = await SELF.fetch(`${origin}/api/fs/list?path=/personal`);
+    expect(publicResponse.status).toBe(200);
+    const publicFolder = (await publicResponse.json() as { data: { items: Array<{ capabilities: Record<string, boolean> }> } }).data.items[0];
+    expect(publicFolder.capabilities.multipartUpload).toBe(false);
+
+    const nativeResponse = await SELF.fetch(`${origin}/api/fs/list?path=/R2`, { headers: { cookie } });
+    expect(nativeResponse.status).toBe(200);
+    const nativeRoot = (await nativeResponse.json() as { data: { current: { capabilities: Record<string, boolean> } } }).data.current;
+    expect(nativeRoot.capabilities.multipartUpload).not.toBe(true);
+  });
+
   it('browses two mounts with collision-free IDs and downloads through the selected driver', async () => {
     const db = (env as unknown as Env).DB;
     await db.prepare("DELETE FROM mounts WHERE id <> 'native-r2'").run();

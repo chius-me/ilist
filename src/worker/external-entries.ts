@@ -1,5 +1,5 @@
 import { createDriver } from './drivers/registry';
-import type { StorageDriver, StorageItem } from './drivers/types';
+import { requireResumableUploadAdapter, type StorageDriver, type StorageItem } from './drivers/types';
 import { encodeExternalId, decodeExternalId, type ExternalIdentity } from './external-identity';
 import { HttpError } from './http';
 import { getMount } from './mounts';
@@ -15,6 +15,7 @@ function capabilities(driver: StorageDriver, item: StorageItem, admin: boolean) 
     preview: file && driver.capabilities.has('download'),
     download: file && driver.capabilities.has('download'),
     upload: admin && folder && driver.capabilities.has('upload'),
+    multipartUpload: admin && folder && driver.capabilities.has('upload') && requireResumableUploadAdapter(driver),
     createFolder: admin && folder && driver.capabilities.has('createFolder'),
     rename: admin && item.id !== driver.rootId && driver.capabilities.has('rename'),
     move: admin && item.id !== driver.rootId && driver.capabilities.has('move'),
