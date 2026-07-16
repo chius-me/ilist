@@ -27,6 +27,14 @@ export type ParsedCopyObjectResponse =
   | { kind: 'result'; etag: string; lastModified: string }
   | { kind: 'error'; error: ParsedS3Error };
 
+export interface ParsedCreateMultipartUploadResponse {
+  uploadId: string;
+}
+
+export type ParsedCompleteMultipartUploadResponse =
+  | { kind: 'result'; etag: string }
+  | { kind: 'error'; error: ParsedS3Error };
+
 export class S3XmlError extends Error {
   constructor() {
     super('Invalid S3 XML response');
@@ -152,4 +160,19 @@ export function parseCopyObjectResponseXml(xml: string): ParsedCopyObjectRespons
   const etag = requiredTrimmedText(root, 'ETag');
   const lastModified = requiredTrimmedText(root, 'LastModified');
   return { kind: 'result', etag, lastModified };
+}
+
+export function parseCreateMultipartUploadResponseXml(xml: string): ParsedCreateMultipartUploadResponse {
+  const root = record(parseDocument(xml).InitiateMultipartUploadResult);
+  return { uploadId: requiredTrimmedText(root, 'UploadId') };
+}
+
+export function parseCompleteMultipartUploadResponseXml(xml: string): ParsedCompleteMultipartUploadResponse {
+  const document = parseDocument(xml);
+  if (document.Error !== undefined) {
+    return { kind: 'error', error: parseS3ErrorRoot(record(document.Error)) };
+  }
+
+  const root = record(document.CompleteMultipartUploadResult);
+  return { kind: 'result', etag: requiredTrimmedText(root, 'ETag') };
 }

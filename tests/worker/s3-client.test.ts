@@ -333,3 +333,92 @@ describe('S3Client object requests', () => {
     },
   );
 });
+
+describe('S3Client multipart requests', () => {
+  it('signs multipart requests, escapes sorted completion parts, and preserves the completion response', async () => {
+    const seen: Array<{ method: string; url: string; headers: Headers; body: string | null }> = [];
+    const partBody = new Uint8Array([1, 2, 3]);
+    const completionXml = '<CompleteMultipartUploadResult><ETag>"complete"</ETag><Location>https://objects.example.test/archive</Location><Bucket>archive</Bucket><Key>archive.bin</Key></CompleteMultipartUploadResult>';
+    const fetcher = vi.fn<typeof fetch>(async (input, init) => {
+      const request = captureRequest(input, init);
+      seen.push({ ...request, body: await readRequestBody(input, init) });
+      if (request.method === 'POST' && new URL(request.url).search === '?uploads') {
+        return new Response('<InitiateMultipartUploadResult><UploadId>upload-123</UploadId></InitiateMultipartUploadResult>');
+      }
+      if (request.method === 'PUT') return new Response(null, { headers: { etag: '"etag-1"' } });
+      if (request.method === 'POST') return new Response(completionXml);
+      return new Response(null, { status: 204 });
+    });
+    const client = createClient(fetcher);
+
+    await expect(client.createMultipartUpload('中文/archive.bin', 'application/octet-stream')).resolves.toEqual({ uploadId: 'upload-123' });
+    await expect(client.uploadPart('中文/archive.bin', 'upload-123', 1, partBody)).resolves.toEqual({ etag: '"etag-1"' });
+    const completion = await client.completeMultipartUpload('中文/archive.bin', 'upload-123', [
+      { partNumber: 2, size: 10 * 1024 * 1024, etag: '"etag-2&<"' },
+      { partNumber: 1, size: 10 * 1024 * 1024, etag: '"etag-1"' },
+    ]);
+    await client.abortMultipartUpload('中文/archive.bin', 'upload-123');
+
+    expect(await completion.text()).toBe(completionXml);
+    expect(seen.map(({ method, url }) => [method, rawPathname(url), new URL(url).search])).toEqual([
+      ['POST', '/storage/archive/%E4%B8%AD%E6%96%87/archive.bin', '?uploads'],
+      ['PUT', '/storage/archive/%E4%B8%AD%E6%96%87/archive.bin', '?partNumber=1&uploadId=upload-123'],
+      ['POST', '/storage/archive/%E4%B8%AD%E6%96%87/archive.bin', '?uploadId=upload-123'],
+      ['DELETE', '/storage/archive/%E4%B8%AD%E6%96%87/archive.bin', '?uploadId=upload-123'],
+    ]);
+    expect(seen[0]!.headers.get('content-type')).toBe('application/octet-stream');
+    expect(seen[1]!.body).toBe('\u0001\u0002\u0003');
+    expect(seen[2]!.body).toBe(
+      '<CompleteMultipartUpload><Part><PartNumber>1</PartNumber><ETag>&quot;etag-1&quot;</ETag></Part><Part><PartNumber>2</PartNumber><ETag>&quot;etag-2&amp;&lt;&quot;</ETag></Part></CompleteMultipartUpload>',
+    );
+    for (const request of seen) expect(request.headers.get('authorization')).toContain('AWS4-HMAC-SHA256');
+  });
+
+  it('rejects a multipart part response without an ETag', async () => {
+    const fetcher = vi.fn<typeof fetch>(async () => new Response(null));
+    const client = createClient(fetcher);
+
+    await expect(client.uploadPart('archive.bin', 'upload-123', 1, 'part')).rejects.toThrow('S3 upload part response is missing ETag');
+  });
+
+  it.each([
+    ['malformed XML', '<InitiateMultipartUploadResult><UploadId></InitiateMultipartUploadResult>'],
+    ['missing UploadId', '<InitiateMultipartUploadResult><Bucket>archive</Bucket></InitiateMultipartUploadResult>'],
+    ['blank UploadId', '<InitiateMultipartUploadResult><UploadId> </UploadId></InitiateMultipartUploadResult>'],
+  ])('rejects a %s create-multipart response', async (_case, xml) => {
+    const fetcher = vi.fn<typeof fetch>(async () => new Response(xml));
+    const client = createClient(fetcher);
+
+    await expect(client.createMultipartUpload('archive.bin', null)).rejects.toThrow('Invalid S3 XML response');
+  });
+
+  it('rejects an S3 completion error returned with HTTP 200', async () => {
+    const fetcher = vi.fn<typeof fetch>(async () => new Response(
+      '<Error><Code>InvalidPart</Code><Message>Part does not match</Message><RequestId>complete-1</RequestId></Error>',
+    ));
+    const client = createClient(fetcher);
+
+    await expect(client.completeMultipartUpload('archive.bin', 'upload-123', [
+      { partNumber: 1, size: 1, etag: '"part-1"' },
+    ])).rejects.toMatchObject({
+      status: 200,
+      code: 'InvalidPart',
+      message: 'Part does not match',
+      requestId: 'complete-1',
+    });
+  });
+
+  it('rejects duplicate and non-positive completion parts before issuing a request', async () => {
+    const fetcher = vi.fn<typeof fetch>(async () => new Response(null));
+    const client = createClient(fetcher);
+
+    await expect(client.completeMultipartUpload('archive.bin', 'upload-123', [
+      { partNumber: 1, size: 1, etag: '"one"' },
+      { partNumber: 1, size: 1, etag: '"duplicate"' },
+    ])).rejects.toThrow('S3 multipart part numbers must be unique positive integers');
+    await expect(client.completeMultipartUpload('archive.bin', 'upload-123', [
+      { partNumber: 0, size: 1, etag: '"zero"' },
+    ])).rejects.toThrow('S3 multipart part numbers must be unique positive integers');
+    expect(fetcher).not.toHaveBeenCalled();
+  });
+});
