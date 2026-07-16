@@ -287,12 +287,25 @@ export function ExplorerPage({
       <ToastRegion toasts={toasts} onDismiss={dismissToast} />
       {menu && !mobileActions ? <EntryActionMenu entry={menu.entry} anchor={menu.anchor} actions={currentEntryActions} onClose={() => setMenu(null)} /> : null}
       {menu && mobileActions ? <MobileActionSheet open title={t('entry.actions', { name: menu.entry.name })} anchor={menu.anchor} actions={currentEntryActions} translate={t} cancelLabel={t('action.cancel')} onClose={() => setMenu(null)} /> : null}
-      {dialog?.type === 'rename' ? <RenameDialog open title={t('dialog.renameTitle', { name: dialog.entries[0].name })} initialName={dialog.entries[0].name} onClose={() => setDialog(null)} onSubmit={async (name) => { await patchEntry(dialog.entries[0].id, { name }); directory.refresh(); pushToast('success', t('feedback.renamed')); }} /> : null}
-      {dialog?.type === 'create' && directory.data && canCreateFolder ? <RenameDialog open title={t('toolbar.createFolder')} submitLabel={t('common.save')} onClose={() => setDialog(null)} onSubmit={async (name) => { await createFolder(directory.data!.current.id, name); directory.refresh(); pushToast('success', t('feedback.folderCreated')); }} /> : null}
+      {dialog?.type === 'rename' ? <RenameDialog open title={t('dialog.renameTitle', { name: dialog.entries[0].name })} initialName={dialog.entries[0].name} onClose={() => setDialog(null)} onSubmit={async (name) => {
+        await patchEntry(dialog.entries[0].id, { name });
+        directory.refresh();
+        // Defer toast until after RenameDialog closes and clears modal inert.
+        queueMicrotask(() => { pushToast('success', t('feedback.renamed')); });
+      }} /> : null}
+      {dialog?.type === 'create' && directory.data && canCreateFolder ? <RenameDialog open title={t('toolbar.createFolder')} submitLabel={t('common.save')} onClose={() => setDialog(null)} onSubmit={async (name) => {
+        await createFolder(directory.data!.current.id, name);
+        directory.refresh();
+        queueMicrotask(() => { pushToast('success', t('feedback.folderCreated')); });
+      }} /> : null}
       {dialog?.type === 'move' ? <FolderPickerDialog entries={dialog.entries} onClose={() => setDialog(null)} onSubmit={(destinationId) => runBatch(() => moveEntries(dialog.entries.map((entry) => entry.id), destinationId))} /> : null}
       {dialog?.type === 'copy' ? <FolderPickerDialog entries={dialog.entries} onClose={() => setDialog(null)} onSubmit={(destinationId) => runBatch(() => copyEntries(dialog.entries.map((entry) => entry.id), destinationId))} /> : null}
       {dialog?.type === 'delete' ? <DeleteDialog entries={dialog.entries} onClose={() => setDialog(null)} onSubmit={() => runBatch(() => deleteEntries(dialog.entries.map((entry) => entry.id)))} /> : null}
-      {dialog?.type === 'properties' ? <PropertiesDialog entry={dialog.entries[0]} onClose={() => setDialog(null)} onSubmit={async (entryPatch) => { await patchEntry(dialog.entries[0].id, entryPatch); directory.refresh(); pushToast('success', t('feedback.propertiesSaved')); }} /> : null}
+      {dialog?.type === 'properties' ? <PropertiesDialog entry={dialog.entries[0]} onClose={() => setDialog(null)} onSubmit={async (entryPatch) => {
+        await patchEntry(dialog.entries[0].id, entryPatch);
+        directory.refresh();
+        queueMicrotask(() => { pushToast('success', t('feedback.propertiesSaved')); });
+      }} /> : null}
       {dialog?.type === 'share' ? <ShareDialog entry={dialog.entries[0]} busy={operationPending} error={shareError} onClose={() => { setDialog(null); setShareError(null); }} onCreate={async (input) => { setOperationPending(true); setShareError(null); try { return await createShare(input); } catch (error) { setShareError(localizedApiError(error, t, 'share.unableSave')); throw error; } finally { setOperationPending(false); } }} /> : null}
       {previewId ? <PreviewOverlay entry={previewEntry} loading={previewLoading} error={previewError} onClose={onClosePreview} /> : null}
     </>

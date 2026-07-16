@@ -28,6 +28,7 @@ describe('explorer operations', () => {
     vi.stubGlobal('fetch', vi.fn(async (input: RequestInfo | URL) => {
       const url = String(input);
       if (url.includes('/api/admin/me')) return new Response(JSON.stringify({ ok: true, data: { username: 'admin' } }));
+      if (url.includes('/api/admin/uploads/sessions')) return new Response(JSON.stringify({ ok: true, data: [] }));
       if (url.includes('/api/fs/list')) return new Response(JSON.stringify(root));
       if (url.includes('/api/admin/entries/visibility')) return new Response(JSON.stringify({ ok: true, data: { succeeded: ['report'], failed: [] } }));
       if (url.includes('/api/admin/entries/report')) return Response.json({ ok: true, data: entry('report', 'renamed.pdf', 'file') });
@@ -63,14 +64,14 @@ describe('explorer operations', () => {
     fireEvent.change(screen.getByLabelText('Name'), { target: { value: 'renamed.pdf' } });
     fireEvent.click(screen.getByRole('button', { name: 'Save' }));
     expect(await screen.findByText('Renamed successfully.')).toBeVisible();
-
-    fireEvent.click(screen.getByRole('button', { name: 'Create folder' }));
+    // Wait until the modal releases inert so explorer controls are accessible again.
+    fireEvent.click(await screen.findByRole('button', { name: 'Create folder' }));
     fireEvent.change(screen.getByLabelText('Name'), { target: { value: 'New folder' } });
     fireEvent.click(screen.getByRole('button', { name: 'Save' }));
     expect(await screen.findByText('Folder created.')).toBeVisible();
 
-    fireEvent.click(screen.getByRole('button', { name: 'Actions for report.pdf' }));
-    fireEvent.click(screen.getByRole('menuitem', { name: 'Properties' }));
+    fireEvent.click(await screen.findByRole('button', { name: 'Actions for report.pdf' }));
+    fireEvent.click(await screen.findByRole('menuitem', { name: 'Properties' }));
     fireEvent.click(screen.getByRole('button', { name: 'Save' }));
     expect(await screen.findByText('Properties saved.')).toBeVisible();
   });
