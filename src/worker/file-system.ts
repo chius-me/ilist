@@ -51,6 +51,7 @@ const READ_ONLY_FOLDER_CAPABILITIES: EntryCapabilities = {
   preview: false,
   download: false,
   upload: false,
+  multipartUpload: false,
   createFolder: false,
   rename: false,
   move: false,
