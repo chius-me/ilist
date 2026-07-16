@@ -72,7 +72,17 @@ export class OneDriveDriver implements StorageDriver {
       const state = this.requireUploadSessionState(input.state);
       const contentRange = `bytes ${input.offset}-${input.offset + input.size - 1}/${input.totalSize}`;
       const result = await this.client.uploadSessionPart(this.toGraphUploadSession(state), input.body, contentRange, input.size, { signal: input.signal });
-      if (!result.completed) return { part: { partNumber: input.partNumber, size: input.size, etag: null } };
+      if (!result.completed) {
+        return {
+          state: {
+            ...state,
+            uploadUrl: result.session.uploadUrl,
+            expirationDateTime: result.session.expirationDateTime,
+            integrityProof: result.session.integrityProof,
+          },
+          part: { partNumber: input.partNumber, size: input.size, etag: null },
+        };
+      }
       return {
         part: { partNumber: input.partNumber, size: input.size, etag: null },
         completedItem: mapGraphItem(result.item, state.parentId),

@@ -35,7 +35,7 @@ export interface GraphUploadSession {
 }
 
 export type GraphUploadPartResult =
-  | { completed: false; nextExpectedRanges: string[] }
+  | { completed: false; nextExpectedRanges: string[]; session: GraphUploadSession }
   | { completed: true; item: GraphDriveItem };
 
 export interface UploadSessionRequestOptions {
@@ -65,6 +65,11 @@ interface GraphUploadSessionPayload {
   uploadUrl: string;
   expirationDateTime: string;
   nextExpectedRanges?: string[];
+}
+
+interface GraphUploadSessionStatusPayload {
+  expirationDateTime: string;
+  nextExpectedRanges: string[];
 }
 
 const UPLOAD_SESSION_PROOF_VERSION = 1;
@@ -127,6 +132,15 @@ function validatedUploadSession(value: unknown): GraphUploadSessionPayload {
     uploadUrl: validatedUploadSessionUrl(payload.uploadUrl),
     expirationDateTime: validatedExpirationDateTime(payload.expirationDateTime),
     ...(nextExpectedRanges === undefined ? {} : { nextExpectedRanges }),
+  };
+}
+
+function validatedUploadSessionStatus(value: unknown): GraphUploadSessionStatusPayload {
+  if (!value || typeof value !== 'object' || Array.isArray(value)) throw invalidUploadSession();
+  const payload = value as Record<string, unknown>;
+  return {
+    expirationDateTime: validatedExpirationDateTime(payload.expirationDateTime),
+    nextExpectedRanges: validatedNextExpectedRanges(payload.nextExpectedRanges, true)!,
   };
 }
 
@@ -255,7 +269,7 @@ export class OneDriveClient {
     contentLength: number,
     options: UploadSessionRequestOptions = {},
   ): Promise<GraphUploadPartResult> {
-    const response = await this.requestUploadSession(session, {
+    const request = await this.requestUploadSession(session, {
       method: 'PUT',
       headers: {
         'content-type': 'application/octet-stream',
@@ -265,18 +279,24 @@ export class OneDriveClient {
       body: body as BodyInit,
       signal: options.signal,
     });
-    if (response.status === 202) {
-      const payload = await this.readUploadSessionJson(response);
-      return { completed: false, nextExpectedRanges: validatedNextExpectedRanges(payload.nextExpectedRanges, true)! };
+    if (request.response.status === 202) {
+      const status = validatedUploadSessionStatus(await this.readUploadSessionJson(request.response));
+      return {
+        completed: false,
+        nextExpectedRanges: status.nextExpectedRanges,
+        session: await this.signUploadSession({ uploadUrl: request.session.uploadUrl, ...status }),
+      };
     }
-    if (response.status === 200 || response.status === 201) {
-      return { completed: true, item: await this.readUploadSessionJson<GraphDriveItem>(response) };
+    if (request.response.status === 200 || request.response.status === 201) {
+      return { completed: true, item: await this.readUploadSessionJson<GraphDriveItem>(request.response) };
     }
     throw invalidUploadSession();
   }
 
   async getUploadSessionStatus(session: GraphUploadSession): Promise<GraphUploadSession> {
-    return this.signUploadSession(validatedUploadSession(await this.readUploadSessionJson(await this.requestUploadSession(session, { method: 'GET' }))));
+    const request = await this.requestUploadSession(session, { method: 'GET' });
+    const status = validatedUploadSessionStatus(await this.readUploadSessionJson(request.response));
+    return this.signUploadSession({ uploadUrl: request.session.uploadUrl, ...status });
   }
 
   async cancelUploadSession(session: GraphUploadSession): Promise<void> {
@@ -332,8 +352,9 @@ export class OneDriveClient {
     }
   }
 
-  private async requestUploadSession(session: GraphUploadSession, init: RequestInit): Promise<Response> {
-    const { uploadUrl: url } = await this.verifyUploadSession(session);
+  private async requestUploadSession(session: GraphUploadSession, init: RequestInit): Promise<{ response: Response; session: GraphUploadSession }> {
+    const verifiedSession = await this.verifyUploadSession(session);
+    const { uploadUrl: url } = verifiedSession;
     const headers = new Headers(init.headers);
     headers.delete('authorization');
     let response: Response;
@@ -347,7 +368,7 @@ export class OneDriveClient {
       throw new HttpError(502, 'ONEDRIVE_UPLOAD_SESSION_FAILED', 'OneDrive upload session request failed');
     }
     if (!response.ok) throw uploadSessionError(response);
-    return response;
+    return { response, session: verifiedSession };
   }
 
   private async readUploadSessionJson<T = Record<string, unknown>>(response: Response): Promise<T> {
