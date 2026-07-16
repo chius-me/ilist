@@ -30,6 +30,7 @@ export interface GraphListResult {
 export interface GraphUploadSession {
   uploadUrl: string;
   expirationDateTime: string;
+  integrityProof: string;
   nextExpectedRanges?: string[];
 }
 
@@ -60,6 +61,15 @@ interface GraphErrorPayload {
 
 type AccessTokenProvider = (env: Env, mountId: string) => Promise<string>;
 
+interface GraphUploadSessionPayload {
+  uploadUrl: string;
+  expirationDateTime: string;
+  nextExpectedRanges?: string[];
+}
+
+const UPLOAD_SESSION_PROOF_VERSION = 1;
+const encoder = new TextEncoder();
+
 function graphError(status: number): HttpError {
   if (status === 401) return new HttpError(401, 'ONEDRIVE_AUTH_FAILED', 'OneDrive authentication failed');
   if (status === 403) return new HttpError(403, 'ONEDRIVE_ACCESS_DENIED', 'OneDrive access was denied');
@@ -83,12 +93,16 @@ function invalidUploadSession(): HttpError {
   return new HttpError(502, 'ONEDRIVE_UPLOAD_SESSION_INVALID', 'OneDrive upload session response was invalid');
 }
 
+function invalidUploadSessionProof(): HttpError {
+  return new HttpError(400, 'ONEDRIVE_UPLOAD_SESSION_PROOF_INVALID', 'OneDrive upload session proof is invalid');
+}
+
 function validatedUploadSessionUrl(value: unknown): string {
   if (typeof value !== 'string') throw invalidUploadSession();
   try {
     const url = new URL(value);
     if (url.protocol !== 'https:') throw new Error('Invalid upload session protocol');
-    return url.toString();
+    return value;
   } catch {
     throw invalidUploadSession();
   }
@@ -105,7 +119,7 @@ function validatedNextExpectedRanges(value: unknown, required: boolean): string[
   return value;
 }
 
-function validatedUploadSession(value: unknown): GraphUploadSession {
+function validatedUploadSession(value: unknown): GraphUploadSessionPayload {
   if (!value || typeof value !== 'object' || Array.isArray(value)) throw invalidUploadSession();
   const payload = value as Record<string, unknown>;
   const nextExpectedRanges = validatedNextExpectedRanges(payload.nextExpectedRanges, false);
@@ -114,6 +128,21 @@ function validatedUploadSession(value: unknown): GraphUploadSession {
     expirationDateTime: validatedExpirationDateTime(payload.expirationDateTime),
     ...(nextExpectedRanges === undefined ? {} : { nextExpectedRanges }),
   };
+}
+
+function base64Url(bytes: Uint8Array): string {
+  let binary = '';
+  for (const byte of bytes) binary += String.fromCharCode(byte);
+  return btoa(binary).replace(/\+/g, '-').replace(/\//g, '_').replace(/=+$/, '');
+}
+
+function constantTimeEqual(left: string, right: string): boolean {
+  const leftBytes = encoder.encode(left);
+  const rightBytes = encoder.encode(right);
+  const length = Math.max(leftBytes.length, rightBytes.length);
+  let difference = leftBytes.length ^ rightBytes.length;
+  for (let index = 0; index < length; index += 1) difference |= (leftBytes[index] ?? 0) ^ (rightBytes[index] ?? 0);
+  return difference === 0;
 }
 
 function validatedCursor(cursor: string): string {
@@ -212,21 +241,21 @@ export class OneDriveClient {
     const path = parentId === 'root'
       ? `/me/drive/root:/${encodedName}:/createUploadSession`
       : `/me/drive/items/${encodeURIComponent(parentId)}:/${encodedName}:/createUploadSession`;
-    return validatedUploadSession(await this.requestJson<unknown>(`${GRAPH_BASE}${path}`, {
+    return this.signUploadSession(validatedUploadSession(await this.requestJson<unknown>(`${GRAPH_BASE}${path}`, {
       method: 'POST',
       headers: { 'content-type': 'application/json' },
       body: JSON.stringify({ item: { '@microsoft.graph.conflictBehavior': 'fail' } }),
-    }));
+    })));
   }
 
   async uploadSessionPart(
-    uploadUrl: string,
+    session: GraphUploadSession,
     body: ReadableStream,
     contentRange: string,
     contentLength: number,
     options: UploadSessionRequestOptions = {},
   ): Promise<GraphUploadPartResult> {
-    const response = await this.requestUploadSession(uploadUrl, {
+    const response = await this.requestUploadSession(session, {
       method: 'PUT',
       headers: {
         'content-type': 'application/octet-stream',
@@ -246,12 +275,12 @@ export class OneDriveClient {
     throw invalidUploadSession();
   }
 
-  async getUploadSessionStatus(uploadUrl: string): Promise<GraphUploadSession> {
-    return validatedUploadSession(await this.readUploadSessionJson(await this.requestUploadSession(uploadUrl, { method: 'GET' })));
+  async getUploadSessionStatus(session: GraphUploadSession): Promise<GraphUploadSession> {
+    return this.signUploadSession(validatedUploadSession(await this.readUploadSessionJson(await this.requestUploadSession(session, { method: 'GET' }))));
   }
 
-  async cancelUploadSession(uploadUrl: string): Promise<void> {
-    await this.requestUploadSession(uploadUrl, { method: 'DELETE' });
+  async cancelUploadSession(session: GraphUploadSession): Promise<void> {
+    await this.requestUploadSession(session, { method: 'DELETE' });
   }
 
   update(itemId: string, update: GraphItemUpdate): Promise<GraphDriveItem> {
@@ -303,8 +332,8 @@ export class OneDriveClient {
     }
   }
 
-  private async requestUploadSession(uploadUrl: string, init: RequestInit): Promise<Response> {
-    const url = validatedUploadSessionUrl(uploadUrl);
+  private async requestUploadSession(session: GraphUploadSession, init: RequestInit): Promise<Response> {
+    const { uploadUrl: url } = await this.verifyUploadSession(session);
     const headers = new Headers(init.headers);
     headers.delete('authorization');
     let response: Response;
@@ -323,6 +352,26 @@ export class OneDriveClient {
 
   private async readUploadSessionJson<T = Record<string, unknown>>(response: Response): Promise<T> {
     try { return await response.json<T>(); } catch { throw invalidUploadSession(); }
+  }
+
+  private async signUploadSession(session: GraphUploadSessionPayload): Promise<GraphUploadSession> {
+    if (Date.parse(session.expirationDateTime) <= Date.now()) throw invalidUploadSession();
+    return { ...session, integrityProof: await this.uploadSessionProof(session.uploadUrl, session.expirationDateTime) };
+  }
+
+  private async verifyUploadSession(session: GraphUploadSession): Promise<GraphUploadSession> {
+    const validated = validatedUploadSession(session);
+    if (Date.parse(validated.expirationDateTime) <= Date.now()) throw invalidUploadSession();
+    if (typeof session.integrityProof !== 'string' || !session.integrityProof) throw invalidUploadSessionProof();
+    const expectedProof = await this.uploadSessionProof(validated.uploadUrl, validated.expirationDateTime);
+    if (!constantTimeEqual(expectedProof, session.integrityProof)) throw invalidUploadSessionProof();
+    return { ...validated, integrityProof: session.integrityProof };
+  }
+
+  private async uploadSessionProof(uploadUrl: string, expirationDateTime: string): Promise<string> {
+    const payload = JSON.stringify({ v: UPLOAD_SESSION_PROOF_VERSION, mountId: this.mountId, uploadUrl, expirationDateTime });
+    const key = await crypto.subtle.importKey('raw', encoder.encode(this.env.SESSION_SECRET), { name: 'HMAC', hash: 'SHA-256' }, false, ['sign']);
+    return base64Url(new Uint8Array(await crypto.subtle.sign('HMAC', key, encoder.encode(payload))));
   }
 
   private async requestJson<T>(url: string, init: RequestInit = {}, retried = false): Promise<T> {
