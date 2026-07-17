@@ -344,6 +344,31 @@ describe('admin upload session routes', () => {
     expect(abortDriver.resumableUpload?.abort).toHaveBeenCalledTimes(1);
   });
 
+  it('returns a safe conflict and finalizes when DELETE follows a completed OneDrive part', async () => {
+    const mounted = await createUploadMount();
+    const driver = fakeDriver();
+    driverRegistry.onedrive = () => driver;
+    const cookie = await login();
+    const id = await sessionId(await createSession(cookie, mounted));
+    expect((await SELF.fetch(partRequest(cookie, id, { length: UPLOAD_PART_SIZE_BYTES }))).status).toBe(200);
+
+    const response = await SELF.fetch(`${origin}/api/admin/uploads/sessions/${id}`, {
+      method: 'DELETE', headers: { cookie, origin },
+    });
+
+    expect(response.status).toBe(409);
+    const responseText = await response.clone().text();
+    await expect(response.json()).resolves.toEqual({
+      ok: false,
+      error: { code: 'UPLOAD_ALREADY_COMPLETED', message: 'Upload has already completed' },
+    });
+    expect(responseText).not.toMatch(/providerState|uploadUrl|uploadId|integrityProof|private/);
+    expect(driver.resumableUpload?.complete).toHaveBeenCalledTimes(1);
+    expect(driver.resumableUpload?.abort).not.toHaveBeenCalled();
+    await expect(workerEnv().DB.prepare('SELECT status FROM upload_sessions WHERE id = ?')
+      .bind(id).first()).resolves.toEqual({ status: 'completed' });
+  });
+
   it('returns UPLOAD_SESSION_EXPIRED for an expired active session', async () => {
     const mounted = await createUploadMount();
     driverRegistry.onedrive = () => fakeDriver();

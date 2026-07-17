@@ -266,6 +266,56 @@ describe('upload session store', () => {
     ).resolves.toBeNull();
   });
 
+  it('never claims or persists abort once a completed item exists', async () => {
+    const completedBeforeClaim = await createRecord(ownerA, { expiresAt: 100 });
+    await db().prepare('UPDATE upload_sessions SET completed_item_json = ? WHERE id = ?')
+      .bind(JSON.stringify(completedItem), completedBeforeClaim.id)
+      .run();
+
+    await expect(claimTerminalOperation(
+      workerEnv(), ownerA, completedBeforeClaim.id, 'abort', 'abort-after-complete', 1_000, 100,
+    )).resolves.toBeNull();
+    const completion = await claimTerminalOperation(
+      workerEnv(), ownerA, completedBeforeClaim.id, 'complete', 'complete-expired', 1_000, 100,
+    );
+    expect(completion).toMatchObject({
+      status: 'completing', terminalOperation: 'complete', completedItem,
+    });
+    await expect(completeUploadSessionRecord(
+      workerEnv(), ownerA, completedBeforeClaim.id, 'complete-expired', 1_000, completedItem,
+    )).resolves.toMatchObject({ status: 'completed' });
+
+    const completedAfterClaim = await createRecord();
+    await claimTerminalOperation(
+      workerEnv(), ownerA, completedAfterClaim.id, 'abort', 'abort-before-complete', 2_000, 100,
+    );
+    await db().prepare('UPDATE upload_sessions SET completed_item_json = ? WHERE id = ?')
+      .bind(JSON.stringify(completedItem), completedAfterClaim.id)
+      .run();
+    await expect(markUploadSessionAborted(
+      workerEnv(), ownerA, completedAfterClaim.id, 'abort-before-complete', 2_000,
+    )).resolves.toBeNull();
+  });
+
+  it('does not return a matching recorded part to a stale claimant after abort persisted', async () => {
+    const record = await createRecord();
+    await claimUploadPart(workerEnv(), ownerA, record.id, 1, 1_000, 100);
+    await claimUploadPart(workerEnv(), ownerA, record.id, 1, 2_000, 1_000);
+    await recordUploadPart(workerEnv(), ownerA, record.id, {
+      claimExpiresAt: 2_000,
+      part: { partNumber: 1, size: 10, etag: 'etag-1' },
+      providerState,
+    });
+    await claimTerminalOperation(workerEnv(), ownerA, record.id, 'abort', 'abort-winner', 3_000, 2_000);
+    await markUploadSessionAborted(workerEnv(), ownerA, record.id, 'abort-winner', 3_000);
+
+    await expect(recordUploadPart(workerEnv(), ownerA, record.id, {
+      claimExpiresAt: 1_000,
+      part: { partNumber: 1, size: 10, etag: 'etag-1' },
+      providerState,
+    })).resolves.toBeNull();
+  });
+
   it('fails closed instead of claiming over a malformed half-claim state', async () => {
     const record = await createRecord();
     await db()
