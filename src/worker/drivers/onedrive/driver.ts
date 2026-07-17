@@ -69,7 +69,7 @@ export class OneDriveDriver implements StorageDriver {
       };
     },
     uploadPart: async (input) => {
-      const state = this.requireUploadSessionState(input.state);
+      const state = this.requireLiveUploadSessionState(input.state);
       const contentRange = `bytes ${input.offset}-${input.offset + input.size - 1}/${input.totalSize}`;
       const result = await this.client.uploadSessionPart(this.toGraphUploadSession(state), input.body, contentRange, input.size, { signal: input.signal });
       if (!result.completed) {
@@ -94,7 +94,7 @@ export class OneDriveDriver implements StorageDriver {
       return input.completedItem;
     },
     abort: async (state) => {
-      const uploadState = this.requireUploadSessionState(state);
+      const uploadState = this.requireLiveUploadSessionState(state);
       await this.client.cancelUploadSession(this.toGraphUploadSession(uploadState));
     },
   };
@@ -159,13 +159,19 @@ export class OneDriveDriver implements StorageDriver {
     const { uploadUrl, expirationDateTime, integrityProof, parentId, name, contentType } = state;
     if (typeof uploadUrl !== 'string' || typeof expirationDateTime !== 'string' || typeof integrityProof !== 'string' || !integrityProof || typeof parentId !== 'string' || !parentId) throw invalidUploadState();
     try {
-      if (new URL(uploadUrl).protocol !== 'https:' || !Number.isFinite(Date.parse(expirationDateTime)) || Date.parse(expirationDateTime) <= Date.now()) {
+      if (new URL(uploadUrl).protocol !== 'https:' || !Number.isFinite(Date.parse(expirationDateTime))) {
         throw invalidUploadState();
       }
       return { uploadUrl, expirationDateTime, integrityProof, parentId, name: validName(name as string), contentType: this.requireContentType(contentType, true) };
     } catch {
       throw invalidUploadState();
     }
+  }
+
+  private requireLiveUploadSessionState(state: Record<string, unknown>): OneDriveUploadSessionState {
+    const uploadState = this.requireUploadSessionState(state);
+    if (Date.parse(uploadState.expirationDateTime) <= Date.now()) throw invalidUploadState();
+    return uploadState;
   }
 
   private requireContentType(value: unknown, fromState = false): string | null {
