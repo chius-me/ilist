@@ -407,6 +407,7 @@ describe('S3Client multipart requests', () => {
   it('rejects an S3 completion error returned with HTTP 200', async () => {
     const fetcher = vi.fn<typeof fetch>(async () => new Response(
       '<Error><Code>InvalidPart</Code><Message>Part does not match</Message><RequestId>complete-1</RequestId></Error>',
+      { headers: { 'retry-after': '45' } },
     ));
     const client = createClient(fetcher);
 
@@ -417,6 +418,7 @@ describe('S3Client multipart requests', () => {
       code: 'InvalidPart',
       message: 'Part does not match',
       requestId: 'complete-1',
+      retryAfterSeconds: 45,
     });
   });
 

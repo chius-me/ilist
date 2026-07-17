@@ -12,17 +12,23 @@ import storageCredentials from '../../migrations/0009_storage_credentials.sql?ra
 import nativeR2CompatibilityMount from '../../migrations/0010_native_r2_compat_mount.sql?raw';
 import oauthStates from '../../migrations/0011_oauth_states.sql?raw';
 import uploadSessions from '../../migrations/0012_upload_sessions.sql?raw';
+import uploadTerminalLeases from '../../migrations/0013_upload_terminal_leases.sql?raw';
 import type { Env } from '../../src/worker/types';
 
 beforeEach(async () => {
   const db = (env as unknown as Env).DB;
-  for (const statement of `${initial}\n${entries}\n${lock}\n${reservations}\n${leaseExpiry}\n${storageKeyImmutable}\n${storageRecovery}\n${mounts}\n${storageCredentials}\n${nativeR2CompatibilityMount}\n${oauthStates}\n${uploadSessions}`.split(/;\s+(?=(?:PRAGMA|CREATE|INSERT|DROP|ALTER))/)) {
+  for (const statement of `${initial}\n${entries}\n${lock}\n${reservations}\n${leaseExpiry}\n${storageKeyImmutable}\n${storageRecovery}\n${mounts}\n${storageCredentials}\n${nativeR2CompatibilityMount}\n${oauthStates}\n${uploadSessions}\n${uploadTerminalLeases}`.split(/;\s+(?=(?:PRAGMA|CREATE|INSERT|DROP|ALTER))/)) {
     const sql = statement.trim();
     if (!sql) continue;
     try {
       await db.prepare(sql).run();
     } catch (error) {
-      if (!(sql.startsWith('ALTER TABLE entries ADD COLUMN lifecycle_owner') && error instanceof Error && error.message.includes('duplicate column'))) {
+      const normalizedSql = sql.replace(/\s+/g, ' ');
+      const repeatableAddColumn =
+        normalizedSql.startsWith('ALTER TABLE entries ADD COLUMN lifecycle_owner')
+        || normalizedSql.startsWith('ALTER TABLE upload_sessions ADD COLUMN terminal_')
+        || normalizedSql.startsWith('ALTER TABLE upload_sessions ADD COLUMN cleanup_attempted_at');
+      if (!(repeatableAddColumn && error instanceof Error && error.message.includes('duplicate column'))) {
         throw error;
       }
     }

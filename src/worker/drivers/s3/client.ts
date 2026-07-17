@@ -211,7 +211,14 @@ export class S3Client {
     const parsed = parseCompleteMultipartUploadResponseXml(await response.clone().text());
     if (parsed.kind === 'error') {
       const { error } = parsed;
-      throw new S3Error(response.status, error.code, error.message, error.resource, error.requestId);
+      throw new S3Error(
+        response.status,
+        error.code,
+        error.message,
+        error.resource,
+        error.requestId,
+        parseRetryAfterSeconds(response.headers.get('retry-after')),
+      );
     }
     return { etag: parsed.etag };
   }

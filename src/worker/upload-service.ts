@@ -13,7 +13,7 @@ import { externalEntry, resolveExternalEntry } from './external-entries';
 import { HttpError } from './http';
 import { getMount } from './mounts';
 import {
-  claimCompletion,
+  claimTerminalOperation,
   claimUploadPart,
   completeUploadSessionRecord,
   createUploadSessionRecord,
@@ -21,14 +21,15 @@ import {
   listExpiredUploadSessions,
   markUploadSessionAborted,
   recordUploadPart,
-  releaseCompletionClaim,
+  releaseTerminalOperationClaim,
   releaseUploadPartClaim,
+  touchUploadSessionCleanupAttempt,
   type UploadSessionRecord,
 } from './upload-session-store';
 import type { Env, Mount, MountEntry, UploadSessionStatus } from './types';
 
 const PART_CLAIM_DURATION_MS = 5 * 60_000;
-const COMPLETION_CLAIM_DURATION_MS = 5 * 60_000;
+const TERMINAL_CLAIM_DURATION_MS = 5 * 60_000;
 const DEFAULT_CLEANUP_LIMIT = 10;
 
 export interface CreateUploadSessionBody {
@@ -386,7 +387,8 @@ export async function uploadResumablePart(
   const expected = expectedPart(initial, partNumber);
   requirePartRequest(request, expected.size);
   const duplicate = recordedPart(initial, partNumber, expected.size);
-  if (duplicate && initial.status !== 'aborted') return duplicate;
+  if (initial.status === 'aborted') throw uploadNotFound();
+  if (duplicate && initial.terminalOperation !== 'abort') return duplicate;
   if (initial.status !== 'active') throw uploadBusy();
 
   const { driver } = await sessionDriver(env, initial);
@@ -396,8 +398,9 @@ export async function uploadResumablePart(
   if (!claimed) {
     const current = await ownedSession(env, ownerSessionId, id);
     requireCurrent(current, now);
+    if (current.status === 'aborted') throw uploadNotFound();
     const racedDuplicate = recordedPart(current, partNumber, expected.size);
-    if (racedDuplicate) return racedDuplicate;
+    if (racedDuplicate && current.terminalOperation !== 'abort') return racedDuplicate;
     throw uploadBusy();
   }
 
@@ -483,13 +486,14 @@ export async function completeResumableUpload(
 
   const now = Date.now();
   const completionOwner = crypto.randomUUID();
-  const completionExpiresAt = now + COMPLETION_CLAIM_DURATION_MS;
+  const completionExpiresAt = now + TERMINAL_CLAIM_DURATION_MS;
   let claimed: UploadSessionRecord | null;
   try {
-    claimed = await claimCompletion(
+    claimed = await claimTerminalOperation(
       env,
       ownerSessionId,
       id,
+      'complete',
       completionOwner,
       completionExpiresAt,
       now,
@@ -507,10 +511,11 @@ export async function completeResumableUpload(
 
   const releaseClaim = async (): Promise<void> => {
     try {
-      await releaseCompletionClaim(
+      await releaseTerminalOperationClaim(
         env,
         ownerSessionId,
         id,
+        'complete',
         completionOwner,
         completionExpiresAt,
       );
@@ -568,18 +573,65 @@ export async function abortResumableUpload(
   ownerSessionId: string,
   id: string,
 ): Promise<void> {
-  const record = await ownedSession(env, ownerSessionId, id);
+  let record = await ownedSession(env, ownerSessionId, id);
   if (record.status === 'aborted' || record.status === 'completed') return;
-  const { driver } = await sessionDriver(env, record);
+  const now = Date.now();
+  const terminalOwner = crypto.randomUUID();
+  const terminalExpiresAt = now + TERMINAL_CLAIM_DURATION_MS;
+  let claimed: UploadSessionRecord | null;
+  try {
+    claimed = await claimTerminalOperation(
+      env,
+      ownerSessionId,
+      id,
+      'abort',
+      terminalOwner,
+      terminalExpiresAt,
+      now,
+    );
+  } catch {
+    throw uploadStatePersistFailed();
+  }
+  if (!claimed) {
+    record = await ownedSession(env, ownerSessionId, id);
+    if (record.status === 'aborted' || record.status === 'completed') return;
+    throw uploadBusy();
+  }
+  record = claimed;
+
+  const releaseClaim = async (): Promise<void> => {
+    try {
+      await releaseTerminalOperationClaim(
+        env,
+        ownerSessionId,
+        id,
+        'abort',
+        terminalOwner,
+        terminalExpiresAt,
+      );
+    } catch {
+      // The lease expiry permits takeover if the exact-token release cannot be persisted.
+    }
+  };
+
+  let driver: StorageDriver & { resumableUpload: NonNullable<StorageDriver['resumableUpload']> };
+  try {
+    ({ driver } = await sessionDriver(env, record));
+  } catch (error) {
+    await releaseClaim();
+    throw error;
+  }
   try {
     await driver.resumableUpload.abort(record.providerState);
   } catch (error) {
+    await releaseClaim();
     throw normalizeProviderError(error);
   }
   let aborted: UploadSessionRecord | null;
   try {
-    aborted = await markUploadSessionAborted(env, ownerSessionId, id);
+    aborted = await markUploadSessionAborted(env, ownerSessionId, id, terminalOwner, terminalExpiresAt);
   } catch {
+    await releaseClaim();
     throw uploadStatePersistFailed();
   }
   if (aborted) return;
@@ -591,14 +643,46 @@ export async function cleanupExpiredUploads(env: Env, limit = DEFAULT_CLEANUP_LI
   if (!Number.isSafeInteger(limit) || limit < 1 || limit > DEFAULT_CLEANUP_LIMIT) {
     throw new Error('Upload cleanup limit is invalid');
   }
-  const expired = await listExpiredUploadSessions(env, Date.now(), limit);
+  const now = Date.now();
+  const expired = await listExpiredUploadSessions(env, now, limit);
   for (const record of expired) {
+    const terminalOwner = crypto.randomUUID();
+    const terminalExpiresAt = now + TERMINAL_CLAIM_DURATION_MS;
+    let claimed: UploadSessionRecord | null = null;
     try {
-      const { driver } = await sessionDriver(env, record);
-      await driver.resumableUpload.abort(record.providerState);
-      await markUploadSessionAborted(env, record.ownerSessionId, record.id);
+      claimed = await claimTerminalOperation(
+        env,
+        record.ownerSessionId,
+        record.id,
+        'abort',
+        terminalOwner,
+        terminalExpiresAt,
+        now,
+      );
+      if (!claimed) continue;
+      const { driver } = await sessionDriver(env, claimed);
+      await driver.resumableUpload.abort(claimed.providerState);
+      const aborted = await markUploadSessionAborted(
+        env,
+        claimed.ownerSessionId,
+        claimed.id,
+        terminalOwner,
+        terminalExpiresAt,
+      );
+      if (aborted) continue;
     } catch {
-      // Keep failed records eligible for a later cleanup pass.
+      // Exact-token release and cleanup ordering keep the row retryable without starving later rows.
     }
+    if (claimed) {
+      await releaseTerminalOperationClaim(
+        env,
+        claimed.ownerSessionId,
+        claimed.id,
+        'abort',
+        terminalOwner,
+        terminalExpiresAt,
+      ).catch(() => undefined);
+    }
+    await touchUploadSessionCleanupAttempt(env, record.id, now).catch(() => undefined);
   }
 }

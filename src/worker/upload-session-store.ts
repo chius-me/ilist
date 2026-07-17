@@ -1,6 +1,6 @@
 import { decryptCredential, encryptCredential } from './crypto';
 import type { CompletedUploadPart, StorageItem } from './drivers/types';
-import type { Env, UploadSessionRow, UploadSessionStatus } from './types';
+import type { Env, UploadSessionRow, UploadSessionStatus, UploadTerminalOperation } from './types';
 
 export interface UploadSessionRecord {
   id: string;
@@ -17,8 +17,10 @@ export interface UploadSessionRecord {
   status: UploadSessionStatus;
   activePartNumber: number | null;
   activePartExpiresAt: number | null;
-  completionOwner: string | null;
-  completionExpiresAt: number | null;
+  terminalOperation: UploadTerminalOperation | null;
+  terminalOwner: string | null;
+  terminalExpiresAt: number | null;
+  cleanupAttemptedAt: number;
   expiresAt: number;
   createdAt: string;
   updatedAt: string;
@@ -117,15 +119,19 @@ function assertStoredRow(row: UploadSessionRow): void {
   const validActiveClaim =
     (row.active_part_number === null && row.active_part_expires_at === null) ||
     (isSafeInteger(row.active_part_number, 1) && isSafeInteger(row.active_part_expires_at, 0));
-  const validCompletionClaim =
-    (row.completion_owner === null && row.completion_expires_at === null) ||
-    (typeof row.completion_owner === 'string' &&
-      row.completion_owner.length > 0 &&
-      isSafeInteger(row.completion_expires_at, 0));
-  const completionClaimMatchesStatus =
-    row.status === 'completing'
-      ? row.completion_owner !== null && row.completion_expires_at !== null
-      : row.completion_owner === null && row.completion_expires_at === null;
+  const noTerminalClaim =
+    row.terminal_operation === null && row.terminal_owner === null && row.terminal_expires_at === null;
+  const validTerminalClaim = noTerminalClaim || (
+    (row.terminal_operation === 'complete' || row.terminal_operation === 'abort')
+    && typeof row.terminal_owner === 'string'
+    && row.terminal_owner.length > 0
+    && isSafeInteger(row.terminal_expires_at, 0)
+  );
+  const terminalClaimMatchesStatus =
+    (row.status === 'active' && (noTerminalClaim || row.terminal_operation === 'abort'))
+    || (row.status === 'completing' && (noTerminalClaim || row.terminal_operation === 'complete'))
+    || ((row.status === 'completed' || row.status === 'aborted') && noTerminalClaim);
+  const claimsDoNotOverlap = noTerminalClaim || row.active_part_number === null;
   if (
     typeof row.id !== 'string' ||
     !row.id ||
@@ -143,8 +149,10 @@ function assertStoredRow(row: UploadSessionRow): void {
     !isNullableString(row.completed_item_json) ||
     !validStatus ||
     !validActiveClaim ||
-    !validCompletionClaim ||
-    !completionClaimMatchesStatus ||
+    !validTerminalClaim ||
+    !terminalClaimMatchesStatus ||
+    !claimsDoNotOverlap ||
+    !isSafeInteger(row.cleanup_attempted_at, 0) ||
     !isSafeInteger(row.expires_at, 0) ||
     typeof row.created_at !== 'string' ||
     typeof row.updated_at !== 'string'
@@ -199,8 +207,10 @@ async function rowToRecord(env: Env, row: UploadSessionRow): Promise<UploadSessi
     status: row.status,
     activePartNumber: row.active_part_number,
     activePartExpiresAt: row.active_part_expires_at,
-    completionOwner: row.completion_owner,
-    completionExpiresAt: row.completion_expires_at,
+    terminalOperation: row.terminal_operation,
+    terminalOwner: row.terminal_owner,
+    terminalExpiresAt: row.terminal_expires_at,
+    cleanupAttemptedAt: row.cleanup_attempted_at,
     expiresAt: row.expires_at,
     createdAt: row.created_at,
     updatedAt: row.updated_at,
@@ -239,9 +249,9 @@ export async function createUploadSessionRecord(
     `INSERT INTO upload_sessions (
        id, owner_session_id, mount_id, parent_item_id, name, size, content_type, part_size,
        provider_state_ciphertext, parts_json, completed_item_json, status,
-       active_part_number, active_part_expires_at, completion_owner, completion_expires_at,
-       expires_at, created_at, updated_at
-     ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, '[]', NULL, 'active', NULL, NULL, NULL, NULL, ?, ?, ?)`,
+       active_part_number, active_part_expires_at, terminal_operation, terminal_owner,
+       terminal_expires_at, cleanup_attempted_at, expires_at, created_at, updated_at
+     ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, '[]', NULL, 'active', NULL, NULL, NULL, NULL, NULL, 0, ?, ?, ?)`,
   )
     .bind(
       id,
@@ -287,13 +297,25 @@ export async function claimUploadPart(
 
   const result = await env.DB.prepare(
     `UPDATE upload_sessions
-     SET active_part_number = ?, active_part_expires_at = ?, updated_at = ?
+     SET active_part_number = ?,
+         active_part_expires_at = ?,
+         terminal_operation = NULL,
+         terminal_owner = NULL,
+         terminal_expires_at = NULL,
+         updated_at = ?
      WHERE id = ?
        AND owner_session_id = ?
        AND status = 'active'
        AND expires_at > ?
-       AND completion_owner IS NULL
-       AND completion_expires_at IS NULL
+       AND (
+         (terminal_operation IS NULL AND terminal_owner IS NULL AND terminal_expires_at IS NULL)
+         OR (
+           terminal_operation IN ('complete', 'abort')
+           AND terminal_owner IS NOT NULL
+           AND terminal_expires_at IS NOT NULL
+           AND terminal_expires_at <= ?
+         )
+       )
        AND (
          (active_part_number IS NULL AND active_part_expires_at IS NULL)
          OR (
@@ -303,7 +325,7 @@ export async function claimUploadPart(
          )
        )`,
   )
-    .bind(partNumber, claimExpiresAt, new Date(now).toISOString(), id, ownerSessionId, now, now)
+    .bind(partNumber, claimExpiresAt, new Date(now).toISOString(), id, ownerSessionId, now, now, now)
     .run();
   if (result.meta.changes !== 1) return null;
   return getOwnedUploadSession(env, ownerSessionId, id);
@@ -329,7 +351,8 @@ export async function recordUploadPart(
   const ownsClaim =
     record.status === 'active' &&
     record.activePartNumber === input.part.partNumber &&
-    record.activePartExpiresAt === input.claimExpiresAt;
+    record.activePartExpiresAt === input.claimExpiresAt &&
+    record.terminalOperation === null;
   if (existing && !ownsClaim) return record;
   if (!existing && !ownsClaim) return null;
 
@@ -355,6 +378,9 @@ export async function recordUploadPart(
      WHERE id = ?
        AND owner_session_id = ?
        AND status = 'active'
+       AND terminal_operation IS NULL
+       AND terminal_owner IS NULL
+       AND terminal_expires_at IS NULL
        AND active_part_number = ?
        AND active_part_expires_at = ?
        AND parts_json = ?
@@ -399,6 +425,9 @@ export async function releaseUploadPartClaim(
      WHERE id = ?
        AND owner_session_id = ?
        AND status = 'active'
+       AND terminal_operation IS NULL
+       AND terminal_owner IS NULL
+       AND terminal_expires_at IS NULL
        AND active_part_number = ?
        AND active_part_expires_at = ?`,
   )
@@ -407,44 +436,68 @@ export async function releaseUploadPartClaim(
   return result.meta.changes === 1;
 }
 
-export async function claimCompletion(
+export async function claimTerminalOperation(
   env: Env,
   ownerSessionId: string,
   id: string,
-  completionOwner: string,
-  completionExpiresAt: number,
+  operation: UploadTerminalOperation,
+  terminalOwner: string,
+  terminalExpiresAt: number,
   now = Date.now(),
 ): Promise<UploadSessionRecord | null> {
   if (
-    !completionOwner ||
-    !isSafeInteger(now, 0) ||
-    !isSafeInteger(completionExpiresAt, now + 1)
+    (operation !== 'complete' && operation !== 'abort')
+    || !terminalOwner
+    || !isSafeInteger(now, 0)
+    || !isSafeInteger(terminalExpiresAt, now + 1)
   ) {
-    throw new Error('Upload completion claim is invalid');
+    throw new Error('Upload terminal operation claim is invalid');
   }
+  const claimedStatus: UploadSessionStatus = operation === 'complete' ? 'completing' : 'active';
   const result = await env.DB.prepare(
     `UPDATE upload_sessions
-     SET status = 'completing', completion_owner = ?, completion_expires_at = ?, updated_at = ?
+     SET status = ?,
+         active_part_number = NULL,
+         active_part_expires_at = NULL,
+         terminal_operation = ?,
+         terminal_owner = ?,
+         terminal_expires_at = ?,
+         updated_at = ?
      WHERE id = ?
        AND owner_session_id = ?
-       AND expires_at > ?
-       AND active_part_number IS NULL
-       AND active_part_expires_at IS NULL
+       AND status IN ('active', 'completing')
+       AND (? = 'abort' OR expires_at > ?)
        AND (
-         (
-           status = 'active'
-           AND completion_owner IS NULL
-           AND completion_expires_at IS NULL
-         )
+         (active_part_number IS NULL AND active_part_expires_at IS NULL)
          OR (
-           status = 'completing'
-           AND completion_owner IS NOT NULL
-           AND completion_expires_at IS NOT NULL
-           AND completion_expires_at <= ?
+           active_part_number IS NOT NULL
+           AND active_part_expires_at IS NOT NULL
+           AND active_part_expires_at <= ?
+         )
+       )
+       AND (
+         (terminal_operation IS NULL AND terminal_owner IS NULL AND terminal_expires_at IS NULL)
+         OR (
+           terminal_operation IN ('complete', 'abort')
+           AND terminal_owner IS NOT NULL
+           AND terminal_expires_at IS NOT NULL
+           AND terminal_expires_at <= ?
          )
        )`,
   )
-    .bind(completionOwner, completionExpiresAt, new Date(now).toISOString(), id, ownerSessionId, now, now)
+    .bind(
+      claimedStatus,
+      operation,
+      terminalOwner,
+      terminalExpiresAt,
+      new Date(now).toISOString(),
+      id,
+      ownerSessionId,
+      operation,
+      now,
+      now,
+      now,
+    )
     .run();
   if (result.meta.changes !== 1) return null;
   return getOwnedUploadSession(env, ownerSessionId, id);
@@ -454,56 +507,65 @@ export async function completeUploadSessionRecord(
   env: Env,
   ownerSessionId: string,
   id: string,
-  completionOwner: string,
-  completionExpiresAt: number,
+  terminalOwner: string,
+  terminalExpiresAt: number,
   item: StorageItem,
 ): Promise<UploadSessionRecord | null> {
-  if (!completionOwner || !isSafeInteger(completionExpiresAt, 0)) {
-    throw new Error('Upload completion claim is invalid');
+  if (!terminalOwner || !isSafeInteger(terminalExpiresAt, 0)) {
+    throw new Error('Upload terminal operation claim is invalid');
   }
   assertStorageItem(item);
   const result = await env.DB.prepare(
     `UPDATE upload_sessions
      SET status = 'completed',
          completed_item_json = ?,
-         completion_owner = NULL,
-         completion_expires_at = NULL,
+         terminal_operation = NULL,
+         terminal_owner = NULL,
+         terminal_expires_at = NULL,
          updated_at = ?
      WHERE id = ?
        AND owner_session_id = ?
        AND status = 'completing'
-       AND completion_owner = ?
-       AND completion_expires_at = ?`,
+       AND terminal_operation = 'complete'
+       AND terminal_owner = ?
+       AND terminal_expires_at = ?`,
   )
-    .bind(JSON.stringify(item), new Date().toISOString(), id, ownerSessionId, completionOwner, completionExpiresAt)
+    .bind(JSON.stringify(item), new Date().toISOString(), id, ownerSessionId, terminalOwner, terminalExpiresAt)
     .run();
   if (result.meta.changes !== 1) return null;
   return getOwnedUploadSession(env, ownerSessionId, id);
 }
 
-export async function releaseCompletionClaim(
+export async function releaseTerminalOperationClaim(
   env: Env,
   ownerSessionId: string,
   id: string,
-  completionOwner: string,
-  completionExpiresAt: number,
+  operation: UploadTerminalOperation,
+  terminalOwner: string,
+  terminalExpiresAt: number,
 ): Promise<boolean> {
-  if (!completionOwner || !isSafeInteger(completionExpiresAt, 0)) {
-    throw new Error('Upload completion claim is invalid');
+  if (
+    (operation !== 'complete' && operation !== 'abort')
+    || !terminalOwner
+    || !isSafeInteger(terminalExpiresAt, 0)
+  ) {
+    throw new Error('Upload terminal operation claim is invalid');
   }
   const result = await env.DB.prepare(
     `UPDATE upload_sessions
      SET status = 'active',
-         completion_owner = NULL,
-         completion_expires_at = NULL,
+         terminal_operation = NULL,
+         terminal_owner = NULL,
+         terminal_expires_at = NULL,
          updated_at = ?
      WHERE id = ?
        AND owner_session_id = ?
-       AND status = 'completing'
-       AND completion_owner = ?
-       AND completion_expires_at = ?`,
+       AND status IN ('active', 'completing')
+       AND terminal_operation = ?
+       AND terminal_owner = ?
+       AND terminal_expires_at = ?`,
   )
-    .bind(new Date().toISOString(), id, ownerSessionId, completionOwner, completionExpiresAt)
+    .bind(new Date().toISOString(), id, ownerSessionId, operation, terminalOwner, terminalExpiresAt)
     .run();
   return result.meta.changes === 1;
 }
@@ -512,27 +574,51 @@ export async function markUploadSessionAborted(
   env: Env,
   ownerSessionId: string,
   id: string,
+  terminalOwner: string,
+  terminalExpiresAt: number,
 ): Promise<UploadSessionRecord | null> {
-  const current = await getOwnedUploadSession(env, ownerSessionId, id);
-  if (!current || current.status === 'completed') return null;
-  if (current.status === 'aborted') return current;
+  if (!terminalOwner || !isSafeInteger(terminalExpiresAt, 0)) {
+    throw new Error('Upload terminal operation claim is invalid');
+  }
 
   const result = await env.DB.prepare(
     `UPDATE upload_sessions
      SET status = 'aborted',
          active_part_number = NULL,
          active_part_expires_at = NULL,
-         completion_owner = NULL,
-         completion_expires_at = NULL,
+         terminal_operation = NULL,
+         terminal_owner = NULL,
+         terminal_expires_at = NULL,
          updated_at = ?
-     WHERE id = ? AND owner_session_id = ? AND status IN ('active', 'completing')`,
+     WHERE id = ?
+       AND owner_session_id = ?
+       AND status = 'active'
+       AND terminal_operation = 'abort'
+       AND terminal_owner = ?
+       AND terminal_expires_at = ?`,
   )
-    .bind(new Date().toISOString(), id, ownerSessionId)
+    .bind(new Date().toISOString(), id, ownerSessionId, terminalOwner, terminalExpiresAt)
     .run();
   if (result.meta.changes === 1) return getOwnedUploadSession(env, ownerSessionId, id);
+  return null;
+}
 
-  const updated = await getOwnedUploadSession(env, ownerSessionId, id);
-  return updated?.status === 'aborted' ? updated : null;
+export async function touchUploadSessionCleanupAttempt(
+  env: Env,
+  id: string,
+  attemptedAt = Date.now(),
+): Promise<boolean> {
+  if (!id || !isSafeInteger(attemptedAt, 0)) throw new Error('Upload cleanup attempt is invalid');
+  const result = await env.DB.prepare(
+    `UPDATE upload_sessions
+     SET cleanup_attempted_at = ?, updated_at = ?
+     WHERE id = ?
+       AND status IN ('active', 'completing')
+       AND expires_at <= ?`,
+  )
+    .bind(attemptedAt, new Date(attemptedAt).toISOString(), id, attemptedAt)
+    .run();
+  return result.meta.changes === 1;
 }
 
 export async function listExpiredUploadSessions(
@@ -543,12 +629,32 @@ export async function listExpiredUploadSessions(
   if (!isSafeInteger(now, 0) || !isSafeInteger(limit, 1)) throw new Error('Upload session expiration query is invalid');
   const result = await env.DB.prepare(
     `SELECT * FROM upload_sessions
-     WHERE status IN ('active', 'completing') AND expires_at <= ?
-     ORDER BY expires_at ASC, created_at ASC, id ASC
+     WHERE status IN ('active', 'completing')
+       AND expires_at <= ?
+       AND NOT (
+         active_part_number IS NOT NULL
+         AND active_part_expires_at IS NOT NULL
+         AND active_part_expires_at > ?
+       )
+       AND NOT (
+         terminal_operation IS NOT NULL
+         AND terminal_owner IS NOT NULL
+         AND terminal_expires_at IS NOT NULL
+         AND terminal_expires_at > ?
+       )
+     ORDER BY cleanup_attempted_at ASC, expires_at ASC, created_at ASC, id ASC
      LIMIT ?`,
   )
-    .bind(now, limit)
+    .bind(now, now, now, limit)
     .all<UploadSessionRow>();
 
-  return Promise.all((result.results ?? []).map((row) => rowToRecord(env, row)));
+  const records: UploadSessionRecord[] = [];
+  for (const row of result.results ?? []) {
+    try {
+      records.push(await rowToRecord(env, row));
+    } catch {
+      await touchUploadSessionCleanupAttempt(env, row.id, now).catch(() => undefined);
+    }
+  }
+  return records;
 }

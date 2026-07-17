@@ -22,7 +22,7 @@ import {
   getResumableUpload,
   uploadResumablePart,
 } from '../../src/worker/upload-service';
-import { claimCompletion } from '../../src/worker/upload-session-store';
+import { claimTerminalOperation, claimUploadPart } from '../../src/worker/upload-session-store';
 import type { Env, Mount } from '../../src/worker/types';
 
 const ownerSessionId = 'upload-service-owner';
@@ -163,6 +163,36 @@ function envWithDb(db: D1Database): Env {
       return Reflect.get(target, property, target);
     },
   });
+}
+
+function envBeforePartClaim(action: () => Promise<void>): Env {
+  let raced = false;
+  const wrap = (statement: D1PreparedStatement, sql: string): D1PreparedStatement => new Proxy(statement, {
+    get(statementTarget, statementProperty) {
+      if (statementProperty === 'bind') return (...values: unknown[]) => wrap(statementTarget.bind(...values), sql);
+      if (statementProperty === 'run') {
+        return async <T>() => {
+          if (!raced && sql.startsWith('UPDATE upload_sessions SET active_part_number = ?')) {
+            raced = true;
+            await action();
+          }
+          return statementTarget.run<T>();
+        };
+      }
+      const value = Reflect.get(statementTarget, statementProperty, statementTarget);
+      return typeof value === 'function' ? value.bind(statementTarget) : value;
+    },
+  }) as D1PreparedStatement;
+  const db = new Proxy(workerEnv().DB, {
+    get(target, property) {
+      if (property === 'prepare') {
+        return (sql: string) => wrap(target.prepare(sql), sql.replace(/\s+/g, ' ').trim());
+      }
+      const value = Reflect.get(target, property, target);
+      return typeof value === 'function' ? value.bind(target) : value;
+    },
+  }) as D1Database;
+  return envWithDb(db);
 }
 
 function s3Client(overrides: Partial<S3DriverClient> = {}): S3DriverClient {
@@ -405,7 +435,9 @@ describe('upload lifecycle service', () => {
     }));
     await uploadResumablePart(workerEnv(), ownerSessionId, conflicting.id, 1, partRequest(UPLOAD_PART_SIZE_BYTES));
     const now = Date.now();
-    await claimCompletion(workerEnv(), ownerSessionId, conflicting.id, 'delayed-conflict', now + 5 * 60_000, now);
+    await claimTerminalOperation(
+      workerEnv(), ownerSessionId, conflicting.id, 'complete', 'delayed-conflict', now + 5 * 60_000, now,
+    );
     await workerEnv().DB.prepare('UPDATE upload_sessions SET parts_json = ? WHERE id = ?')
       .bind('[{"partNumber":1,"size":1,"etag":"different"}]', conflicting.id)
       .run();
@@ -431,11 +463,16 @@ describe('upload lifecycle service', () => {
 
     await vi.waitFor(async () => {
       const row = await workerEnv().DB.prepare(
-        'SELECT completion_owner, completion_expires_at FROM upload_sessions WHERE id = ?',
-      ).bind(session.id).first<{ completion_owner: string | null; completion_expires_at: number | null }>();
-      expect(row?.completion_owner).toEqual(expect.any(String));
-      expect(row?.completion_expires_at).toBeGreaterThanOrEqual(startedAt + 5 * 60_000);
-      expect(row?.completion_expires_at).toBeLessThanOrEqual(Date.now() + 5 * 60_000);
+        'SELECT terminal_operation, terminal_owner, terminal_expires_at FROM upload_sessions WHERE id = ?',
+      ).bind(session.id).first<{
+        terminal_operation: string | null;
+        terminal_owner: string | null;
+        terminal_expires_at: number | null;
+      }>();
+      expect(row?.terminal_operation).toBe('complete');
+      expect(row?.terminal_owner).toEqual(expect.any(String));
+      expect(row?.terminal_expires_at).toBeGreaterThanOrEqual(startedAt + 5 * 60_000);
+      expect(row?.terminal_expires_at).toBeLessThanOrEqual(Date.now() + 5 * 60_000);
     });
     await expect(completeResumableUpload(workerEnv(), ownerSessionId, session.id))
       .rejects.toMatchObject({ code: 'UPLOAD_PART_BUSY' });
@@ -444,11 +481,114 @@ describe('upload lifecycle service', () => {
     rejectComplete(new Error('provider unavailable'));
     await expect(pending).rejects.toMatchObject({ code: 'UPLOAD_PROVIDER_FAILED' });
     await expect(workerEnv().DB.prepare(
-      'SELECT status, completion_owner, completion_expires_at FROM upload_sessions WHERE id = ?',
+      'SELECT status, terminal_operation, terminal_owner, terminal_expires_at FROM upload_sessions WHERE id = ?',
     ).bind(session.id).first()).resolves.toEqual({
-      status: 'active', completion_owner: null, completion_expires_at: null,
+      status: 'active', terminal_operation: null, terminal_owner: null, terminal_expires_at: null,
     });
     await expect(completeResumableUpload(workerEnv(), ownerSessionId, session.id)).resolves.toHaveProperty('entry');
+  });
+
+  it('lets a live completion beat abort without invoking provider cancellation', async () => {
+    const mounted = await mount();
+    let resolveComplete!: (item: StorageItem) => void;
+    const complete = vi.fn(() => new Promise<StorageItem>((resolve) => { resolveComplete = resolve; }));
+    const abort = vi.fn(async () => undefined);
+    const driver = fakeDriver('complete-wins', { complete, abort });
+    driverRegistry.onedrive = () => driver;
+    const session = await createResumableUpload(workerEnv(), ownerSessionId, createInput(mounted, {
+      size: UPLOAD_PART_SIZE_BYTES,
+    }));
+    await uploadResumablePart(workerEnv(), ownerSessionId, session.id, 1, partRequest(UPLOAD_PART_SIZE_BYTES));
+
+    const completing = completeResumableUpload(workerEnv(), ownerSessionId, session.id);
+    await vi.waitFor(() => expect(complete).toHaveBeenCalledOnce());
+    await expect(abortResumableUpload(workerEnv(), ownerSessionId, session.id))
+      .rejects.toMatchObject({ code: 'UPLOAD_PART_BUSY' });
+    expect(abort).not.toHaveBeenCalled();
+
+    resolveComplete(storageItem({ size: UPLOAD_PART_SIZE_BYTES }));
+    await expect(completing).resolves.toHaveProperty('entry');
+  });
+
+  it('lets a live abort beat completion without invoking provider completion', async () => {
+    const mounted = await mount();
+    let resolveAbort!: () => void;
+    const abort = vi.fn(() => new Promise<void>((resolve) => { resolveAbort = resolve; }));
+    const complete = vi.fn(async () => storageItem({ size: UPLOAD_PART_SIZE_BYTES }));
+    const driver = fakeDriver('abort-wins', { complete, abort });
+    driverRegistry.onedrive = () => driver;
+    const session = await createResumableUpload(workerEnv(), ownerSessionId, createInput(mounted, {
+      size: UPLOAD_PART_SIZE_BYTES,
+    }));
+    await uploadResumablePart(workerEnv(), ownerSessionId, session.id, 1, partRequest(UPLOAD_PART_SIZE_BYTES));
+
+    const aborting = abortResumableUpload(workerEnv(), ownerSessionId, session.id);
+    await vi.waitFor(() => expect(abort).toHaveBeenCalledOnce());
+    await expect(completeResumableUpload(workerEnv(), ownerSessionId, session.id))
+      .rejects.toMatchObject({ code: 'UPLOAD_PART_BUSY' });
+    expect(complete).not.toHaveBeenCalled();
+
+    resolveAbort();
+    await expect(aborting).resolves.toBeUndefined();
+    await expect(getResumableUpload(workerEnv(), ownerSessionId, session.id)).resolves.toMatchObject({ status: 'aborted' });
+  });
+
+  it('does not cancel a live final OneDrive part', async () => {
+    const mounted = await mount();
+    let resolvePart!: (result: ProviderUploadPartResult) => void;
+    const uploadPart = vi.fn(() => new Promise<ProviderUploadPartResult>((resolve) => { resolvePart = resolve; }));
+    const abort = vi.fn(async () => undefined);
+    const driver = fakeDriver('final-part-race', { uploadPart, abort });
+    driverRegistry.onedrive = () => driver;
+    const session = await createResumableUpload(workerEnv(), ownerSessionId, createInput(mounted, {
+      size: UPLOAD_PART_SIZE_BYTES,
+    }));
+
+    const uploading = uploadResumablePart(
+      workerEnv(), ownerSessionId, session.id, 1, partRequest(UPLOAD_PART_SIZE_BYTES),
+    );
+    await vi.waitFor(() => expect(uploadPart).toHaveBeenCalledOnce());
+    await expect(abortResumableUpload(workerEnv(), ownerSessionId, session.id))
+      .rejects.toMatchObject({ code: 'UPLOAD_PART_BUSY' });
+    expect(abort).not.toHaveBeenCalled();
+
+    resolvePart({
+      part: { partNumber: 1, size: UPLOAD_PART_SIZE_BYTES, etag: null },
+      completedItem: storageItem({ size: UPLOAD_PART_SIZE_BYTES }),
+    });
+    await expect(uploading).resolves.toEqual({ partNumber: 1, size: UPLOAD_PART_SIZE_BYTES });
+    await expect(workerEnv().DB.prepare('SELECT completed_item_json FROM upload_sessions WHERE id = ?')
+      .bind(session.id).first<{ completed_item_json: string | null }>())
+      .resolves.toEqual({ completed_item_json: expect.any(String) });
+  });
+
+  it('does not return a raced recorded part after an abort wins the failed-claim reload', async () => {
+    const mounted = await mount();
+    const driver = fakeDriver('aborted-part-reload');
+    driverRegistry.onedrive = () => driver;
+    const session = await createResumableUpload(workerEnv(), ownerSessionId, createInput(mounted, {
+      size: UPLOAD_PART_SIZE_BYTES,
+    }));
+    const racedEnv = envBeforePartClaim(async () => {
+      await workerEnv().DB.prepare(
+        `UPDATE upload_sessions
+         SET status = 'aborted',
+             parts_json = ?,
+             active_part_number = NULL,
+             active_part_expires_at = NULL,
+             terminal_operation = NULL,
+             terminal_owner = NULL,
+             terminal_expires_at = NULL
+         WHERE id = ?`,
+      )
+        .bind(JSON.stringify([{ partNumber: 1, size: UPLOAD_PART_SIZE_BYTES, etag: null }]), session.id)
+        .run();
+    });
+
+    await expect(uploadResumablePart(
+      racedEnv, ownerSessionId, session.id, 1, partRequest(UPLOAD_PART_SIZE_BYTES),
+    )).rejects.toMatchObject({ code: 'UPLOAD_SESSION_NOT_FOUND' });
+    expect(driver.resumableUpload?.uploadPart).not.toHaveBeenCalled();
   });
 
   it('recovers S3 completion when provider success is followed by one local persistence failure', async () => {
@@ -635,5 +775,75 @@ describe('upload lifecycle service', () => {
       .bind(first.id).first()).resolves.toEqual({ status: 'active' });
     await expect(workerEnv().DB.prepare('SELECT status FROM upload_sessions WHERE id = ?')
       .bind(second.id).first()).resolves.toEqual({ status: 'aborted' });
+  });
+
+  it('skips expired sessions with live part or terminal claims during cleanup', async () => {
+    const mounted = await mount();
+    const driver = fakeDriver('cleanup-live-claims');
+    driverRegistry.onedrive = () => driver;
+    const partClaimed = await createResumableUpload(workerEnv(), ownerSessionId, createInput(mounted));
+    const terminalClaimed = await createResumableUpload(workerEnv(), ownerSessionId, createInput(mounted));
+    const now = Date.now();
+    await claimUploadPart(workerEnv(), ownerSessionId, partClaimed.id, 1, now + 5 * 60_000, now);
+    await claimTerminalOperation(
+      workerEnv(), ownerSessionId, terminalClaimed.id, 'abort', 'cleanup-live-abort', now + 5 * 60_000, now,
+    );
+    await expire(partClaimed.id);
+    await expire(terminalClaimed.id);
+
+    await cleanupExpiredUploads(workerEnv(), 2);
+
+    expect(driver.resumableUpload?.abort).not.toHaveBeenCalled();
+    await expect(workerEnv().DB.prepare('SELECT status FROM upload_sessions WHERE id = ?')
+      .bind(partClaimed.id).first()).resolves.toEqual({ status: 'active' });
+    await expect(workerEnv().DB.prepare('SELECT status FROM upload_sessions WHERE id = ?')
+      .bind(terminalClaimed.id).first()).resolves.toEqual({ status: 'active' });
+  });
+
+  it('rotates malformed and persistent provider cleanup failures so later rows are not starved', async () => {
+    const mounted = await mount('onedrive', 'cleanup-rotation');
+    const sessions: Array<{ id: string; label: string }> = [];
+    for (let index = 0; index < 12; index += 1) {
+      const label = `rotation-${index}`;
+      driverRegistry.onedrive = () => fakeDriver(label);
+      const session = await createResumableUpload(workerEnv(), ownerSessionId, createInput(mounted));
+      sessions.push({ id: session.id, label });
+    }
+    for (let index = 0; index < sessions.length; index += 1) {
+      await workerEnv().DB.prepare('UPDATE upload_sessions SET expires_at = ? WHERE id = ?')
+        .bind(100 + index, sessions[index]!.id)
+        .run();
+    }
+    await workerEnv().DB.prepare('UPDATE upload_sessions SET provider_state_ciphertext = ? WHERE id = ?')
+      .bind('{malformed', sessions[0]!.id)
+      .run();
+
+    const abort = vi.fn(async (state: Record<string, unknown>) => {
+      if (state.uploadId === `private-${sessions[1]!.label}-upload-id`) {
+        throw new Error('persistent abort failure');
+      }
+    });
+    const cleanupDriver = fakeDriver('cleanup-rotation', { abort });
+    driverRegistry.onedrive = () => cleanupDriver;
+
+    await cleanupExpiredUploads(workerEnv(), 10);
+    expect(abort).toHaveBeenCalledTimes(9);
+    expect(abort.mock.calls.flat().map((state) => String(state.uploadId)))
+      .not.toContain(expect.stringContaining(sessions[10]!.label));
+
+    await cleanupExpiredUploads(workerEnv(), 10);
+    const attemptedUploadIds = abort.mock.calls.map(([state]) => String(state.uploadId));
+    expect(attemptedUploadIds).toEqual(expect.arrayContaining([
+      expect.stringContaining(sessions[10]!.label),
+      expect.stringContaining(sessions[11]!.label),
+    ]));
+    await expect(workerEnv().DB.prepare('SELECT status FROM upload_sessions WHERE id IN (?, ?) ORDER BY id')
+      .bind(sessions[10]!.id, sessions[11]!.id).all<{ status: string }>())
+      .resolves.toMatchObject({ results: [{ status: 'aborted' }, { status: 'aborted' }] });
+    const cleanupAttempts = await workerEnv().DB.prepare(
+      'SELECT cleanup_attempted_at FROM upload_sessions WHERE id IN (?, ?) ORDER BY expires_at',
+    ).bind(sessions[0]!.id, sessions[1]!.id).all<{ cleanup_attempted_at: number }>();
+    expect(cleanupAttempts.results).toHaveLength(2);
+    expect(cleanupAttempts.results.every((row) => row.cleanup_attempted_at > 0)).toBe(true);
   });
 });
