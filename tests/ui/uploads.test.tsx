@@ -50,20 +50,31 @@ class MockXMLHttpRequest {
     MockXMLHttpRequest.requests.push(this);
     const plan = MockXMLHttpRequest.plans.shift() ?? { type: 'success' };
     if (plan.type === 'pending') return;
-    queueMicrotask(() => {
-      const size = body instanceof Blob ? body.size : 0;
-      const partNumber = Number(this.url.split('/').at(-1));
-      (this.upload.onprogress as unknown as ((event: ProgressEvent) => void) | null)?.(new ProgressEvent('progress', { lengthComputable: true, loaded: size, total: size }));
-      if (plan.type === 'success') {
-        this.status = 200;
-        this.responseText = JSON.stringify({ ok: true, data: plan.response ?? { partNumber, size } });
-        this.onload?.call(this as unknown as XMLHttpRequest, new ProgressEvent('load'));
-      } else {
-        this.status = plan.status;
-        this.responseText = JSON.stringify({ ok: false, error: { message: 'Part upload failed' } });
-        this.onload?.call(this as unknown as XMLHttpRequest, new ProgressEvent('load'));
-      }
-    });
+    queueMicrotask(() => this.respond(plan));
+  }
+
+  emitProgress(loaded: number) {
+    const total = this.body instanceof Blob ? this.body.size : 0;
+    (this.upload.onprogress as unknown as ((event: ProgressEvent) => void) | null)?.(new ProgressEvent('progress', { lengthComputable: true, loaded, total }));
+  }
+
+  succeed(response?: unknown) {
+    this.respond({ type: 'success', response });
+  }
+
+  private respond(plan: Exclude<XhrPlan, { type: 'pending' }>) {
+    const size = this.body instanceof Blob ? this.body.size : 0;
+    const partNumber = Number(this.url.split('/').at(-1));
+    this.emitProgress(size);
+    if (plan.type === 'success') {
+      this.status = 200;
+      this.responseText = JSON.stringify({ ok: true, data: plan.response ?? { partNumber, size } });
+      this.onload?.call(this as unknown as XMLHttpRequest, new ProgressEvent('load'));
+      return;
+    }
+    this.status = plan.status;
+    this.responseText = JSON.stringify({ ok: false, error: { message: 'Part upload failed' } });
+    this.onload?.call(this as unknown as XMLHttpRequest, new ProgressEvent('load'));
   }
 
   abort() {
@@ -78,7 +89,7 @@ function sessionView(size: number, uploadedParts: Array<{ partNumber: number; si
     partSize: PART_SIZE,
     size,
     uploadedParts,
-    expiresAt: '2026-07-18T00:00:00.000Z',
+    expiresAt: new Date(Date.now() + 60_000).toISOString(),
     status: 'active' as const,
   };
 }
@@ -149,6 +160,60 @@ describe('upload transport', () => {
     });
   });
 
+  it('rejects malformed session responses before opening a part XHR', async () => {
+    const file = new File([new Uint8Array(PART_SIZE)], 'invalid.bin', { type: 'application/octet-stream' });
+    const malformedSessions = [
+      { ...sessionView(file.size), id: '   ' },
+      { ...sessionView(file.size), partSize: PART_SIZE / 2 },
+      { ...sessionView(file.size), expiresAt: 'not-a-date' },
+      { ...sessionView(file.size), expiresAt: new Date(Date.now() - 60_000).toISOString() },
+      { ...sessionView(file.size), status: 'provider-uploading' },
+      { ...sessionView(file.size), status: 'aborted' },
+    ];
+
+    for (const session of malformedSessions) {
+      const fetchMock = vi.fn().mockImplementation(() => Promise.resolve(apiResponse(session)));
+      vi.stubGlobal('fetch', fetchMock);
+
+      await expect(uploadFile(multipartInput(file))).rejects.toThrow('Upload session response is invalid');
+      expect(MockXMLHttpRequest.requests).toHaveLength(0);
+      vi.unstubAllGlobals();
+      vi.stubGlobal('XMLHttpRequest', MockXMLHttpRequest);
+    }
+  });
+
+  it('strips hostile provider-shaped fields from session data before browser transport uses it', async () => {
+    const file = new File([new Uint8Array(PART_SIZE)], 'safe.bin', { type: 'application/octet-stream' });
+    const hostile = {
+      ...sessionView(file.size),
+      uploadUrl: 'https://provider.example/upload?token=secret',
+      uploadId: 'provider-upload-id',
+      providerState: { uploadUrl: 'https://provider.example/private' },
+      credentials: { token: 'secret' },
+    };
+    const control: ResumableUploadControl = { onSession: vi.fn() };
+    const fetchMock = vi.fn()
+      .mockResolvedValueOnce(apiResponse(hostile))
+      .mockResolvedValueOnce(apiResponse({ id: 'entry-1' }));
+    vi.stubGlobal('fetch', fetchMock);
+
+    await uploadFile(multipartInput(file, control));
+
+    expect(control.sessionId).toBe('session-123');
+    expect(control.uploadedParts).toEqual([{ partNumber: 1, size: PART_SIZE }]);
+    expect(control.onSession).toHaveBeenCalledWith({
+      id: 'session-123',
+      kind: 'multipart',
+      partSize: PART_SIZE,
+      size: file.size,
+      uploadedParts: [],
+      expiresAt: hostile.expiresAt,
+      status: 'active',
+    });
+    expect(JSON.stringify(control)).not.toContain('provider.example');
+    expect(MockXMLHttpRequest.requests[0].url).toBe('/api/admin/uploads/sessions/session-123/parts/1');
+  });
+
   it('uploads a 25 MiB file as sequential 10 MiB, 10 MiB, and 5 MiB Blob parts', async () => {
     const file = new File([new Uint8Array(PART_SIZE * 2 + PART_SIZE / 2)], 'archive.bin', { type: 'application/custom' });
     const fetchMock = vi.fn()
@@ -174,6 +239,33 @@ describe('upload transport', () => {
     expect(fetchMock.mock.calls[1][0]).toBe('/api/admin/uploads/sessions/session-123/complete');
   });
 
+  it('starts each part only after the previous part succeeds and reports committed plus active progress', async () => {
+    const file = new File([new Uint8Array(PART_SIZE * 2)], 'sequential.bin', { type: 'application/octet-stream' });
+    const fetchMock = vi.fn()
+      .mockResolvedValueOnce(apiResponse(sessionView(file.size)))
+      .mockResolvedValueOnce(apiResponse({ id: 'entry-1' }));
+    vi.stubGlobal('fetch', fetchMock);
+    MockXMLHttpRequest.plans = [{ type: 'pending' }, { type: 'pending' }];
+    const progress: Array<[number, number]> = [];
+
+    const upload = uploadFile({ ...multipartInput(file), onProgress: (uploadedBytes, totalBytes) => progress.push([uploadedBytes, totalBytes]) });
+    await waitFor(() => expect(MockXMLHttpRequest.requests).toHaveLength(1));
+    MockXMLHttpRequest.requests[0].emitProgress(PART_SIZE / 2);
+    expect(progress).toEqual([[0, PART_SIZE * 2], [PART_SIZE / 2, PART_SIZE * 2]]);
+    expect(MockXMLHttpRequest.requests).toHaveLength(1);
+
+    MockXMLHttpRequest.requests[0].succeed();
+    await waitFor(() => expect(MockXMLHttpRequest.requests).toHaveLength(2));
+    expect(progress).toContainEqual([PART_SIZE, PART_SIZE * 2]);
+    MockXMLHttpRequest.requests[1].emitProgress(PART_SIZE / 4);
+    expect(progress).toContainEqual([PART_SIZE + PART_SIZE / 4, PART_SIZE * 2]);
+
+    MockXMLHttpRequest.requests[1].succeed();
+    await upload;
+
+    expect(progress.map(([uploadedBytes]) => uploadedBytes)).toEqual([...progress.map(([uploadedBytes]) => uploadedBytes)].sort((left, right) => left - right));
+  });
+
   it('retries a failed part from the server-confirmed session state without resending earlier parts', async () => {
     const file = new File([new Uint8Array(PART_SIZE * 2)], 'retry.bin', { type: 'application/octet-stream' });
     const control: ResumableUploadControl = {};
@@ -184,14 +276,16 @@ describe('upload transport', () => {
     vi.stubGlobal('fetch', fetchMock);
     MockXMLHttpRequest.plans = [{ type: 'success' }, { type: 'failure', status: 503 }, { type: 'success' }];
 
-    await expect(uploadFile(multipartInput(file, control))).rejects.toThrow('Part upload failed');
+    const firstProgress: Array<[number, number]> = [];
+    await expect(uploadFile({ ...multipartInput(file, control), onProgress: (uploadedBytes, totalBytes) => firstProgress.push([uploadedBytes, totalBytes]) })).rejects.toThrow('Part upload failed');
     expect(control.sessionId).toBe('session-123');
     expect(MockXMLHttpRequest.requests.map((request) => request.url)).toEqual([
       '/api/admin/uploads/sessions/session-123/parts/1',
       '/api/admin/uploads/sessions/session-123/parts/2',
     ]);
 
-    await uploadFile(multipartInput(file, control));
+    const retryProgress: Array<[number, number]> = [];
+    await uploadFile({ ...multipartInput(file, control), onProgress: (uploadedBytes, totalBytes) => retryProgress.push([uploadedBytes, totalBytes]) });
 
     expect(MockXMLHttpRequest.requests.map((request) => request.url)).toEqual([
       '/api/admin/uploads/sessions/session-123/parts/1',
@@ -199,6 +293,38 @@ describe('upload transport', () => {
       '/api/admin/uploads/sessions/session-123/parts/2',
     ]);
     expect(fetchMock.mock.calls[1][0]).toBe('/api/admin/uploads/sessions/session-123');
+    expect(firstProgress).toContainEqual([PART_SIZE, PART_SIZE * 2]);
+    expect(retryProgress[0]).toEqual([PART_SIZE, PART_SIZE * 2]);
+    expect(retryProgress.every(([uploadedBytes], index) => index === 0 || uploadedBytes >= retryProgress[index - 1][0])).toBe(true);
+  });
+
+  it('waits for an in-flight creation response, then aborts its opaque session exactly once on cancellation', async () => {
+    const controller = new AbortController();
+    const file = new File([new Uint8Array(PART_SIZE)], 'create-cancel.bin', { type: 'application/octet-stream' });
+    let resolveCreate!: (response: Response) => void;
+    const fetchMock = vi.fn((url: string, init?: RequestInit) => {
+      if (url === '/api/admin/uploads/sessions' && init?.method === 'POST') {
+        return new Promise<Response>((resolve, reject) => {
+          resolveCreate = resolve;
+          init.signal?.addEventListener('abort', () => reject(new DOMException('Upload cancelled', 'AbortError')), { once: true });
+        });
+      }
+      return Promise.resolve(new Response(null, { status: 204 }));
+    });
+    vi.stubGlobal('fetch', fetchMock);
+
+    const upload = uploadFile({ ...multipartInput(file), signal: controller.signal });
+    await waitFor(() => expect(fetchMock).toHaveBeenCalledOnce());
+    controller.abort();
+    resolveCreate(apiResponse(sessionView(file.size)));
+
+    await expect(upload).rejects.toMatchObject({ name: 'AbortError' });
+    expect(fetchMock).toHaveBeenCalledTimes(2);
+    expect(fetchMock).toHaveBeenLastCalledWith('/api/admin/uploads/sessions/session-123', {
+      method: 'DELETE',
+      credentials: 'same-origin',
+    });
+    expect(MockXMLHttpRequest.requests).toHaveLength(0);
   });
 
   it('pauses between parts without losing the server session or aborting it', async () => {
