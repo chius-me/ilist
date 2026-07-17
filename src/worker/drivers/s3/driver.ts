@@ -10,15 +10,22 @@ export interface S3DriverClient {
   putObject(key: string, body: BodyInit | null, options?: PutObjectOptions): Promise<Response>;
   copyObject(sourceKey: string, destinationKey: string): Promise<Response>;
   deleteObject(key: string): Promise<Response>;
-  createMultipartUpload(key: string, contentType: string | null): Promise<{ uploadId: string }>;
+  createMultipartUpload(key: string, contentType: string | null, marker: string): Promise<{ uploadId: string }>;
   uploadPart(key: string, uploadId: string, partNumber: number, body: BodyInit, options?: S3UploadPartOptions): Promise<{ etag: string }>;
-  completeMultipartUpload(key: string, uploadId: string, parts: CompletedUploadPart[]): Promise<Response>;
+  completeMultipartUpload(key: string, uploadId: string, parts: CompletedUploadPart[]): Promise<{ etag: string }>;
   abortMultipartUpload(key: string, uploadId: string): Promise<Response>;
 }
 
 type ItemKind = 'file' | 'folder';
 interface ItemIdentity { v: 1; mount: string; key: string; kind: ItemKind }
-interface S3MultipartUploadState { key: string; uploadId: string; parentId: string; contentType: string | null }
+interface S3MultipartUploadState {
+  key: string;
+  uploadId: string;
+  parentId: string;
+  contentType: string | null;
+  marker: string;
+  size: number;
+}
 
 const S3_RESUMABLE_UPLOAD_TTL_MS = 24 * 60 * 60 * 1000;
 
@@ -99,9 +106,10 @@ export class S3Driver implements StorageDriver {
       }
       const contentType = this.requireContentType(input.contentType);
       const key = `${parent.key}${name}`;
-      const { uploadId } = await this.client.createMultipartUpload(key, contentType);
+      const marker = crypto.randomUUID();
+      const { uploadId } = await this.client.createMultipartUpload(key, contentType, marker);
       return {
-        state: { key, uploadId, parentId: input.parentId, contentType },
+        state: { key, uploadId, parentId: input.parentId, contentType, marker, size: input.size },
         expiresAt: Date.now() + S3_RESUMABLE_UPLOAD_TTL_MS,
       };
     },
@@ -113,19 +121,40 @@ export class S3Driver implements StorageDriver {
     complete: async (input) => {
       const state = this.requireMultipartUploadState(input.state);
       const parts = [...input.parts].sort((left, right) => left.partNumber - right.partNumber);
-      await this.client.completeMultipartUpload(state.key, state.uploadId, parts);
-      const response = await this.client.headObject(state.key);
-      return {
-        ...this.toItem(state.key, 'file', state.parentId),
-        size: headerNumber(response, 'content-length'),
-        contentType: response.headers.get('content-type'),
-        modifiedAt: response.headers.get('last-modified'),
-        etag: response.headers.get('etag'),
-      };
+      try {
+        const result = await this.client.completeMultipartUpload(state.key, state.uploadId, parts);
+        return {
+          ...this.toItem(state.key, 'file', state.parentId),
+          size: state.size,
+          contentType: state.contentType,
+          etag: result.etag,
+        };
+      } catch (error) {
+        if (!(error instanceof S3Error) || error.code !== 'NoSuchUpload') throw error;
+        let response: Response;
+        try {
+          response = await this.client.headObject(state.key);
+        } catch {
+          throw error;
+        }
+        const marker = response.headers.get('x-amz-meta-ilist-upload-marker');
+        if (marker !== state.marker || headerNumber(response, 'content-length') !== state.size) throw error;
+        return {
+          ...this.toItem(state.key, 'file', state.parentId),
+          size: state.size,
+          contentType: state.contentType,
+          modifiedAt: response.headers.get('last-modified'),
+          etag: response.headers.get('etag'),
+        };
+      }
     },
     abort: async (state) => {
       const uploadState = this.requireMultipartUploadState(state);
-      await this.client.abortMultipartUpload(uploadState.key, uploadState.uploadId);
+      try {
+        await this.client.abortMultipartUpload(uploadState.key, uploadState.uploadId);
+      } catch (error) {
+        if (!(error instanceof S3Error) || error.code !== 'NoSuchUpload') throw error;
+      }
     },
   };
   private readonly rootPrefix: string;
@@ -283,9 +312,13 @@ export class S3Driver implements StorageDriver {
 
   private requireMultipartUploadState(state: Record<string, unknown>): S3MultipartUploadState {
     if (!isRecord(state)) throw invalidUploadState();
-    const { key, uploadId, parentId, contentType } = state;
+    const { key, uploadId, parentId, contentType, marker, size } = state;
     if (typeof key !== 'string' || typeof uploadId !== 'string' || typeof parentId !== 'string') throw invalidUploadState();
     if (!uploadId.trim() || /[\u0000-\u001f]/.test(uploadId)) throw invalidUploadState();
+    if (typeof marker !== 'string' || !/^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(marker)) {
+      throw invalidUploadState();
+    }
+    if (!Number.isSafeInteger(size) || (size as number) < 0) throw invalidUploadState();
     const normalizedContentType = this.requireContentType(contentType, true);
 
     let parent: ItemIdentity;
@@ -301,7 +334,7 @@ export class S3Driver implements StorageDriver {
     } catch {
       throw invalidUploadState();
     }
-    return { key, uploadId, parentId, contentType: normalizedContentType };
+    return { key, uploadId, parentId, contentType: normalizedContentType, marker, size: size as number };
   }
 
   private requireContentType(value: unknown, fromState = false): string | null {

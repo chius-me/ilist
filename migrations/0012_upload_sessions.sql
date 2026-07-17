@@ -13,6 +13,8 @@ CREATE TABLE IF NOT EXISTS upload_sessions (
   status TEXT NOT NULL CHECK (status IN ('active', 'completing', 'completed', 'aborted')),
   active_part_number INTEGER,
   active_part_expires_at INTEGER,
+  completion_owner TEXT,
+  completion_expires_at INTEGER,
   expires_at INTEGER NOT NULL,
   created_at TEXT NOT NULL,
   updated_at TEXT NOT NULL

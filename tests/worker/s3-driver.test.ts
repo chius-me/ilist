@@ -37,7 +37,7 @@ function client(overrides: Partial<S3DriverClient> = {}): S3DriverClient {
     deleteObject: vi.fn(async () => response()),
     createMultipartUpload: vi.fn(async () => ({ uploadId: 'upload-123' })),
     uploadPart: vi.fn(async () => ({ etag: '"part-etag"' })),
-    completeMultipartUpload: vi.fn(async () => response()),
+    completeMultipartUpload: vi.fn(async () => ({ etag: '"complete-etag"' })),
     abortMultipartUpload: vi.fn(async () => response()),
     ...overrides,
   };
@@ -202,18 +202,11 @@ describe('S3Driver', () => {
     await expect(driver.upload(driver.rootId, 'nested/file', new ReadableStream(), null)).rejects.toThrow();
   });
 
-  it('creates a root-scoped S3 multipart session and completes ordered parts with final metadata', async () => {
+  it('creates a marked root-scoped S3 multipart session and completes without a post-complete HEAD', async () => {
     vi.useFakeTimers();
     vi.setSystemTime(new Date('2026-07-17T04:05:06.000Z'));
     try {
-      const api = client({
-        headObject: vi.fn(async () => response({
-          'content-length': String(20 * 1024 * 1024),
-          'content-type': 'application/octet-stream',
-          'last-modified': 'Thu, 17 Jul 2026 04:05:10 GMT',
-          etag: '"complete-etag"',
-        })),
-      });
+      const api = client();
       const driver = new S3Driver(mount, api);
       const adapter = driver.resumableUpload!;
       const session = await adapter.create({
@@ -232,10 +225,18 @@ describe('S3Driver', () => {
           uploadId: 'upload-123',
           parentId: driver.rootId,
           contentType: 'application/octet-stream',
+          marker: expect.any(String),
+          size: 20 * 1024 * 1024,
         },
         expiresAt: Date.now() + 24 * 60 * 60 * 1000,
       });
-      expect(api.createMultipartUpload).toHaveBeenCalledWith('tenant/root/archive.bin', 'application/octet-stream');
+      const marker = (session.state as Record<string, unknown>).marker;
+      expect(marker).toMatch(/^[0-9a-f-]{36}$/);
+      expect(api.createMultipartUpload).toHaveBeenCalledWith(
+        'tenant/root/archive.bin',
+        'application/octet-stream',
+        marker,
+      );
 
       await expect(adapter.uploadPart({
         state: session.state,
@@ -260,14 +261,14 @@ describe('S3Driver', () => {
         { partNumber: 1, size: UPLOAD_PART_SIZE_BYTES, etag: '"part-1"' },
         { partNumber: 2, size: UPLOAD_PART_SIZE_BYTES, etag: '"part-2"' },
       ]);
-      expect(api.headObject).toHaveBeenCalledWith('tenant/root/archive.bin');
+      expect(api.headObject).not.toHaveBeenCalled();
       expect(completed).toMatchObject({
         parentId: driver.rootId,
         name: 'archive.bin',
         kind: 'file',
         size: 20 * 1024 * 1024,
         contentType: 'application/octet-stream',
-        modifiedAt: 'Thu, 17 Jul 2026 04:05:10 GMT',
+        modifiedAt: null,
         etag: '"complete-etag"',
       });
 
@@ -276,6 +277,84 @@ describe('S3Driver', () => {
     } finally {
       vi.useRealTimers();
     }
+  });
+
+  it('reconciles NoSuchUpload only when HEAD proves this session marker and exact size', async () => {
+    const complete = vi.fn(async () => {
+      throw new S3Error(404, 'NoSuchUpload', 'already completed');
+    });
+    const api = client({ completeMultipartUpload: complete });
+    const driver = new S3Driver(mount, api);
+    const adapter = driver.resumableUpload!;
+    const session = await adapter.create({
+      parentId: driver.rootId,
+      name: 'archive.bin',
+      size: 20 * 1024 * 1024,
+      contentType: 'application/octet-stream',
+      partSize: UPLOAD_PART_SIZE_BYTES,
+    });
+    const marker = String((session.state as Record<string, unknown>).marker);
+    vi.mocked(api.headObject).mockResolvedValue(response({
+      'content-length': String(20 * 1024 * 1024),
+      'content-type': 'text/hostile',
+      'last-modified': 'Thu, 17 Jul 2026 04:05:10 GMT',
+      etag: '"reconciled-etag"',
+      'x-amz-meta-ilist-upload-marker': marker,
+    }));
+
+    await expect(adapter.complete({ state: session.state, parts: [] })).resolves.toMatchObject({
+      name: 'archive.bin',
+      size: 20 * 1024 * 1024,
+      contentType: 'application/octet-stream',
+      modifiedAt: 'Thu, 17 Jul 2026 04:05:10 GMT',
+      etag: '"reconciled-etag"',
+    });
+    expect(api.headObject).toHaveBeenCalledWith('tenant/root/archive.bin');
+  });
+
+  it.each([
+    ['another session marker', { 'content-length': String(20 * 1024 * 1024), 'x-amz-meta-ilist-upload-marker': 'other' }],
+    ['a different size', { 'content-length': '1', 'x-amz-meta-ilist-upload-marker': 'SESSION_MARKER' }],
+  ])('does not reconcile NoSuchUpload with %s', async (_label, headers) => {
+    const api = client({
+      completeMultipartUpload: vi.fn(async () => {
+        throw new S3Error(404, 'NoSuchUpload', 'already completed');
+      }),
+    });
+    const driver = new S3Driver(mount, api);
+    const adapter = driver.resumableUpload!;
+    const session = await adapter.create({
+      parentId: driver.rootId,
+      name: 'archive.bin',
+      size: 20 * 1024 * 1024,
+      contentType: null,
+      partSize: UPLOAD_PART_SIZE_BYTES,
+    });
+    const marker = String((session.state as Record<string, unknown>).marker);
+    vi.mocked(api.headObject).mockResolvedValue(response(Object.fromEntries(
+      Object.entries(headers).map(([name, value]) => [name, value === 'SESSION_MARKER' ? marker : value]),
+    )));
+
+    await expect(adapter.complete({ state: session.state, parts: [] })).rejects.toMatchObject({ code: 'NoSuchUpload' });
+  });
+
+  it('treats only NoSuchUpload aborts as already successful', async () => {
+    const api = client({
+      abortMultipartUpload: vi.fn()
+        .mockRejectedValueOnce(new S3Error(404, 'NoSuchUpload', 'absent'))
+        .mockRejectedValueOnce(new S3Error(403, 'AccessDenied', 'denied')),
+    });
+    const adapter = new S3Driver(mount, api).resumableUpload!;
+    const session = await adapter.create({
+      parentId: new S3Driver(mount, client()).rootId,
+      name: 'archive.bin',
+      size: 1,
+      contentType: null,
+      partSize: UPLOAD_PART_SIZE_BYTES,
+    });
+
+    await expect(adapter.abort(session.state)).resolves.toBeUndefined();
+    await expect(adapter.abort(session.state)).rejects.toMatchObject({ code: 'AccessDenied' });
   });
 
   it('rejects invalid multipart target names and serialized provider state', async () => {
@@ -287,6 +366,8 @@ describe('S3Driver', () => {
       uploadId: 'upload-123',
       parentId: driver.rootId,
       contentType: 42,
+      marker: crypto.randomUUID(),
+      size: UPLOAD_PART_SIZE_BYTES,
     };
 
     await expect(adapter.create({

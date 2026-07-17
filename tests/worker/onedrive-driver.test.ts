@@ -335,7 +335,7 @@ describe('OneDrive read driver', () => {
     [404, 404, 'ONEDRIVE_UPLOAD_SESSION_NOT_FOUND', undefined],
     [409, 409, 'ONEDRIVE_UPLOAD_SESSION_CONFLICT', undefined],
     [416, 409, 'ONEDRIVE_UPLOAD_SESSION_INVALID_RANGE', undefined],
-    [429, 503, 'ONEDRIVE_UPLOAD_SESSION_RATE_LIMITED', { retryAfter: '30' }],
+    [429, 503, 'ONEDRIVE_UPLOAD_SESSION_RATE_LIMITED', { retryAfter: 30 }],
     [500, 502, 'ONEDRIVE_UPLOAD_SESSION_FAILED', undefined],
   ])('normalizes upload-session status %i', async (upstreamStatus, status, code, details) => {
     const uploadUrl = 'https://upload.example/session?token=private';
@@ -348,6 +348,38 @@ describe('OneDrive read driver', () => {
 
     await expect(client.uploadSessionPart(session, new ReadableStream(), 'bytes 0-0/1', 1))
       .rejects.toMatchObject({ status, code, details });
+  });
+
+  it('omits invalid retry timing from upload-session errors', async () => {
+    const uploadUrl = 'https://upload.example/session?token=private';
+    const fetcher = vi.fn(async (_input: RequestInfo | URL, init: RequestInit = {}) => {
+      if (init.method === 'POST') {
+        return Response.json({ uploadUrl, expirationDateTime: '2026-07-18T00:00:00.000Z' });
+      }
+      return new Response(null, { status: 429, headers: { 'retry-after': 'private-token' } });
+    });
+    const client = new OneDriveClient(workerEnv(), mount.id, fetcher, async () => 'test-access');
+    const session = await client.createUploadSession('root', 'video.mp4');
+
+    await expect(client.uploadSessionPart(session, new ReadableStream(), 'bytes 0-0/1', 1))
+      .rejects.toMatchObject({ code: 'ONEDRIVE_UPLOAD_SESSION_RATE_LIMITED', details: undefined });
+  });
+
+  it('treats an absent upload session cancellation as success without swallowing other provider errors', async () => {
+    const uploadUrl = 'https://upload.example/session?token=private';
+    const fetcher = vi.fn(async (_input: RequestInfo | URL, init: RequestInit = {}) => {
+      if (init.method === 'POST') {
+        return Response.json({ uploadUrl, expirationDateTime: '2026-07-18T00:00:00.000Z' });
+      }
+      return new Response(null, { status: fetcher.mock.calls.length === 2 ? 404 : 401 });
+    });
+    const client = new OneDriveClient(workerEnv(), mount.id, fetcher, async () => 'test-access');
+    const session = await client.createUploadSession('root', 'video.mp4');
+
+    await expect(client.cancelUploadSession(session)).resolves.toBeUndefined();
+    await expect(client.cancelUploadSession(session)).rejects.toMatchObject({
+      code: 'ONEDRIVE_UPLOAD_SESSION_FAILED',
+    });
   });
 
   it('rejects a signed upload session after its expiration before fetching', async () => {

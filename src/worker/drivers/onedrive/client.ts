@@ -85,13 +85,19 @@ function graphError(status: number): HttpError {
 }
 
 function uploadSessionError(response: Response): HttpError {
-  const retryAfter = response.headers.get('retry-after');
+  const retryAfter = retryAfterSeconds(response.headers.get('retry-after'));
   const details = retryAfter === null ? undefined : { retryAfter };
   if (response.status === 404) return new HttpError(404, 'ONEDRIVE_UPLOAD_SESSION_NOT_FOUND', 'OneDrive upload session was not found', details);
   if (response.status === 409) return new HttpError(409, 'ONEDRIVE_UPLOAD_SESSION_CONFLICT', 'OneDrive upload session conflicts with the current file', details);
   if (response.status === 416) return new HttpError(409, 'ONEDRIVE_UPLOAD_SESSION_INVALID_RANGE', 'OneDrive upload part range is invalid', details);
   if (response.status === 429) return new HttpError(503, 'ONEDRIVE_UPLOAD_SESSION_RATE_LIMITED', 'OneDrive upload session is temporarily rate limited', details);
   return new HttpError(502, 'ONEDRIVE_UPLOAD_SESSION_FAILED', 'OneDrive upload session request failed', details);
+}
+
+function retryAfterSeconds(value: string | null): number | null {
+  if (value === null || !/^\d+$/.test(value.trim())) return null;
+  const seconds = Number(value.trim());
+  return Number.isSafeInteger(seconds) ? seconds : null;
 }
 
 function invalidUploadSession(): HttpError {
@@ -300,7 +306,11 @@ export class OneDriveClient {
   }
 
   async cancelUploadSession(session: GraphUploadSession): Promise<void> {
-    await this.requestUploadSession(session, { method: 'DELETE' });
+    try {
+      await this.requestUploadSession(session, { method: 'DELETE' });
+    } catch (error) {
+      if (!(error instanceof HttpError) || error.code !== 'ONEDRIVE_UPLOAD_SESSION_NOT_FOUND') throw error;
+    }
   }
 
   update(itemId: string, update: GraphItemUpdate): Promise<GraphDriveItem> {
