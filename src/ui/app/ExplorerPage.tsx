@@ -8,7 +8,7 @@ import { entryActions, EntryActionMenu, type EntryActionId } from '../features/e
 import { ExplorerCollection } from '../features/explorer/ExplorerCollection';
 import { ExplorerToolbar, type ExplorerSort, type ExplorerView } from '../features/explorer/ExplorerToolbar';
 import type { EntryHandlers } from '../features/explorer/EntryRow';
-import { MobileActionSheet } from '../features/explorer/MobileActionSheet';
+import { MobileActionSheet, useMobileActions } from '../features/explorer/MobileActionSheet';
 import { SelectionToolbar } from '../features/explorer/SelectionToolbar';
 import { DeleteDialog } from '../features/operations/DeleteDialog';
 import { FolderPickerDialog } from '../features/operations/FolderPickerDialog';
@@ -26,20 +26,6 @@ import { useI18n } from '../i18n/I18nProvider';
 import { localizedApiError } from '../i18n/apiErrors';
 import { usePreferences } from '../preferences/PreferencesProvider';
 import { isEntryMutable, type Entry } from '../types/entries';
-
-const MOBILE_ACTIONS_QUERY = '(max-width: 760px)';
-
-function useMobileActions() {
-  const [mobile, setMobile] = useState(() => window.matchMedia(MOBILE_ACTIONS_QUERY).matches);
-  useEffect(() => {
-    const media = window.matchMedia(MOBILE_ACTIONS_QUERY);
-    const update = () => setMobile(media.matches);
-    update();
-    media.addEventListener('change', update);
-    return () => media.removeEventListener('change', update);
-  }, []);
-  return mobile;
-}
 
 function compareEntries(left: Entry, right: Entry, sort: ExplorerSort): number {
   if (left.kind !== right.kind) return left.kind === 'folder' ? -1 : 1;

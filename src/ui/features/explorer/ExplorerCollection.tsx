@@ -24,7 +24,7 @@ export interface ExplorerCollectionProps {
   onSelectAll(ids: string[]): void;
   onReplaceSelection(ids: string[]): void;
   onClearSelection(): void;
-  fileUrlFor?: (entry: Entry, download: boolean) => string;
+  fileUrlFor?: (entry: Entry, download: boolean, exportFormat?: string) => string;
 }
 
 function intersects(first: MarqueeRect, second: DOMRect): boolean {

@@ -19,7 +19,7 @@ type PreviewOverlayProps = {
   loading?: boolean;
   error?: Error | null;
   onClose: () => void;
-  urlFor?: (entry: Entry, download: boolean) => string;
+  urlFor?: (entry: Entry, download: boolean, exportFormat?: string) => string;
   allowDownload?: boolean;
 };
 
@@ -54,7 +54,13 @@ async function readTextPreview(url: string, signal: AbortSignal): Promise<string
   return new TextDecoder().decode(bytes);
 }
 
-function TextPreview({ entry, urlFor }: { entry: Entry; urlFor: (entry: Entry, download: boolean) => string }) {
+type PreviewUrlFor = (entry: Entry, download: boolean, exportFormat?: string) => string;
+
+function pdfExport(entry: Entry) {
+  return entry.exportOptions?.find((option) => option.format === 'pdf' || option.contentType === 'application/pdf');
+}
+
+function TextPreview({ entry, urlFor }: { entry: Entry; urlFor: PreviewUrlFor }) {
   const { locale, t } = useFeedbackI18n();
   const url = urlFor(entry, false);
   const unavailableMessage = t('preview.unavailable');
@@ -83,19 +89,22 @@ function PreviewLoading() {
   return <div className="previewStatus" role="status"><LoaderCircle aria-hidden="true" size={20} />{t('preview.loading')}</div>;
 }
 
-function PreviewError({ message, entry, urlFor = fileUrl, allowDownload = true }: { message: string; entry?: Entry | null; urlFor?: (entry: Entry, download: boolean) => string; allowDownload?: boolean }) {
+function PreviewError({ message, entry, urlFor = fileUrl, allowDownload = true }: { message: string; entry?: Entry | null; urlFor?: PreviewUrlFor; allowDownload?: boolean }) {
   const { t } = useFeedbackI18n();
+  const exportOption = entry ? pdfExport(entry) ?? entry.exportOptions?.[0] : undefined;
   return (
     <div className="previewStatus previewError" role="alert">
       <AlertCircle aria-hidden="true" size={20} />
       <span>{message}</span>
-      {entry && allowDownload ? <a href={urlFor(entry, true)} aria-label={`${t('action.download')} ${entry.name}`}>{t('action.download')}</a> : null}
+      {entry && allowDownload ? <a href={urlFor(entry, true, exportOption?.format)} aria-label={exportOption ? t('action.exportNamed', { format: exportOption.label, name: entry.name }) : `${t('action.download')} ${entry.name}`}>{exportOption ? t('action.export', { format: exportOption.label }) : t('action.download')}</a> : null}
     </div>
   );
 }
 
-function PreviewBody({ entry, urlFor }: { entry: Entry; urlFor: (entry: Entry, download: boolean) => string }) {
+function PreviewBody({ entry, urlFor }: { entry: Entry; urlFor: PreviewUrlFor }) {
   const { formatBytes, t } = useFeedbackI18n();
+  const exportOption = pdfExport(entry);
+  if (exportOption) return <iframe className="previewPdf" title={t('preview.pdfTitle')} src={urlFor(entry, false, exportOption.format)} />;
   const url = urlFor(entry, false);
   switch (previewKind(entry)) {
     case 'image': return <img className="previewImage" src={url} alt={entry.name} />;
@@ -117,6 +126,8 @@ function PreviewBody({ entry, urlFor }: { entry: Entry; urlFor: (entry: Entry, d
 
 export function PreviewOverlay({ entry = null, loading = false, error = null, onClose, urlFor = fileUrl, allowDownload = entry?.capabilities.download ?? true }: PreviewOverlayProps) {
   const { t } = useFeedbackI18n();
+  const exportOption = entry ? pdfExport(entry) ?? entry.exportOptions?.[0] : undefined;
+  const downloadLabel = entry && exportOption ? t('action.exportNamed', { format: exportOption.label, name: entry.name }) : entry ? `${t('action.download')} ${entry.name}` : '';
   const closeButton = useRef<HTMLButtonElement>(null);
   const backdrop = useRef<HTMLDivElement>(null);
   useModalFocus({ active: true, containerRef: backdrop, initialFocusRef: closeButton, onClose });
@@ -127,7 +138,7 @@ export function PreviewOverlay({ entry = null, loading = false, error = null, on
         <header className="previewHeader overlayHeader">
           <h2 title={entry?.name}>{entry?.name || t('preview.file')}</h2>
           <span className="previewHeaderActions">
-            {entry && !error && allowDownload ? <a className="iconButton" href={urlFor(entry, true)} aria-label={`${t('action.download')} ${entry.name}`} title={`${t('action.download')} ${entry.name}`}><Download aria-hidden="true" size={17} /></a> : null}
+            {entry && !error && allowDownload ? <a className="iconButton" href={urlFor(entry, true, exportOption?.format)} aria-label={downloadLabel} title={downloadLabel}><Download aria-hidden="true" size={17} /></a> : null}
             <button ref={closeButton} className="iconButton" type="button" onClick={onClose} aria-label={t('preview.close')} title={t('preview.close')}><X aria-hidden="true" size={18} /></button>
           </span>
         </header>

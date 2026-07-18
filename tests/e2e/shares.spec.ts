@@ -63,6 +63,25 @@ test('visitor unlocks a folder share, navigates, previews, and cannot download',
   expect(deniedStatus).toBe(403);
 });
 
+test('Workspace export actions use controlled-share URLs and preview PDF', async ({ page }) => {
+  await installApiFixtures(page, { admin: false, workspaceExports: true });
+  await page.goto('/s/e2e-share-token');
+  await page.getByLabel('Password').fill('share-passphrase');
+  await page.getByRole('button', { name: 'Open share' }).click();
+  await page.getByRole('button', { name: 'Open Nested' }).click();
+  const name = 'Project brief';
+  await page.getByRole('button', { name: `Actions for ${name}` }).click();
+  const actions = (page.viewportSize()?.width ?? 0) <= 760
+    ? page.getByRole('dialog', { name: `Actions for ${name}` })
+    : page.getByRole('menu', { name: `Actions for ${name}` });
+  const actionRole = (page.viewportSize()?.width ?? 0) <= 760 ? 'link' : 'menuitem';
+  await expect(actions.getByRole(actionRole, { name: 'Export DOCX' })).toHaveAttribute('href', /\/s\/e2e-share-token\/file\/sealed-workspace-doc\/Project%20brief\?download=1&export=docx/);
+  await page.keyboard.press('Escape');
+
+  await page.getByRole('button', { name: `Open ${name}` }).click();
+  await expect(page.getByRole('dialog', { name: `Preview ${name}` }).getByTitle('PDF preview')).toHaveAttribute('src', /\/s\/e2e-share-token\/file\/sealed-workspace-doc\/Project%20brief\?export=pdf/);
+});
+
 test('@visual share creation, management, and public states', async ({ page }) => {
   await installApiFixtures(page, { admin: true });
   await page.goto('/');

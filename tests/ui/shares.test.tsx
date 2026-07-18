@@ -33,6 +33,25 @@ describe('controlled shares UI', () => {
     expect(actions.find((action) => action.id === 'share')?.labelKey).toBe('action.share');
   });
 
+  it('offers explicit Workspace export formats instead of an invalid generic download', () => {
+    const workspaceEntry: Entry = {
+      ...entry,
+      name: 'Project brief',
+      contentType: 'application/vnd.google-apps.document',
+      exportOptions: [
+        { format: 'pdf', label: 'PDF', extension: 'pdf', contentType: 'application/pdf' },
+        { format: 'docx', label: 'DOCX', extension: 'docx', contentType: 'application/vnd.openxmlformats-officedocument.wordprocessingml.document' },
+      ],
+    };
+    const actions = entryActions(workspaceEntry, { onOpen: vi.fn(), onPreview: vi.fn(), onAction: vi.fn() });
+
+    expect(actions.some((action) => action.id === 'download')).toBe(false);
+    expect(actions.find((action) => action.id === 'export-pdf')).toMatchObject({
+      labelKey: 'action.export', labelValues: { format: 'PDF' }, href: expect.stringContaining('export=pdf'),
+    });
+    expect(actions.find((action) => action.id === 'export-docx')?.href).toContain('export=docx');
+  });
+
   it('creates a protected expiring share and exposes its URL only in the result', async () => {
     const submit = vi.fn(async () => ({ share, url: 'https://ilist.example/s/raw-token-once' }));
     render(<AppProviders><ShareDialog entry={entry} busy={false} error={null} onClose={vi.fn()} onCreate={submit} /></AppProviders>);

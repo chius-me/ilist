@@ -18,7 +18,7 @@ export function FileList({
   handlers: EntryHandlers;
   interactionProps?: HTMLAttributes<HTMLUListElement>;
   focusedId?: string | null;
-  fileUrlFor?: (entry: Entry, download: boolean) => string;
+  fileUrlFor?: (entry: Entry, download: boolean, exportFormat?: string) => string;
 }) {
   const { t } = useI18n();
   return (
