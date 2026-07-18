@@ -43,4 +43,20 @@ describe('preview', () => {
     expect(await screen.findByText('hello text')).toBeVisible();
     await waitFor(() => expect(fetchMock).toHaveBeenCalledWith(expect.any(String), expect.objectContaining({ headers: { Range: 'bytes=0-524287' } })));
   });
+
+  it('previews a Workspace document through its first PDF export', () => {
+    const urlFor = vi.fn((_entry, download: boolean, exportFormat?: string) => `/workspace?download=${download ? '1' : '0'}&export=${exportFormat ?? ''}`);
+    render(<PreviewOverlay entry={{
+      ...base,
+      name: 'Project brief',
+      contentType: 'application/vnd.google-apps.document',
+      exportOptions: [
+        { format: 'pdf', label: 'PDF', extension: 'pdf', contentType: 'application/pdf' },
+        { format: 'docx', label: 'DOCX', extension: 'docx', contentType: 'application/vnd.openxmlformats-officedocument.wordprocessingml.document' },
+      ],
+    }} urlFor={urlFor} onClose={() => undefined} />);
+
+    expect(screen.getByTitle('PDF preview')).toHaveAttribute('src', '/workspace?download=0&export=pdf');
+    expect(screen.getByRole('link', { name: 'Export PDF Project brief' })).toHaveAttribute('href', '/workspace?download=1&export=pdf');
+  });
 });

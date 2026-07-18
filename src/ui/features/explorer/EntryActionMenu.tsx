@@ -11,6 +11,7 @@ export type EntryActionId = 'rename' | 'move' | 'properties' | 'delete' | 'publi
 export type EntryAction = {
   id: string;
   labelKey: MessageKey;
+  labelValues?: Record<string, string | number>;
   onSelect: () => void;
   href?: string;
   destructive?: boolean;
@@ -23,18 +24,33 @@ export function entryActions(entry: Entry, handlers: {
   onAction: (action: EntryActionId, entry: Entry) => void;
   onCopyFailure?: () => void;
   canShare?: boolean;
+  fileUrlFor?: (entry: Entry, download: boolean, exportFormat?: string) => string;
 }): EntryAction[] {
+  const urlFor = handlers.fileUrlFor ?? fileUrl;
   const actions: EntryAction[] = [entry.kind === 'folder'
     ? { id: 'open', labelKey: 'action.open', icon: FolderInput, onSelect: () => handlers.onOpen(entry) }
     : { id: 'preview', labelKey: 'action.preview', icon: Eye, onSelect: () => handlers.onPreview(entry) }];
-  if (entry.capabilities.download) actions.push(
-    { id: 'download', labelKey: 'action.download', icon: Download, href: fileUrl(entry, true), onSelect: () => undefined },
-    { id: 'copy', labelKey: 'action.copyLink', icon: Copy, onSelect: () => {
-      const write = navigator.clipboard?.writeText(new URL(fileUrl(entry), window.location.origin).toString());
+  if (entry.capabilities.download) {
+    const exportOptions = entry.exportOptions ?? [];
+    if (exportOptions.length) {
+      actions.push(...exportOptions.map((option) => ({
+        id: `export-${option.format}`,
+        labelKey: 'action.export' as const,
+        labelValues: { format: option.label },
+        icon: Download,
+        href: urlFor(entry, true, option.format),
+        onSelect: () => undefined,
+      })));
+    } else {
+      actions.push({ id: 'download', labelKey: 'action.download', icon: Download, href: urlFor(entry, true), onSelect: () => undefined });
+    }
+    const copyExport = exportOptions.find((option) => option.format === 'pdf') ?? exportOptions[0];
+    actions.push({ id: 'copy', labelKey: 'action.copyLink', icon: Copy, onSelect: () => {
+      const write = navigator.clipboard?.writeText(new URL(urlFor(entry, false, copyExport?.format), window.location.origin).toString());
       if (!write) handlers.onCopyFailure?.();
       else void write.catch(() => handlers.onCopyFailure?.());
-    } },
-  );
+    } });
+  }
   if (handlers.canShare) actions.push({ id: 'share', labelKey: 'action.share', icon: Share2, onSelect: () => handlers.onAction('share', entry) });
   if (entry.capabilities.rename) actions.push({ id: 'rename', labelKey: 'action.rename', icon: Pencil, onSelect: () => handlers.onAction('rename', entry) });
   if (entry.capabilities.move) actions.push({ id: 'move', labelKey: 'action.move', icon: FolderInput, onSelect: () => handlers.onAction('move', entry) });
@@ -91,7 +107,7 @@ export function EntryActionMenu({ entry, anchor, actions, onClose }: {
   return <div className="actionMenu" ref={menu} role="menu" aria-label={t('entry.actions', { name: entry.name })} style={{ position: 'fixed', left: position.left, top: position.top, right: 'auto' }}>
     {actions.map((action) => {
       const Icon = action.icon;
-      const content = <>{Icon ? <Icon aria-hidden={true} size={16} /> : null}{t(action.labelKey)}</>;
+      const content = <>{Icon ? <Icon aria-hidden={true} size={16} /> : null}{t(action.labelKey, action.labelValues)}</>;
       if (action.href) return <a key={action.id} role="menuitem" href={action.href} onClick={onClose}>{content}</a>;
       return <button key={action.id} className={action.destructive ? 'destructive' : undefined} role="menuitem" type="button" onClick={() => { action.onSelect(); onClose(); }}>{content}</button>;
     })}

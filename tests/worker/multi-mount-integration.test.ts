@@ -9,6 +9,7 @@ import type { Env } from '../../src/worker/types';
 const origin = 'https://ilist.example';
 const originalOneDriveFactory = driverRegistry.onedrive;
 const originalS3Factory = driverRegistry.s3;
+const originalGoogleFactory = driverRegistry.google;
 
 function item(input: Partial<StorageItem> & Pick<StorageItem, 'id' | 'name' | 'kind'>): StorageItem {
   return {
@@ -73,9 +74,36 @@ async function login(): Promise<string> {
 afterEach(() => {
   driverRegistry.onedrive = originalOneDriveFactory;
   driverRegistry.s3 = originalS3Factory;
+  driverRegistry.google = originalGoogleFactory;
 });
 
 describe('multi-mount filesystem integration', () => {
+  it('isolates identical Google provider item IDs across independent mounts', async () => {
+    const db = (env as unknown as Env).DB;
+    await db.prepare("DELETE FROM mounts WHERE id <> 'native-r2'").run();
+    const personal = await createMount(db, {
+      name: 'Google Personal', mountPath: '/google-personal', driverType: 'google', provider: 'google',
+    });
+    const archive = await createMount(db, {
+      name: 'Google Archive', mountPath: '/google-archive', driverType: 'google', provider: 'google',
+    });
+    const drivers = new Map([[personal.id, fakeDriver('google-personal')], [archive.id, fakeDriver('google-archive')]]);
+    driverRegistry.google = (_env, mount) => drivers.get(mount.id)!;
+
+    const personalResponse = await SELF.fetch(`${origin}/api/fs/list?path=/google-personal/Docs`);
+    const archiveResponse = await SELF.fetch(`${origin}/api/fs/list?path=/google-archive/Docs`);
+    expect(personalResponse.status).toBe(200);
+    expect(archiveResponse.status).toBe(200);
+    const personalEntry = (await personalResponse.json() as { data: { items: Array<{ id: string; name: string }> } }).data.items[0];
+    const archiveEntry = (await archiveResponse.json() as { data: { items: Array<{ id: string; name: string }> } }).data.items[0];
+
+    expect(personalEntry.name).toBe('google-personal.txt');
+    expect(archiveEntry.name).toBe('google-archive.txt');
+    expect(personalEntry.id).not.toBe(archiveEntry.id);
+    expect(decodeExternalId(personalEntry.id)).toEqual({ mountId: personal.id, itemId: 'same-provider-id' });
+    expect(decodeExternalId(archiveEntry.id)).toEqual({ mountId: archive.id, itemId: 'same-provider-id' });
+  });
+
   it('advertises resumable uploads only for authenticated external folders with a provider adapter', async () => {
     const db = (env as unknown as Env).DB;
     await db.prepare("DELETE FROM mounts WHERE id <> 'native-r2'").run();

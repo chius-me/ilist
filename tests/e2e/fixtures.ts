@@ -6,6 +6,7 @@ export interface ApiFixtureOptions {
   admin?: boolean;
   directoryState?: DirectoryState;
   completionDelayMs?: number;
+  workspaceExports?: boolean;
 }
 
 export interface UploadFixtureState {
@@ -97,7 +98,18 @@ export const fixtureEntries = [
   },
 ] as const;
 
-const mounts = [
+const workspaceDocument = {
+  id: 'workspace-doc', parentId: 'root', name: 'Project brief', kind: 'file', size: 0,
+  contentType: 'application/vnd.google-apps.document', updatedAt: '2026-07-16T08:00:00.000Z',
+  isPublic: true, effectivePublic: true, sortOrder: 6, description: 'Google Workspace document', mountPath: null,
+  exportOptions: [
+    { format: 'pdf', label: 'PDF', extension: 'pdf', contentType: 'application/pdf' },
+    { format: 'docx', label: 'DOCX', extension: 'docx', contentType: 'application/vnd.openxmlformats-officedocument.wordprocessingml.document' },
+  ],
+  capabilities: mutableCapabilities,
+};
+
+const initialMounts = [
   {
     id: 'r2', name: 'Production archive', mountPath: '/archive', driverType: 's3', provider: 'cloudflare-r2',
     enabled: true, isPublic: true, sortOrder: 0, rootItemId: null, connected: true,
@@ -119,6 +131,8 @@ export async function installApiFixtures(page: Page, options: ApiFixtureOptions 
   const admin = options.admin ?? true;
   const directoryState = options.directoryState ?? 'normal';
   const completionDelayMs = options.completionDelayMs ?? 1500;
+  const workspaceExports = options.workspaceExports ?? false;
+  let mounts: Array<Record<string, unknown>> = initialMounts.map((mount) => ({ ...mount, config: { ...mount.config } }));
   const uploads: UploadFixtureState = {
     createCalls: 0,
     partCalls: [],
@@ -140,6 +154,11 @@ export async function installApiFixtures(page: Page, options: ApiFixtureOptions 
     ...fixtureEntries[2], id: 'sealed-file', parentId: 'sealed-nested', name: 'shared-notes.txt', size: 64,
     isPublic: false, effectivePublic: false,
     capabilities: { ...mutableCapabilities, download: false, rename: false, move: false, delete: false, changeVisibility: false },
+  };
+  const sharedWorkspaceDocument = {
+    ...workspaceDocument,
+    id: 'sealed-workspace-doc', parentId: 'sealed-nested', isPublic: false, effectivePublic: false,
+    capabilities: { ...mutableCapabilities, rename: false, move: false, delete: false, changeVisibility: false },
   };
   let shares: ShareFixture[] = [{
     id: 'existing-share', mountId: 'r2', mountName: 'Production archive', name: 'financial-plan.pdf',
@@ -227,19 +246,22 @@ export async function installApiFixtures(page: Page, options: ApiFixtureOptions 
     }
     if (!shareAuthorized) return json(route, { ok: false, error: { code: 'SHARE_PASSWORD_REQUIRED', message: 'Password required' } }, 401);
     if (url.pathname === '/s/e2e-share-token/api') return json(route, { ok: true, data: {
-      name: 'Shared workspace', targetKind: 'folder', allowDownload: false, protected: true, expiresAt: null, entry: sharedFolder,
+      name: 'Shared workspace', targetKind: 'folder', allowDownload: workspaceExports, protected: true, expiresAt: null, entry: sharedFolder,
     } });
     if (url.pathname === '/s/e2e-share-token/api/list') {
       const nested = url.searchParams.get('parent') === 'sealed-nested';
       return json(route, { ok: true, data: {
         current: nested ? sharedNested : sharedFolder,
         breadcrumbs: [],
-        items: nested ? [sharedFile] : [sharedNested],
+        items: nested ? [sharedFile, ...(workspaceExports ? [sharedWorkspaceDocument] : [])] : [sharedNested],
       } });
     }
     if (url.pathname === '/s/e2e-share-token/file/sealed-file/shared-notes.txt') {
       if (url.searchParams.get('download') === '1') return json(route, { ok: false, error: { code: 'SHARE_DOWNLOAD_DISABLED', message: 'Download disabled' } }, 403);
       return route.fulfill({ status: 200, contentType: 'text/plain', body: 'Shared preview fixture\nPrivate content remains protected.' });
+    }
+    if (url.pathname === '/s/e2e-share-token/file/sealed-workspace-doc/Project%20brief') {
+      return route.fulfill({ status: 200, contentType: url.searchParams.get('export') === 'pdf' ? 'application/pdf' : 'application/octet-stream', body: 'Workspace export fixture' });
     }
     return json(route, { ok: false, error: { code: 'SHARE_NOT_FOUND', message: 'Not found' } }, 404);
   });
@@ -254,7 +276,7 @@ export async function installApiFixtures(page: Page, options: ApiFixtureOptions 
     }
     const url = new URL(route.request().url());
     const path = url.searchParams.get('path') ?? '/';
-    const items = directoryState === 'empty' ? [] : path === '/' ? fixtureEntries : [];
+    const items = directoryState === 'empty' ? [] : path === '/' ? [...fixtureEntries, ...(workspaceExports ? [workspaceDocument] : [])] : [];
     return json(route, {
       ok: true,
       data: {
@@ -269,12 +291,32 @@ export async function installApiFixtures(page: Page, options: ApiFixtureOptions 
 
   await page.route('**/api/fs/entries/*', (route) => {
     const id = decodeURIComponent(new URL(route.request().url()).pathname.split('/').pop() ?? '');
-    const entry = fixtureEntries.find((item) => item.id === id);
+    const entry = [...fixtureEntries, ...(workspaceExports ? [workspaceDocument] : [])].find((item) => item.id === id);
     return entry ? json(route, { ok: true, data: entry }) : json(route, { ok: false, error: { code: 'ENTRY_NOT_FOUND', message: 'Entry not found' } }, 404);
   });
 
-  await page.route('**/api/admin/mounts', (route) => json(route, { ok: true, data: mounts }));
+  await page.route('**/api/admin/mounts', (route) => {
+    if (route.request().method() === 'GET') return json(route, { ok: true, data: mounts });
+    if (route.request().method() === 'POST') {
+      const input = route.request().postDataJSON() as Record<string, unknown>;
+      const created = {
+        ...input,
+        id: 'google-e2e',
+        connected: false,
+        createdAt: '2026-07-18T00:00:00.000Z',
+        updatedAt: '2026-07-18T00:00:00.000Z',
+      };
+      mounts = [...mounts, created];
+      return json(route, { ok: true, data: created });
+    }
+    return json(route, { ok: false, error: { code: 'METHOD_NOT_ALLOWED', message: 'Method not allowed' } }, 405);
+  });
   await page.route('**/api/admin/mounts/**', (route) => json(route, { ok: true, data: mounts[0] }));
+  await page.route('**/api/admin/oauth/google/start**', (route) => route.fulfill({
+    status: 200,
+    contentType: 'text/html',
+    body: '<!doctype html><title>Google OAuth</title>',
+  }));
   await page.route('**/api/admin/entries/**', (route) => json(route, { ok: true, data: { succeeded: ['report'], failed: [] } }));
   await page.route('**/api/admin/uploads/sessions**', async (route) => {
     const request = route.request();

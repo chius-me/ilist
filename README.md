@@ -6,7 +6,7 @@
 
 Self-hosted file index and manager for Cloudflare Workers.
 
-[![Release](https://img.shields.io/badge/release-v0.1.5-2ea44f?logo=github)](https://github.com/chius-me/ilist/releases/tag/v0.1.5)
+[![Release](https://img.shields.io/badge/release-v0.1.6-2ea44f?logo=github)](https://github.com/chius-me/ilist/releases/tag/v0.1.6)
 [![License](https://img.shields.io/badge/license-GPL--3.0--only-blue)](https://github.com/chius-me/ilist/blob/main/LICENSE)
 ![Cloudflare Workers](https://img.shields.io/badge/Cloudflare-Workers-f38020?logo=cloudflare&logoColor=white)
 ![TypeScript](https://img.shields.io/badge/TypeScript-5.8-3178c6?logo=typescript&logoColor=white)
@@ -14,13 +14,14 @@ Self-hosted file index and manager for Cloudflare Workers.
 
 </div>
 
-> [v0.1.5](https://github.com/chius-me/ilist/releases/tag/v0.1.5) adds revocable file and folder shares. Review [Limitations](#limitations) and back up D1 before upgrading.
+> [v0.1.6](https://github.com/chius-me/ilist/releases/tag/v0.1.6) adds independently authorized Google My Drive mounts, Workspace exports, and resumable uploads. Review [Limitations](#limitations) and back up D1 before upgrading.
 
 ## Features
 
 - Virtual root with multiple independently named storage mounts
 - OneDrive Personal OAuth authorization with PKCE and encrypted refresh tokens
 - Multiple OneDrive accounts, each mounted at a custom top-level path
+- Multiple Google My Drive accounts or roots, each independently authorized and mounted at a custom top-level path
 - S3-compatible mounts with AWS Signature Version 4
 - Cloudflare R2 through either S3 credentials or the built-in Worker binding
 - Public directory browsing, stable file links, downloads, and common file previews
@@ -38,6 +39,7 @@ Self-hosted file index and manager for Cloudflare Workers.
 | Storage | Browse | Download | Upload | Manage | Notes |
 | --- | ---: | ---: | ---: | ---: | --- |
 | OneDrive Personal | ✓ | ✓ | ✓ | ✓ | Resumable upload; personal Microsoft accounts only |
+| Google My Drive | ✓ | ✓ | ✓ | ✓ | Range downloads, resumable upload, and Docs/Sheets/Slides export |
 | Cloudflare R2 binding | ✓ | ✓ | ✓ | ✓ | Built-in compatibility mount; single-request upload only |
 | Cloudflare R2 through S3 | ✓ | ✓ | ✓ | ✓ | Multipart upload with the R2 S3 endpoint and scoped credentials |
 | Other S3-compatible storage | ✓ | ✓ | ✓ | ✓ | Multipart compatibility depends on the provider's S3 implementation |
@@ -55,6 +57,7 @@ Browser
         +-- Native request router and session authentication
         +-- Virtual filesystem and storage driver registry
         +-- OneDrive Personal driver -> Microsoft Graph
+        +-- Google Drive driver -> Google Drive API v3
         +-- S3 driver -> R2 or another S3-compatible provider
         +-- D1 -> mounts, encrypted credentials, entries, sessions, shares
         +-- R2 binding -> built-in compatibility storage
@@ -64,7 +67,7 @@ The Worker acts as the control plane and streams or redirects file data where po
 
 ## Quick Start
 
-1. **Prerequisites.** Install Node.js 22.12 or newer and npm 10 or newer. Have a Cloudflare account with Workers, D1, and R2 enabled, Wrangler authenticated with `npx wrangler login`, and a Microsoft Entra application if you will use OneDrive Personal.
+1. **Prerequisites.** Install Node.js 22.12 or newer and npm 10 or newer. Have a Cloudflare account with Workers, D1, and R2 enabled, Wrangler authenticated with `npx wrangler login`, a Microsoft Entra application for OneDrive Personal, and a Google Cloud OAuth application for Google Drive.
 2. **Clone and install.**
 
    ```bash
@@ -94,7 +97,7 @@ The Worker acts as the control plane and streams or redirects file data where po
    openssl rand -hex 32                                 # SESSION_SECRET
    ```
 
-6. **Store all six required Worker secrets.** Use the generated values and the Microsoft application values with `npx wrangler secret put`:
+6. **Store all eight required Worker secrets.** Use the generated values and the provider application values with `npx wrangler secret put`:
 
    ```bash
    npx wrangler secret put ADMIN_PASSWORD_HASH
@@ -102,6 +105,8 @@ The Worker acts as the control plane and streams or redirects file data where po
    npx wrangler secret put SESSION_SECRET
    npx wrangler secret put MICROSOFT_CLIENT_ID
    npx wrangler secret put MICROSOFT_CLIENT_SECRET
+   npx wrangler secret put GOOGLE_CLIENT_ID
+   npx wrangler secret put GOOGLE_CLIENT_SECRET
    npx wrangler secret put PUBLIC_ORIGIN
    ```
 
@@ -122,6 +127,8 @@ Open `/admin/storages` after signing in. Each mount has its own display name, to
 
 For OneDrive Personal, follow [docs/onedrive-setup.md](docs/onedrive-setup.md). Use a Microsoft Entra application configured for personal Microsoft accounts only, with the Web redirect URI `https://YOUR_ILIST_ORIGIN/api/admin/oauth/onedrive/callback` and delegated Graph permissions `User.Read` and `Files.ReadWrite`.
 
+For Google Drive, follow [docs/google-drive-setup.md](docs/google-drive-setup.md). Enable Google Drive API, create a Web OAuth client with redirect URI `https://YOUR_ILIST_ORIGIN/api/admin/oauth/google/callback`, and configure `GOOGLE_CLIENT_ID` and `GOOGLE_CLIENT_SECRET`. ilist requests `https://www.googleapis.com/auth/drive`; keep a development consent screen in testing with explicit test users, or complete Google's production verification requirements before serving other users.
+
 For Cloudflare R2 through S3, use:
 
 ```text
@@ -138,18 +145,20 @@ Use a bucket-scoped R2 API token with only the permissions ilist requires.
 ## Upload Behavior
 
 - Files smaller than `10 MiB` use the existing single-request upload path.
-- Files of exactly `10 MiB` or larger use resumable upload when the current OneDrive or S3 mount advertises multipart support.
+- Files of exactly `10 MiB` or larger use resumable upload when the current OneDrive, Google Drive, or S3 mount advertises multipart support.
 - Parts are uploaded sequentially in `10 MiB` chunks. The queue runs at most two files concurrently.
 - Pause, resume, and retry preserve the opaque ilist upload session and server-confirmed parts while the page remains open. Reloading or leaving the page discards the in-memory queue; unfinished server sessions are later cleaned up, but automatic recovery after reload is not implemented.
-- Provider upload URLs, OneDrive session proofs, and S3 upload IDs remain encrypted or server-side and are never returned to the browser.
+- Provider upload URLs, OneDrive session proofs, Google resumable session URLs, and S3 upload IDs remain encrypted or server-side and are never returned to the browser.
 - The built-in `R2` Worker binding remains compatible with existing deployments but does not implement resumable upload; use an S3-configured R2 mount for multipart uploads.
 - Configure an incomplete multipart upload lifecycle rule on S3-compatible buckets so abandoned provider uploads are removed if Worker cleanup cannot reach them.
 
-OneDrive resumable upload uses the same delegated `Files.ReadWrite` permission documented above. Apply all D1 migrations, including `0012_upload_sessions.sql`, `0013_upload_terminal_leases.sql`, and `0014_shares.sql`, before deploying v0.1.5.
+OneDrive resumable upload uses the same delegated `Files.ReadWrite` permission documented above. Google Drive uses the full Drive OAuth scope documented above. Apply all D1 migrations, including `0012_upload_sessions.sql`, `0013_upload_terminal_leases.sql`, and `0014_shares.sql`, before deploying v0.1.6.
 
 ## Controlled Shares
 
 Administrators can create a share from any file or folder action menu and manage existing shares at `/admin/shares`. A share may require a password, expire at a chosen time, block explicit downloads, or be disabled and re-enabled. Folder shares support nested browsing, list and grid views, and the same safe preview types as the main explorer.
+
+Google Docs, Sheets, and Slides expose explicit export formats in both the main explorer and controlled shares. PDF is used for preview when available; downloads remain subject to the share's current download policy.
 
 The raw `/s/:token` URL is returned only once when the share is created. D1 stores only its SHA-256 hash, so the management page cannot recover or copy an existing link. Public item IDs are share-scoped encrypted handles rather than mount or provider IDs. Password authorization uses a short-lived, `HttpOnly`, `SameSite=Lax` cookie scoped to that share path.
 
@@ -202,7 +211,8 @@ Fill in test-only values before starting Wrangler. It normally serves the applic
 
 - Single administrator; no registration or multi-user permission model
 - OneDrive Personal only; work and school tenants are not yet supported
-- No Google Drive, WebDAV, FTP, SFTP, SMB, or local filesystem drivers
+- Google support is limited to My Drive. Shared Drives, Shared with me, and shortcut traversal are not implemented.
+- No WebDAV, FTP, SFTP, SMB, or local filesystem drivers
 - Resumable recovery is page-session-only; reloading the page does not restore the upload queue
 - Built-in R2 binding uploads remain single-request and subject to Cloudflare request-body limits
 - No cross-mount copy or move
@@ -235,6 +245,7 @@ src/
     file-system.ts            Virtual filesystem operations
     drivers/
       onedrive/               Microsoft Graph driver and OAuth tokens
+      google/                 Google Drive API driver and OAuth tokens
       s3/                     S3-compatible driver and SigV4 client
 migrations/                   D1 schema migrations
 tests/worker/                 Worker runtime tests
@@ -245,6 +256,7 @@ docs/                         Setup and implementation documentation
 ## Roadmap
 
 - Work and school Microsoft accounts
+- Google Shared Drives and shortcuts
 - Cross-mount copy and move
 - Additional storage drivers and background operations
 

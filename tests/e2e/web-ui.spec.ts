@@ -238,6 +238,39 @@ test('@visual upload, storage, and appearance surfaces', async ({ page }) => {
   await expect(page).toHaveScreenshot('appearance-preferences.png', { fullPage: true });
 });
 
+test('creates a Google Drive mount and enters its OAuth flow', async ({ page }) => {
+  await installApiFixtures(page, { admin: true });
+  await page.goto('/');
+  await page.getByRole('button', { name: 'Storage settings' }).click();
+  await page.getByRole('button', { name: 'Add storage' }).click();
+  await page.getByLabel('Storage type').selectOption('google');
+  await page.getByLabel('Display name').fill('Google projects');
+  await page.getByLabel('Mount path').fill('/google-projects');
+  await page.getByLabel('Root folder ID').fill('folder-root-id');
+  await page.getByRole('button', { name: 'Create and connect' }).click();
+
+  await expect(page).toHaveURL(/\/api\/admin\/oauth\/google\/start\?mountId=google-e2e$/);
+});
+
+test('Workspace export actions and PDF preview work on every viewport', async ({ page }) => {
+  await installApiFixtures(page, { admin: true, workspaceExports: true });
+  await page.goto('/');
+  const name = 'Project brief';
+  await page.getByRole('button', { name: `Actions for ${name}` }).click();
+  const actions = (page.viewportSize()?.width ?? 0) <= 760
+    ? page.getByRole('dialog', { name: `Actions for ${name}` })
+    : page.getByRole('menu', { name: `Actions for ${name}` });
+  const actionRole = (page.viewportSize()?.width ?? 0) <= 760 ? 'link' : 'menuitem';
+  await expect(actions.getByRole(actionRole, { name: 'Export PDF' })).toHaveAttribute('href', /download=1.*export=pdf/);
+  await expect(actions.getByRole(actionRole, { name: 'Export DOCX' })).toHaveAttribute('href', /download=1.*export=docx/);
+  await page.keyboard.press('Escape');
+
+  await page.getByRole('button', { name: `Open ${name}` }).click();
+  const preview = page.getByRole('dialog', { name: `Preview ${name}` });
+  await expect(preview.getByTitle('PDF preview')).toHaveAttribute('src', /export=pdf/);
+  await expect(preview.getByRole('link', { name: `Export PDF ${name}` })).toHaveAttribute('href', /download=1.*export=pdf/);
+});
+
 test('resumable upload pauses, retries only the failed part, completes, and cancels', async ({ page }) => {
   const uploads = await installApiFixtures(page, { admin: true });
   await page.goto('/');

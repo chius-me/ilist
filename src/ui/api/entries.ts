@@ -30,9 +30,13 @@ export function setVisibility(ids: string[], isPublic: boolean): Promise<BatchRe
   return jsonRequest('/api/admin/entries/visibility', { method: 'POST', body: JSON.stringify({ ids, isPublic }) });
 }
 
-export function fileUrl(entry: Pick<Entry, 'id' | 'name'>, download = false): string {
+export function fileUrl(entry: Pick<Entry, 'id' | 'name'>, download = false, exportFormat?: string): string {
   const url = `/file/${encodeURIComponent(entry.id)}/${encodeURIComponent(entry.name)}`;
-  return download ? `${url}?download=1` : url;
+  const query = new URLSearchParams();
+  if (download) query.set('download', '1');
+  if (exportFormat) query.set('export', exportFormat);
+  const suffix = query.toString();
+  return suffix ? `${url}?${suffix}` : url;
 }
 
 export function childPath(parentPath: string, name: string): string {

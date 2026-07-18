@@ -16,6 +16,7 @@ import type { Env, Mount } from '../../src/worker/types';
 
 const origin = 'https://ilist.example';
 const originalOneDriveFactory = driverRegistry.onedrive;
+const originalGoogleFactory = driverRegistry.google;
 
 const workerEnv = () => env as unknown as Env;
 
@@ -150,6 +151,33 @@ describe('admin upload session routes', () => {
 
   afterEach(() => {
     driverRegistry.onedrive = originalOneDriveFactory;
+    driverRegistry.google = originalGoogleFactory;
+  });
+
+  it('creates Google upload sessions without exposing provider state in HTTP responses', async () => {
+    const mounted = await createMount(workerEnv().DB, {
+      name: 'Google Route Uploads',
+      mountPath: '/google-route-uploads',
+      driverType: 'google',
+      provider: 'google',
+    });
+    const driver = fakeDriver({
+      create: vi.fn(async () => ({
+        state: {
+          sessionUrl: 'https://www.googleapis.com/upload/drive/v3/files?upload_id=private-token',
+          nextOffset: 0,
+        },
+        expiresAt: Date.now() + 60 * 60_000,
+      })),
+    });
+    driverRegistry.google = () => driver;
+    const cookie = await login();
+
+    const response = await createSession(cookie, mounted);
+    expect(response.status).toBe(200);
+    const payload = await response.json();
+    expect(forbiddenResponseKeys(payload)).toEqual([]);
+    expect(JSON.stringify(payload)).not.toMatch(/private-token|googleapis\.com/);
   });
 
   it('requires authentication once and same-origin protection for session creation', async () => {

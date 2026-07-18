@@ -76,6 +76,7 @@ async function sharedEntry(env: Env, share: Share, item: StorageItem, root = fal
     sortOrder: 0,
     description: '',
     mountPath: null,
+    exportOptions: item.exportOptions?.map((option) => ({ ...option })),
     capabilities: sharedCapabilities(item, share.allowDownload),
   };
 }
