@@ -9,6 +9,7 @@ import {
   UploadPausedError,
   type ResumableUploadControl,
 } from '../../src/ui/api/uploads';
+import { ApiError } from '../../src/ui/api/client';
 import { uploadReducer } from '../../src/ui/features/uploads/upload-reducer';
 import { useUploadQueue } from '../../src/ui/features/uploads/useUploadQueue';
 
@@ -73,7 +74,7 @@ class MockXMLHttpRequest {
       return;
     }
     this.status = plan.status;
-    this.responseText = JSON.stringify({ ok: false, error: { message: 'Part upload failed' } });
+    this.responseText = JSON.stringify({ ok: false, error: plan.response ?? { message: 'Part upload failed' } });
     this.onload?.call(this as unknown as XMLHttpRequest, new ProgressEvent('load'));
   }
 
@@ -134,6 +135,25 @@ describe('upload transport', () => {
       url: '/api/admin/files/upload-123?parentId=folder%2Fwith+space&name=small.bin',
       body: file,
     });
+  });
+
+  it('rejects a pre-aborted upload without sending or hanging', async () => {
+    const controller = new AbortController();
+    controller.abort();
+    const file = new File(['cancelled'], 'cancelled.txt', { type: 'text/plain' });
+
+    await expect(uploadFile({ ...multipartInput(file), signal: controller.signal })).rejects.toMatchObject({ name: 'AbortError' });
+    expect(MockXMLHttpRequest.requests).toHaveLength(0);
+  });
+
+  it('preserves stable API error codes from failed part responses', async () => {
+    const file = new File([new Uint8Array(PART_SIZE)], 'limited.bin', { type: 'application/octet-stream' });
+    vi.stubGlobal('fetch', vi.fn().mockResolvedValueOnce(apiResponse(sessionView(file.size))));
+    MockXMLHttpRequest.plans = [{ type: 'failure', status: 429, response: { code: 'UPLOAD_PROVIDER_RATE_LIMITED', message: 'Retry later' } }];
+
+    const upload = uploadFile(multipartInput(file));
+    await expect(upload).rejects.toBeInstanceOf(ApiError);
+    await expect(upload).rejects.toMatchObject({ status: 429, code: 'UPLOAD_PROVIDER_RATE_LIMITED' });
   });
 
   it('creates a safe multipart session for an exact 10 MiB file when the folder supports it', async () => {

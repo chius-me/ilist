@@ -1,4 +1,4 @@
-import { jsonRequest, unwrap } from './client';
+import { ApiError, jsonRequest, unwrap } from './client';
 
 export const LARGE_UPLOAD_THRESHOLD_BYTES = 10 * 1024 * 1024;
 
@@ -111,7 +111,10 @@ function parseUploadSession(value: unknown): UploadSessionView {
 
 function xhrError(xhr: XMLHttpRequest): Error {
   try {
-    const payload = JSON.parse(xhr.responseText) as { error?: { message?: unknown } };
+    const payload = JSON.parse(xhr.responseText) as { error?: { code?: unknown; message?: unknown; details?: unknown } };
+    if (typeof payload.error?.code === 'string' && typeof payload.error.message === 'string') {
+      return new ApiError(xhr.status, payload.error.code, payload.error.message, payload.error.details);
+    }
     if (typeof payload.error?.message === 'string') return new Error(payload.error.message);
   } catch {
     // Use the status message when a failed upload response is not JSON.
@@ -174,7 +177,7 @@ function sendXhr(input: {
     });
     input.signal.addEventListener('abort', onSignalAbort, { once: true });
     if (input.signal.aborted) {
-      onSignalAbort();
+      settle(() => reject(abortError()));
       return;
     }
     try {
