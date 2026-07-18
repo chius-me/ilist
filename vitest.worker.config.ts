@@ -15,6 +15,8 @@ export default defineConfig({
           SESSION_TTL_SECONDS: '3600',
           MICROSOFT_CLIENT_ID: 'test-client-id',
           MICROSOFT_CLIENT_SECRET: 'test-client-secret',
+          GOOGLE_CLIENT_ID: 'test-google-client-id',
+          GOOGLE_CLIENT_SECRET: 'test-google-client-secret',
           PUBLIC_ORIGIN: 'https://ilist.example',
         },
       },
