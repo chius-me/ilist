@@ -41,7 +41,7 @@ function isRecord(value: unknown): value is Record<string, unknown> {
 }
 
 export class OneDriveDriver implements StorageDriver {
-  readonly capabilities = new Set(['list', 'download', 'upload', 'multipartUpload', 'createFolder', 'rename', 'move', 'delete'] as const);
+  readonly capabilities = new Set(['list', 'download', 'upload', 'multipartUpload', 'createFolder', 'rename', 'move', 'copy', 'delete'] as const);
   readonly rootId: string;
   readonly resumableUpload: ResumableUploadAdapter = {
     create: async (input) => {
@@ -150,6 +150,30 @@ export class OneDriveDriver implements StorageDriver {
     await this.assertInScope(itemId);
     await this.assertInScope(destinationId);
     return mapGraphItem(await this.client.update(itemId, { parentReference: { id: destinationId } }), destinationId);
+  }
+
+  async copy(itemId: string, destinationParentId: string): Promise<StorageItem> {
+    if (itemId === this.rootId) throw new HttpError(400, 'INVALID_STORAGE_OPERATION', 'Mount root cannot be copied');
+    await this.assertInScope(itemId);
+    await this.assertInScope(destinationParentId);
+    const source = await this.client.stat(itemId);
+    if (graphItemKind(source) === 'folder') {
+      throw new HttpError(405, 'OPERATION_UNSUPPORTED', 'OneDrive folder copy is not supported');
+    }
+    const downloadUrl = await this.client.getDownloadUrl(itemId);
+    const response = await fetch(downloadUrl);
+    if (!response.ok || !response.body) {
+      throw new HttpError(502, 'ONEDRIVE_UPSTREAM_FAILED', 'OneDrive request failed');
+    }
+    return mapGraphItem(
+      await this.client.upload(
+        destinationParentId,
+        source.name,
+        response.body,
+        source.file?.mimeType ?? null,
+      ),
+      destinationParentId,
+    );
   }
 
   async remove(itemId: string): Promise<void> {

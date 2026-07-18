@@ -3,6 +3,7 @@ import {
   LARGE_UPLOAD_THRESHOLD_BYTES,
   UploadPausedError,
   abortUploadSession,
+  listUploadSessions,
   uploadFile,
   type ResumableUploadControl,
   type UploadTransport,
@@ -14,6 +15,18 @@ import { uploadReducer, type UploadTask } from './upload-reducer';
 const RESERVED_ROOT_NAMES = new Set(['api', 'file', 'admin']);
 const CONTROL_CHARACTERS = /[\u0000-\u001f\u007f]/;
 const MAX_CONCURRENT_UPLOADS = 2;
+const SESSION_STORAGE_KEY = 'ilist.upload.sessions.v1';
+
+interface PersistedUploadSession {
+  sessionId: string;
+  parentId: string;
+  name: string;
+  size: number;
+  uploadedBytes: number;
+  uploadedParts: number[];
+  partCount: number;
+  lastModified?: number;
+}
 
 interface UploadQueueOptions {
   transport?: UploadTransport;
@@ -46,10 +59,49 @@ function resumableControl(task: UploadTask, dispatch: Dispatch<import('./upload-
       uploadedBytes: session.uploadedParts.reduce((total, part) => total + part.size, 0),
     }),
     onPartConfirmed: (part) => dispatch({
-      type: 'partConfirmed', id: task.id, partNumber: part.partNumber, uploadedBytes: Math.min(task.file.size, part.partNumber * LARGE_UPLOAD_THRESHOLD_BYTES),
+      type: 'partConfirmed', id: task.id, partNumber: part.partNumber, uploadedBytes: Math.min(task.file.size || Number.MAX_SAFE_INTEGER, part.partNumber * LARGE_UPLOAD_THRESHOLD_BYTES),
     }),
     onCompleting: () => dispatch({ type: 'completing', id: task.id }),
   };
+}
+
+function readPersistedSessions(): PersistedUploadSession[] {
+  try {
+    const raw = localStorage.getItem(SESSION_STORAGE_KEY);
+    if (!raw) return [];
+    const parsed = JSON.parse(raw) as unknown;
+    if (!Array.isArray(parsed)) return [];
+    return parsed.filter((item): item is PersistedUploadSession => (
+      typeof item === 'object'
+      && item !== null
+      && typeof (item as PersistedUploadSession).sessionId === 'string'
+      && typeof (item as PersistedUploadSession).parentId === 'string'
+      && typeof (item as PersistedUploadSession).name === 'string'
+      && typeof (item as PersistedUploadSession).size === 'number'
+    ));
+  } catch {
+    return [];
+  }
+}
+
+function writePersistedSessions(sessions: PersistedUploadSession[]): void {
+  try {
+    localStorage.setItem(SESSION_STORAGE_KEY, JSON.stringify(sessions));
+  } catch {
+    // Storage may be unavailable; resume still works from the server list alone.
+  }
+}
+
+/**
+ * Placeholder File for restored sessions. Body is empty (cannot re-read disk),
+ * but `size` is set to the server session size so rebind validation works.
+ */
+export function placeholderFile(name: string, size: number): File {
+  const file = new File([new Uint8Array(0)], name, { type: 'application/octet-stream' });
+  if (Number.isSafeInteger(size) && size >= 0) {
+    Object.defineProperty(file, 'size', { value: size, configurable: true });
+  }
+  return file;
 }
 
 export function useUploadQueue({ transport = uploadFile, onCompleted, canUpload = true, multipartUpload = false, existingNames = [] }: UploadQueueOptions) {
@@ -60,6 +112,7 @@ export function useUploadQueue({ transport = uploadFile, onCompleted, canUpload 
   const pendingResumes = useRef(new Set<string>());
   const transportRef = useRef(transport);
   const completedRef = useRef(onCompleted);
+  const restoredRef = useRef(false);
   transportRef.current = transport;
   completedRef.current = onCompleted;
 
@@ -67,6 +120,60 @@ export function useUploadQueue({ transport = uploadFile, onCompleted, canUpload 
     controllers.current.forEach((controller) => controller.abort());
     controllers.current.clear();
   }, []);
+
+  useEffect(() => {
+    if (restoredRef.current) return;
+    restoredRef.current = true;
+    void listUploadSessions().then((sessions) => {
+      const persisted = new Map(readPersistedSessions().map((item) => [item.sessionId, item]));
+      const restored: UploadTask[] = sessions
+        .filter((session) => session.status === 'active' || session.status === 'completing')
+        .map((session) => {
+          const local = persisted.get(session.id);
+          const name = session.name ?? local?.name ?? 'upload.bin';
+          const size = session.size;
+          // Prefer the explorer-encoded parent from local persistence; server now also returns encoded IDs.
+          const parentId = local?.parentId || session.parentItemId || '';
+          const uploadedBytes = session.uploadedBytes ?? local?.uploadedBytes ?? 0;
+          const partCount = Math.ceil(size / session.partSize);
+          return {
+            id: crypto.randomUUID(),
+            parentId,
+            file: placeholderFile(name, size),
+            transport: 'multipart' as const,
+            status: 'failed' as const,
+            uploadedBytes,
+            progress: size ? Math.round((uploadedBytes / size) * 100) : 0,
+            sessionId: session.id,
+            partCount,
+            uploadedParts: session.uploadedParts.map((part) => part.partNumber),
+            needsRebind: true,
+            fileName: name,
+            expectedSize: size,
+            // Only trust lastModified when we persisted it from the original File selection.
+            ...(typeof local?.lastModified === 'number' ? { expectedLastModified: local.lastModified } : {}),
+            error: t('upload.rebindRequired'),
+          };
+        });
+      if (restored.length) dispatch({ type: 'enqueue', tasks: restored });
+    }).catch(() => undefined);
+  }, [t]);
+
+  useEffect(() => {
+    const next = tasks
+      .filter((task) => task.transport === 'multipart' && task.sessionId && !['completed', 'cancelled', 'aborted'].includes(task.status))
+      .map((task): PersistedUploadSession => ({
+        sessionId: task.sessionId!,
+        parentId: task.parentId,
+        name: task.fileName ?? task.file.name,
+        size: task.expectedSize ?? task.file.size ?? 0,
+        uploadedBytes: task.uploadedBytes,
+        uploadedParts: task.uploadedParts ?? [],
+        partCount: task.partCount ?? 0,
+        ...(task.expectedLastModified !== undefined ? { lastModified: task.expectedLastModified } : {}),
+      }));
+    writePersistedSessions(next);
+  }, [tasks]);
 
   useEffect(() => {
     const needsWarning = tasks.some((task) => task.transport === 'multipart' && (
@@ -87,13 +194,15 @@ export function useUploadQueue({ transport = uploadFile, onCompleted, canUpload 
     const running = tasks.filter((task) => ['creating', 'uploading', 'completing'].includes(task.status)).length;
     const available = Math.max(0, MAX_CONCURRENT_UPLOADS - running);
     if (!available) return;
-    tasks.filter((task) => task.status === 'queued').slice(0, available).forEach((task) => {
+    tasks.filter((task) => task.status === 'queued' && !task.needsRebind).slice(0, available).forEach((task) => {
       if (controllers.current.has(task.id)) return;
       const controller = new AbortController();
       const multipart = task.transport === 'multipart';
       const control = controls.current.get(task.id) ?? resumableControl(task, dispatch);
       control.paused = false;
-      if (task.sessionId) control.sessionId = task.sessionId;
+      // Restart sessions intentionally drop control.sessionId so parts are not mixed.
+      if (task.restartSession) control.sessionId = undefined;
+      else if (task.sessionId) control.sessionId = task.sessionId;
       controls.current.set(task.id, control);
       controllers.current.set(task.id, controller);
       dispatch({ type: 'started', id: task.id, multipart });
@@ -139,8 +248,17 @@ export function useUploadQueue({ transport = uploadFile, onCompleted, canUpload 
       if (!error) occupiedNames.add(file.name);
       const transportKind = multipartUpload && file.size >= LARGE_UPLOAD_THRESHOLD_BYTES ? 'multipart' : 'single';
       return {
-        id: crypto.randomUUID(), parentId, file, transport: transportKind,
-        status: error ? 'failed' : 'queued', uploadedBytes: 0, progress: 0, ...(error ? { error } : {}),
+        id: crypto.randomUUID(),
+        parentId,
+        file,
+        transport: transportKind,
+        status: error ? 'failed' : 'queued',
+        uploadedBytes: 0,
+        progress: 0,
+        fileName: file.name,
+        expectedSize: file.size,
+        expectedLastModified: file.lastModified,
+        ...(error ? { error } : {}),
       };
     });
     if (additions.length) dispatch({ type: 'enqueue', tasks: additions });
@@ -170,12 +288,22 @@ export function useUploadQueue({ transport = uploadFile, onCompleted, canUpload 
     pendingResumes.current.delete(id);
     const controller = controllers.current.get(id);
     if (controller) controller.abort();
-    if (task?.sessionId && (!controller || task.status === 'paused')) void abortUploadSession(task.sessionId).catch(() => undefined);
+    if (task?.sessionId && (!controller || task.status === 'paused' || task.needsRebind || task.status === 'failed')) {
+      void abortUploadSession(task.sessionId).catch(() => undefined);
+    }
     dispatch({ type: 'cancelled', id });
     controls.current.delete(id);
   }, [tasks]);
 
   const retry = useCallback((id: string) => dispatch({ type: 'retry', id }), []);
+  const rebind = useCallback((id: string, file: File) => {
+    const task = tasks.find((candidate) => candidate.id === id);
+    // When identity cannot be proven, abort the old server session before starting clean.
+    if (task?.sessionId && task.expectedLastModified === undefined) {
+      void abortUploadSession(task.sessionId).catch(() => undefined);
+    }
+    dispatch({ type: 'rebind', id, file });
+  }, [tasks]);
   const remove = useCallback((id: string) => {
     controls.current.delete(id);
     pendingResumes.current.delete(id);
@@ -183,5 +311,5 @@ export function useUploadQueue({ transport = uploadFile, onCompleted, canUpload 
   }, []);
   const clearCompleted = useCallback(() => dispatch({ type: 'clearCompleted' }), []);
 
-  return { tasks, enqueue, pause, resume, cancel, retry, remove, clearCompleted };
+  return { tasks, enqueue, pause, resume, cancel, retry, rebind, remove, clearCompleted };
 }

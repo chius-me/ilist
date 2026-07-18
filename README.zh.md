@@ -6,7 +6,7 @@
 
 面向 Cloudflare Workers 的自托管文件索引与管理器。
 
-[![Release](https://img.shields.io/badge/release-v0.1.7-2ea44f?logo=github)](https://github.com/chius-me/ilist/releases/tag/v0.1.7)
+[![Release](https://img.shields.io/badge/release-v0.1.9-2ea44f?logo=github)](https://github.com/chius-me/ilist/blob/main/docs/releases/v0.1.9.md)
 [![License](https://img.shields.io/badge/license-GPL--3.0--only-blue)](https://github.com/chius-me/ilist/blob/main/LICENSE)
 ![Cloudflare Workers](https://img.shields.io/badge/Cloudflare-Workers-f38020?logo=cloudflare&logoColor=white)
 ![TypeScript](https://img.shields.io/badge/TypeScript-5.8-3178c6?logo=typescript&logoColor=white)
@@ -14,7 +14,7 @@
 
 </div>
 
-> [v0.1.7](https://github.com/chius-me/ilist/releases/tag/v0.1.7) 强化同源文件交付、分享根目录校验、密码认证和挂载公开默认值。升级前请阅读[发布指南](docs/releases/v0.1.7.md)。
+> [v0.1.9](docs/releases/v0.1.9.md) 增加刷新后续传上传、分享下载次数限制与链接轮换、服务端目录搜索、同挂载复制以及沙箱 PDF 预览。升级前请阅读[发布指南](docs/releases/v0.1.9.md)。v0.1.8 安全加固仍然必需，见 [v0.1.8](docs/releases/v0.1.8.md)。
 
 ## 功能
 
@@ -156,12 +156,12 @@ Secret access key: R2 API token secret access key
 - 小于 `10 MiB` 的文件继续使用原有的单请求上传路径。
 - 等于或大于 `10 MiB` 的文件，在当前 OneDrive、Google Drive 或 S3 挂载声明支持 multipart 时使用可续传上传。
 - 分片按顺序以 `10 MiB` 大小上传，队列最多同时处理两个文件。
-- 页面保持打开时，暂停、继续和重试会保留不透明的 ilist 会话 ID 以及服务端已确认分片。刷新或离开页面会丢失内存中的队列；服务端之后会清理未完成会话，但暂不支持刷新后的自动恢复。
+- 页面保持打开时，暂停、继续和重试会保留不透明的 ilist 会话 ID 以及服务端已确认分片。完整刷新后，未完成的 multipart 会话会重新出现在上传队列中，并要求重新选择本地原文件后才能继续分片（浏览器无法静默读取磁盘文件）。
 - 提供商上传 URL、OneDrive 会话证明、Google 可续传会话 URL 和 S3 Upload ID 只保存在加密状态或服务端，绝不会返回浏览器。
 - 内置 `R2` Worker 绑定继续兼容已有部署，但不支持可续传上传；需要 multipart 上传时，请将 R2 配置为 S3 挂载。
 - 建议为 S3 兼容存储桶配置未完成 multipart 上传生命周期规则，以便在 Worker 无法完成清理时自动删除遗留上传。
 
-OneDrive 可续传上传继续使用上文所述的 `Files.ReadWrite` 委托权限，Google Drive 使用上文所述的完整 Drive OAuth scope。部署 v0.1.7 前必须应用全部 D1 迁移，包括 `0012_upload_sessions.sql`、`0013_upload_terminal_leases.sql`、`0014_shares.sql`、`0015_auth_rate_limits.sql` 和 `0016_mounts_private_default.sql`。
+OneDrive 可续传上传继续使用上文所述的 `Files.ReadWrite` 委托权限，Google Drive 使用上文所述的完整 Drive OAuth scope。部署当前版本前必须应用全部 D1 迁移，包括 `0012_upload_sessions.sql`、`0013_upload_terminal_leases.sql`、`0014_shares.sql`、`0015_auth_rate_limits.sql`、`0016_mounts_private_default.sql`、`0017_share_auth_revision.sql` 和 `0018_share_limits_and_counters.sql`。
 
 ## 受控分享
 
@@ -169,7 +169,7 @@ OneDrive 可续传上传继续使用上文所述的 `Files.ReadWrite` 委托权�
 
 Google Docs、Sheets 和 Slides 会在主文件浏览器与受控分享中显示明确的导出格式。存在 PDF 格式时优先用于预览，下载仍受分享当前下载策略约束。
 
-原始 `/s/:token` 链接只在创建成功时返回一次。D1 仅保存令牌的 SHA-256 哈希，因此管理页无法恢复或复制已有链接。公开条目 ID 是限定到单个分享的加密句柄，不会暴露挂载 ID 或提供商条目 ID。密码授权使用短时有效、`HttpOnly`、`SameSite=Lax` 且限定到该分享路径的 Cookie。
+原始 `/s/:token` 链接只在创建成功或轮换令牌时返回。D1 仅保存令牌的 SHA-256 哈希，因此管理页无法恢复或复制已有链接。管理员可轮换令牌，旧公开 URL 会立即失效且策略字段保留。可选最大下载次数由服务端强制执行。公开条目 ID 是限定到单个分享的加密句柄，不会暴露挂载 ID 或提供商条目 ID。密码授权使用短时有效、`HttpOnly`、`SameSite=Lax` 且限定到该分享路径的 Cookie。
 
 每次元数据、目录、预览和文件请求都会重新检查密码、启用状态、过期时间、目标可用性和下载策略。分享响应使用 `Cache-Control: private, no-store`；不要添加覆盖该策略的 Cloudflare 缓存规则。停用或删除分享会在下一次请求时立即生效。
 
@@ -242,13 +242,14 @@ npm run dev
 - 仅支持 OneDrive Personal；暂不支持工作和学校租户
 - Google 支持当前仅限 My Drive，尚未实现 Shared Drives、Shared with me 和快捷方式遍历
 - 不支持 WebDAV、FTP、SFTP、SMB 或本地文件系统驱动
-- 可续传恢复仅限当前页面会话；刷新页面后不会恢复上传队列
-- 内置 R2 绑定仍使用单请求上传，并受 Cloudflare 请求体限制
-- 不支持跨挂载复制或移动
-- 分享不支持上传、接收者账户、访问配额或访问计数
+- 刷新后续传需要重新绑定本地原文件；浏览器无法在无用户确认时静默恢复上传
+- 内置 R2 绑定仍使用小于 `10 MiB` 的单请求上传，更大单请求上传会返回稳定错误；大文件请将 R2 配置为 S3 挂载
+- 不支持跨挂载复制或移动（支持同挂载复制）
+- 分享不支持上传、接收者账户或邮件通知
 - 不支持离线下载、归档解压、媒体转码或后台任务系统
 - 提供商列表实时获取；尚未实现分布式目录缓存
 - 内置 R2 的递归删除有数量上限，并会逐条报告失败；S3 兼容存储和 OneDrive 文件夹删除遵循各提供商的行为
+- Google Shared Drives、Shared with me、OneDrive 工作/学校账号、多用户 ACL 与 WebDAV 仍不在范围内
 
 ## 旧版 R2 升级
 

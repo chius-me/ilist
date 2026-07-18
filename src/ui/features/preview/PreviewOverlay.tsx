@@ -6,7 +6,8 @@ import { useModalFocus } from '../../hooks/useModalFocus';
 import type { Entry } from '../../types/entries';
 import { previewKind } from './preview-kind';
 
-const TEXT_PREVIEW_BYTES = 512 * 1024;
+/** Must stay aligned with `TEXT_PREVIEW_MAX_BYTES` in the Worker file-response security module. */
+const TEXT_PREVIEW_MAX_BYTES = 512 * 1024;
 
 class PreviewResponseError extends Error {
   constructor(readonly status: number) {
@@ -24,13 +25,13 @@ type PreviewOverlayProps = {
 };
 
 async function readTextPreview(url: string, signal: AbortSignal): Promise<string> {
-  const response = await fetch(url, { headers: { Range: `bytes=0-${TEXT_PREVIEW_BYTES - 1}` }, signal });
+  const response = await fetch(url, { headers: { Range: `bytes=0-${TEXT_PREVIEW_MAX_BYTES - 1}` }, signal });
   if (!response.ok) throw new PreviewResponseError(response.status);
   if (!response.body) return response.text();
 
   const reader = response.body.getReader();
   const chunks: Uint8Array[] = [];
-  let remaining = TEXT_PREVIEW_BYTES;
+  let remaining = TEXT_PREVIEW_MAX_BYTES;
   try {
     while (remaining > 0) {
       const { done, value } = await reader.read();
@@ -51,7 +52,8 @@ async function readTextPreview(url: string, signal: AbortSignal): Promise<string
     bytes.set(chunk, offset);
     offset += chunk.byteLength;
   }
-  return new TextDecoder().decode(bytes);
+  // Fail closed on invalid UTF-8 sequences for security-sensitive text previews.
+  return new TextDecoder('utf-8', { fatal: true }).decode(bytes);
 }
 
 type PreviewUrlFor = (entry: Entry, download: boolean, exportFormat?: string) => string;
@@ -71,17 +73,37 @@ function TextPreview({ entry, urlFor }: { entry: Entry; urlFor: PreviewUrlFor })
     const controller = new AbortController();
     setText(null);
     setError(null);
+    if (entry.size > TEXT_PREVIEW_MAX_BYTES) {
+      setError(new Error(t('preview.textTooLarge')));
+      return () => controller.abort();
+    }
     void readTextPreview(url, controller.signal).then(setText).catch((reason: unknown) => {
       if (!(reason instanceof DOMException && reason.name === 'AbortError')) {
         setError(new Error(reason instanceof PreviewResponseError ? t('preview.loadFailed', { status: reason.status }) : unavailableMessage));
       }
     });
     return () => controller.abort();
-  }, [locale, unavailableMessage, url]);
+  }, [entry.size, locale, unavailableMessage, t, url]);
 
   if (error) return <PreviewError message={error.message} entry={entry} urlFor={urlFor} allowDownload={entry.capabilities.download} />;
   if (text === null) return <PreviewLoading />;
   return <pre className="previewText">{text}</pre>;
+}
+
+function PdfPreview({ entry, urlFor }: { entry: Entry; urlFor: PreviewUrlFor }) {
+  const { t } = useFeedbackI18n();
+  const base = urlFor(entry, false);
+  const separator = base.includes('?') ? '&' : '?';
+  const url = `${base}${separator}preview=1`;
+  return (
+    <iframe
+      className="previewPdf"
+      title={t('preview.title', { name: entry.name })}
+      src={url}
+      sandbox=""
+      referrerPolicy="no-referrer"
+    />
+  );
 }
 
 function PreviewLoading() {
@@ -109,6 +131,7 @@ function PreviewBody({ entry, urlFor }: { entry: Entry; urlFor: PreviewUrlFor })
     case 'video': return <video className="previewVideo" controls src={url}>{t('preview.videoFallback')}</video>;
     case 'audio': return <audio className="previewAudio" controls src={url}>{t('preview.audioFallback')}</audio>;
     case 'text': return <TextPreview entry={entry} urlFor={urlFor} />;
+    case 'pdf': return <PdfPreview entry={entry} urlFor={urlFor} />;
     case 'fallback': return (
       <div className="previewFallback">
         <strong>{t('preview.unavailable')}</strong>

@@ -68,6 +68,7 @@ function fakeDriver(label: string, resumable = false): StorageDriver {
     upload: vi.fn(async (parentId, name) => add(item({ id: `upload-${label}`, parentId, name, kind: 'file' }))),
     rename: vi.fn(async (id, name) => item({ id, parentId: 'root', name, kind: 'file' })),
     move: vi.fn(async (id, destinationId) => item({ id, parentId: destinationId, name: `${label}.txt`, kind: 'file' })),
+    copy: vi.fn(async () => { throw new Error('not implemented'); }),
     remove: vi.fn(async () => undefined),
   };
 }

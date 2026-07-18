@@ -1,6 +1,6 @@
 import { CirclePower, Pencil, RefreshCw, Share2, Trash2 } from 'lucide-react';
 import { useCallback, useEffect, useRef, useState } from 'react';
-import { deleteShare, listShares, updateShare } from '../../api/shares';
+import { deleteShare, listShares, rotateShareToken, updateShare } from '../../api/shares';
 import { useModalFocus } from '../../hooks/useModalFocus';
 import { useI18n } from '../../i18n/I18nProvider';
 import { localizedApiError } from '../../i18n/apiErrors';
@@ -59,7 +59,20 @@ export function ShareManager() {
       <td><span className={item.enabled ? 'statusOnline' : 'statusOffline'}>{item.enabled ? t('common.enabled') : t('common.disabled')}</span></td>
       <td className="shareActions"><button className="iconButton" type="button" aria-label={t('share.editFor', { name: item.name })} onClick={() => setEditing(item)}><Pencil aria-hidden="true" size={16} /></button><button className="iconButton" type="button" aria-label={item.enabled ? t('share.disableFor', { name: item.name }) : t('share.enableFor', { name: item.name })} onClick={() => void patch(item.id, { enabled: !item.enabled }).catch(() => undefined)}><CirclePower aria-hidden="true" size={16} /></button><button className="iconButton dangerIcon" type="button" aria-label={t('share.deleteFor', { name: item.name })} onClick={() => setDeleting(item)}><Trash2 aria-hidden="true" size={16} /></button></td>
     </tr>)}</tbody></table></div> : null}
-    {editing ? <ShareDialog share={editing} busy={busy} error={error} onClose={() => { setEditing(null); setError(null); }} onUpdate={(input) => patch(editing.id, input)} /> : null}
+    {editing ? <ShareDialog share={editing} busy={busy} error={error} onClose={() => { setEditing(null); setError(null); }} onUpdate={(input) => patch(editing.id, input)} onRotate={async () => {
+      setBusy(true); setError(null);
+      try {
+        const rotated = await rotateShareToken(editing.id);
+        setShares((current) => current.map((item) => item.id === editing.id ? rotated.share : item));
+        setEditing(rotated.share);
+        return rotated;
+      } catch (cause) {
+        setError(localizedApiError(cause, t, 'share.unableSave'));
+        throw cause;
+      } finally {
+        setBusy(false);
+      }
+    }} /> : null}
     {deleting ? <DeleteShareDialog share={deleting} busy={busy} onClose={() => setDeleting(null)} onConfirm={() => void remove()} /> : null}
   </main>;
 }

@@ -9,6 +9,7 @@ export interface EntryCapabilities {
   createFolder: boolean;
   rename: boolean;
   move: boolean;
+  copy: boolean;
   delete: boolean;
   changeVisibility: boolean;
 }
@@ -39,7 +40,7 @@ export interface Entry {
 
 export function isEntryMutable(entry: Entry): boolean {
   const capabilities = entry.capabilities;
-  return capabilities.rename || capabilities.move || capabilities.delete || capabilities.changeVisibility;
+  return capabilities.rename || capabilities.move || capabilities.copy || capabilities.delete || capabilities.changeVisibility;
 }
 
 export interface Breadcrumb {

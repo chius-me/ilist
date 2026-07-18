@@ -36,6 +36,7 @@ function client(overrides: Partial<GoogleDriveDriverClient> = {}): GoogleDriveDr
     abortResumableUpload: vi.fn(async () => undefined),
     rename: vi.fn(async (id, name) => file({ id, name })),
     move: vi.fn(async (id, destinationId) => file({ id, parents: [destinationId] })),
+  copy: vi.fn(async () => { throw new Error('not implemented'); }),
     trash: vi.fn(async (id) => file({ id, trashed: true })),
     ...overrides,
   };
@@ -56,7 +57,7 @@ describe('Google Drive storage driver', () => {
       nextCursor: 'next-page',
     });
     expect(driver.rootId).toBe('root');
-    expect(driver.capabilities).toEqual(new Set(['list', 'download', 'upload', 'multipartUpload', 'createFolder', 'rename', 'move', 'delete']));
+    expect(driver.capabilities).toEqual(new Set(['list', 'download', 'upload', 'multipartUpload', 'createFolder', 'rename', 'move', 'copy', 'delete']));
     expect(driverRegistry.google).toBeTypeOf('function');
   });
 

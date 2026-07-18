@@ -49,7 +49,10 @@ function shareFor(mountId: string, providerItemId: string, targetKind: 'file' | 
     expiresAt: null,
     allowDownload: false,
     enabled: true,
-    createdAt: '2026-07-18T00:00:00.000Z',
+    downloadCount: 0,
+  maxDownloads: null,
+  accessCount: 0,
+  createdAt: '2026-07-18T00:00:00.000Z',
     updatedAt: '2026-07-18T00:00:00.000Z',
   };
 }
@@ -113,6 +116,7 @@ function fakeDriver(): StorageDriver {
       }),
     })),
     createFolder: vi.fn(), upload: vi.fn(), rename: vi.fn(), move: vi.fn(), remove: vi.fn(),
+  copy: vi.fn(async () => { throw new Error('not implemented'); }),
   };
 }
 

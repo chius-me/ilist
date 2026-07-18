@@ -11,6 +11,7 @@ const capabilities = {
   createFolder: false,
   rename: true,
   move: true,
+  copy: false,
   delete: true,
   changeVisibility: true,
 };
@@ -47,7 +48,8 @@ const root = {
       id: 'root',
       parentId: null,
       name: '',
-      capabilities: { ...archive.capabilities, upload: true, createFolder: true, rename: false, move: false, delete: false, changeVisibility: false },
+      capabilities: { ...archive.capabilities, upload: true, createFolder: true, rename: false, move: false,
+    copy: false, delete: false, changeVisibility: false },
     },
     breadcrumbs: [{ id: 'root', name: 'ilist', path: '/' }],
     items: [archive, file('first', 'first.txt'), file('second', 'second.txt'), file('third', 'third.txt')],

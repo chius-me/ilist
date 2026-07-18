@@ -29,10 +29,12 @@ export function RenameDialog({ open, title, initialName = '', submitLabel, onClo
     setError(null);
     try {
       await onSubmit(name.trim());
+      // Close before any parent toast microtasks so the page is not left inert
+      // when tests (or users) immediately interact with explorer controls.
+      setBusy(false);
       onClose();
     } catch (reason) {
       setError(localizedApiError(reason, t, 'dialog.unableSave'));
-    } finally {
       setBusy(false);
     }
   }

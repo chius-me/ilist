@@ -26,7 +26,8 @@ const report: Entry = {
   sortOrder: 0,
   description: '',
   mountPath: null,
-  capabilities: { open: false, preview: true, download: true, upload: false, createFolder: false, rename: false, move: false, delete: false, changeVisibility: false },
+  capabilities: { open: false, preview: true, download: true, upload: false, createFolder: false, rename: false, move: false,
+    copy: false, delete: false, changeVisibility: false },
 };
 
 const root = {

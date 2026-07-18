@@ -28,6 +28,9 @@ interface ShareFixture {
   expiresAt: string | null;
   allowDownload: boolean;
   enabled: boolean;
+  downloadCount?: number;
+  maxDownloads?: number | null;
+  accessCount?: number;
   createdAt: string;
   updatedAt: string;
 }
@@ -42,6 +45,7 @@ const mutableCapabilities = {
   createFolder: false,
   rename: true,
   move: true,
+  copy: false,
   delete: true,
   changeVisibility: true,
 };
@@ -54,6 +58,7 @@ const folderCapabilities = {
   createFolder: false,
   rename: true,
   move: true,
+  copy: false,
   delete: true,
   changeVisibility: true,
 };
@@ -62,7 +67,8 @@ const current = {
   id: 'root', parentId: null, name: '', kind: 'folder', size: 0, contentType: null,
   updatedAt: '2026-07-15T08:00:00.000Z', isPublic: true, effectivePublic: true,
   sortOrder: 0, description: '', mountPath: null,
-  capabilities: { ...folderCapabilities, upload: true, multipartUpload: true, createFolder: true, rename: false, move: false, delete: false, changeVisibility: false },
+  capabilities: { ...folderCapabilities, upload: true, multipartUpload: true, createFolder: true, rename: false, move: false,
+    copy: false, delete: false, changeVisibility: false },
 };
 
 export const fixtureEntries = [
@@ -147,23 +153,29 @@ export async function installApiFixtures(page: Page, options: ApiFixtureOptions 
   const sharedFolder = {
     ...fixtureEntries[0], id: 'sealed-root', parentId: null, name: 'Shared workspace',
     isPublic: false, effectivePublic: false,
-    capabilities: { ...folderCapabilities, rename: false, move: false, delete: false, changeVisibility: false },
+    capabilities: { ...folderCapabilities, rename: false, move: false,
+    copy: false, delete: false, changeVisibility: false },
   };
   const sharedNested = { ...sharedFolder, id: 'sealed-nested', parentId: 'sealed-root', name: 'Nested' };
   const sharedFile = {
     ...fixtureEntries[2], id: 'sealed-file', parentId: 'sealed-nested', name: 'shared-notes.txt', size: 64,
     isPublic: false, effectivePublic: false,
-    capabilities: { ...mutableCapabilities, download: false, rename: false, move: false, delete: false, changeVisibility: false },
+    capabilities: { ...mutableCapabilities, download: false, rename: false, move: false,
+    copy: false, delete: false, changeVisibility: false },
   };
   const sharedWorkspaceDocument = {
     ...workspaceDocument,
     id: 'sealed-workspace-doc', parentId: 'sealed-nested', isPublic: false, effectivePublic: false,
-    capabilities: { ...mutableCapabilities, rename: false, move: false, delete: false, changeVisibility: false },
+    capabilities: { ...mutableCapabilities, rename: false, move: false,
+    copy: false, delete: false, changeVisibility: false },
   };
   let shares: ShareFixture[] = [{
     id: 'existing-share', mountId: 'r2', mountName: 'Production archive', name: 'financial-plan.pdf',
     targetKind: 'file', protected: false, expiresAt: null, allowDownload: true, enabled: true,
-    createdAt: '2026-07-18T00:00:00.000Z', updatedAt: '2026-07-18T00:00:00.000Z',
+    downloadCount: 0,
+  maxDownloads: null,
+  accessCount: 0,
+  createdAt: '2026-07-18T00:00:00.000Z', updatedAt: '2026-07-18T00:00:00.000Z',
   }];
 
   const uploadSession = () => ({

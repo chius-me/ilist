@@ -9,6 +9,7 @@ export type DriverCapability =
   | 'createFolder'
   | 'rename'
   | 'move'
+  | 'copy'
   | 'delete';
 
 export interface StorageItem {
@@ -89,6 +90,8 @@ export interface StorageDriver {
   upload(parentId: string, name: string, body: ReadableStream, contentType: string | null): Promise<StorageItem>;
   rename(itemId: string, name: string): Promise<StorageItem>;
   move(itemId: string, destinationId: string): Promise<StorageItem>;
+  /** Same-mount copy that rejects when the destination name already exists. */
+  copy(itemId: string, destinationParentId: string): Promise<StorageItem>;
   remove(itemId: string): Promise<void>;
 }
 

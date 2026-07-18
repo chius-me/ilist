@@ -29,6 +29,7 @@ export interface GoogleDriveDriverClient {
   ): Promise<GoogleUploadPartResult>;
   abortResumableUpload(sessionUrl: string): Promise<void>;
   rename(itemId: string, name: string): Promise<GoogleFile>;
+  copy(itemId: string, destinationParentId: string, name: string): Promise<GoogleFile>;
   move(itemId: string, destinationId: string): Promise<GoogleFile>;
   trash(itemId: string): Promise<GoogleFile>;
 }
@@ -64,7 +65,7 @@ function validName(name: string): string {
 }
 
 export class GoogleDriveDriver implements StorageDriver {
-  readonly capabilities = new Set(['list', 'download', 'upload', 'multipartUpload', 'createFolder', 'rename', 'move', 'delete'] as const);
+  readonly capabilities = new Set(['list', 'download', 'upload', 'multipartUpload', 'createFolder', 'rename', 'move', 'copy', 'delete'] as const);
   readonly rootId: string;
   readonly resumableUpload: ResumableUploadAdapter = {
     create: async (input) => {
@@ -189,6 +190,23 @@ export class GoogleDriveDriver implements StorageDriver {
     await this.assertInScope(itemId);
     await this.assertInScope(destinationId);
     return { ...mapGoogleFile(await this.client.move(itemId, destinationId), destinationId), parentId: destinationId };
+  }
+
+  async copy(itemId: string, destinationParentId: string): Promise<StorageItem> {
+    this.assertMutable(itemId, 'copied');
+    await this.assertInScope(itemId);
+    await this.assertInScope(destinationParentId);
+    const source = await this.client.stat(itemId);
+    if (source.mimeType === 'application/vnd.google-apps.folder' || source.mimeType?.startsWith('application/vnd.google-apps.')) {
+      throw new HttpError(405, 'OPERATION_UNSUPPORTED', 'Google Drive folder or Workspace copy is not supported');
+    }
+    // Preflight destination name conflict.
+    const existing = (await this.list(destinationParentId)).items.find((item) => item.name === source.name);
+    if (existing) throw new HttpError(409, 'ENTRY_NAME_CONFLICT', 'Current folder already contains that name');
+    return {
+      ...mapGoogleFile(await this.client.copy(itemId, destinationParentId, source.name), destinationParentId),
+      parentId: destinationParentId,
+    };
   }
 
   async remove(itemId: string): Promise<void> {

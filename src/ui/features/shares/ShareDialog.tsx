@@ -13,6 +13,7 @@ type Props = {
   onClose(): void;
   onCreate?: (input: CreateShareInput) => Promise<CreatedShare>;
   onUpdate?: (input: UpdateShareInput) => Promise<void>;
+  onRotate?: () => Promise<CreatedShare>;
 };
 
 function localDateTime(value: string | null | undefined): string {
@@ -22,7 +23,7 @@ function localDateTime(value: string | null | undefined): string {
   return new Date(date.getTime() - offset).toISOString().slice(0, 16);
 }
 
-export function ShareDialog({ entry, share, busy, error, onClose, onCreate, onUpdate }: Props) {
+export function ShareDialog({ entry, share, busy, error, onClose, onCreate, onUpdate, onRotate }: Props) {
   const { t } = useI18n();
   const backdrop = useRef<HTMLDivElement>(null);
   const closeButton = useRef<HTMLButtonElement>(null);
@@ -33,6 +34,8 @@ export function ShareDialog({ entry, share, busy, error, onClose, onCreate, onUp
   const [password, setPassword] = useState('');
   const [expiring, setExpiring] = useState(Boolean(share?.expiresAt));
   const [expiresAt, setExpiresAt] = useState(localDateTime(share?.expiresAt));
+  const [limitDownloads, setLimitDownloads] = useState(share?.maxDownloads != null);
+  const [maxDownloads, setMaxDownloads] = useState(String(share?.maxDownloads ?? 10));
   const [created, setCreated] = useState<CreatedShare | null>(null);
   const [copied, setCopied] = useState(false);
 
@@ -40,6 +43,7 @@ export function ShareDialog({ entry, share, busy, error, onClose, onCreate, onUp
     event.preventDefault();
     try {
       const expiration = expiring && expiresAt ? new Date(expiresAt).toISOString() : undefined;
+      const max = limitDownloads ? Number(maxDownloads) : null;
       if (entry && onCreate) {
         setCreated(await onCreate({
           entryId: entry.id,
@@ -47,6 +51,7 @@ export function ShareDialog({ entry, share, busy, error, onClose, onCreate, onUp
           enabled,
           ...(protectedShare ? { password } : {}),
           ...(expiration ? { expiresAt: expiration } : {}),
+          maxDownloads: max,
         }));
         return;
       }
@@ -57,6 +62,7 @@ export function ShareDialog({ entry, share, busy, error, onClose, onCreate, onUp
           ...(protectedShare && password ? { password } : {}),
           ...(!protectedShare && share.protected ? { clearPassword: true } : {}),
           expiresAt: expiration ?? null,
+          maxDownloads: max,
         });
         onClose();
       }
@@ -71,17 +77,30 @@ export function ShareDialog({ entry, share, busy, error, onClose, onCreate, onUp
     setCopied(true);
   }
 
+  async function rotate() {
+    if (!onRotate) return;
+    try {
+      setCreated(await onRotate());
+      setCopied(false);
+    } catch {
+      // Owner surfaces errors.
+    }
+  }
+
   return <div ref={backdrop} className="dialogBackdrop overlayScrim" role="presentation" onMouseDown={onClose}>
     <section className="shareDialog overlaySurface" role="dialog" aria-modal="true" aria-labelledby="share-dialog-title" onMouseDown={(event) => event.stopPropagation()}>
       <header className="overlayHeader"><h2 id="share-dialog-title">{created ? t('share.createdTitle') : share ? t('share.editTitle') : t('share.createTitle')}</h2><button ref={closeButton} className="iconButton" type="button" onClick={onClose} aria-label={t('common.close')}><X aria-hidden="true" size={18} /></button></header>
       {created ? <div className="shareResult overlayBody">
-        <p>{t('share.oneTimeHint')}</p>
+        <p>{share ? t('share.rotateHint') : t('share.oneTimeHint')}</p>
         <label>{t('share.link')}<span className="shareLinkField"><input readOnly value={created.url} aria-label={t('share.link')} /><button className="iconButton" type="button" onClick={() => void copyLink()} aria-label={t('share.copyLink')} title={t('share.copyLink')}>{copied ? <Check aria-hidden="true" size={17} /> : <Copy aria-hidden="true" size={17} />}</button></span></label>
         <footer className="overlayFooter"><button className="button primary" type="button" onClick={onClose}>{t('common.close')}</button></footer>
       </div> : <form onSubmit={(event) => void submit(event)}>
         <div className="overlayBody sharePolicyForm">
           <strong>{entry?.name ?? share?.name}</strong>
           <label className="checkboxLabel"><input type="checkbox" checked={allowDownload} onChange={(event) => setAllowDownload(event.target.checked)} />{t('share.allowDownload')}</label>
+          <label className="checkboxLabel"><input type="checkbox" checked={limitDownloads} onChange={(event) => setLimitDownloads(event.target.checked)} />{t('share.limitDownloads')}</label>
+          {limitDownloads ? <label>{t('share.maxDownloads')}<input type="number" min={1} required value={maxDownloads} onChange={(event) => setMaxDownloads(event.target.value)} /></label> : null}
+          {share ? <span className="sharePolicySummary">{t('share.downloadCount', { count: share.downloadCount })}</span> : null}
           <label className="checkboxLabel"><input type="checkbox" checked={protectedShare} onChange={(event) => setProtectedShare(event.target.checked)} />{t('share.requirePassword')}</label>
           {protectedShare ? <label>{t('share.password')}<input type="password" minLength={8} required={!share?.protected} value={password} onChange={(event) => setPassword(event.target.value)} placeholder={share?.protected ? t('share.keepPassword') : ''} /></label> : null}
           <label className="checkboxLabel"><input type="checkbox" checked={expiring} onChange={(event) => setExpiring(event.target.checked)} />{t('share.setExpiration')}</label>
@@ -89,7 +108,11 @@ export function ShareDialog({ entry, share, busy, error, onClose, onCreate, onUp
           {share ? <label className="checkboxLabel"><input type="checkbox" checked={enabled} onChange={(event) => setEnabled(event.target.checked)} />{t('common.enabled')}</label> : null}
           {error ? <div className="formError" role="alert">{error}</div> : null}
         </div>
-        <footer className="overlayFooter"><button className="button" type="button" onClick={onClose}>{t('action.cancel')}</button><button className="button primary" type="submit" disabled={busy}>{share ? t('common.save') : t('share.create')}</button></footer>
+        <footer className="overlayFooter">
+          <button className="button" type="button" onClick={onClose}>{t('action.cancel')}</button>
+          {share && onRotate ? <button className="button" type="button" disabled={busy} onClick={() => void rotate()}>{t('share.rotateLink')}</button> : null}
+          <button className="button primary" type="submit" disabled={busy}>{share ? t('common.save') : t('share.create')}</button>
+        </footer>
       </form>}
     </section>
   </div>;

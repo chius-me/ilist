@@ -19,6 +19,7 @@ function capabilities(row: EntryRow, admin: boolean): EntryCapabilities {
     createFolder: admin && row.kind === 'folder',
     rename: admin && row.id !== 'root',
     move: admin && row.id !== 'root',
+    copy: admin && row.id !== 'root',
     delete: admin && row.id !== 'root',
     changeVisibility: admin && row.id !== 'root',
   };
@@ -67,11 +68,23 @@ export async function breadcrumbsFor(db: D1Database, id: string): Promise<Breadc
   });
 }
 
-export async function listDirectory(db: D1Database, pathname: string, admin: boolean): Promise<DirectoryResponse> {
+export function matchesNameFilter(name: string, query: string | null | undefined): boolean {
+  const needle = query?.trim().toLocaleLowerCase() ?? '';
+  if (!needle) return true;
+  return name.toLocaleLowerCase().includes(needle);
+}
+
+export async function listDirectory(
+  db: D1Database,
+  pathname: string,
+  admin: boolean,
+  nameFilter: string | null = null,
+): Promise<DirectoryResponse> {
   const current = await resolveEntryPath(db, pathname, admin);
   if (current.kind !== 'folder') throw new HttpError(400, 'NOT_A_FOLDER', 'Entry is not a folder');
   const rows = await listChildRows(db, current.id);
-  const visible = admin ? rows : rows.filter((row) => row.is_public === 1);
+  const visible = (admin ? rows : rows.filter((row) => row.is_public === 1))
+    .filter((row) => matchesNameFilter(row.name, nameFilter));
   return {
     current: entryToApi(current, admin, await isEffectivelyPublic(db, current.id)),
     breadcrumbs: await breadcrumbsFor(db, current.id),

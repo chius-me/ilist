@@ -10,9 +10,9 @@ import {
   type ResumableUploadControl,
 } from '../../src/ui/api/uploads';
 import { ApiError } from '../../src/ui/api/client';
-import { uploadReducer } from '../../src/ui/features/uploads/upload-reducer';
+import { uploadReducer, type UploadTask } from '../../src/ui/features/uploads/upload-reducer';
 import { UploadPanel } from '../../src/ui/features/uploads/UploadPanel';
-import { useUploadQueue } from '../../src/ui/features/uploads/useUploadQueue';
+import { placeholderFile, useUploadQueue } from '../../src/ui/features/uploads/useUploadQueue';
 
 const PART_SIZE = 10 * 1024 * 1024;
 
@@ -483,6 +483,68 @@ describe('upload queue', () => {
     for (const status of ['queued', 'creating', 'uploading', 'paused', 'failed'] as const) {
       expect(uploadReducer([{ ...base, status }], { type: 'cancelled', id: base.id })[0].status).toBe('cancelled');
     }
+  });
+
+  it('exposes session size on restored placeholders and rejects wrong-size or mismatched identity rebind files', () => {
+    const expectedSize = 25 * 1024 * 1024;
+    const placeholder = placeholderFile('archive.bin', expectedSize);
+    expect(placeholder.name).toBe('archive.bin');
+    expect(placeholder.size).toBe(expectedSize);
+
+    const withIdentity: UploadTask = {
+      id: 'restore-1',
+      parentId: 'folder',
+      file: placeholder,
+      transport: 'multipart',
+      status: 'failed',
+      uploadedBytes: PART_SIZE,
+      progress: 40,
+      sessionId: 'session-restore',
+      needsRebind: true,
+      fileName: 'archive.bin',
+      expectedSize,
+      expectedLastModified: 1_700_000_000_000,
+      error: 'rebind',
+    };
+
+    const wrongSize = new File([new Uint8Array(10)], 'archive.bin');
+    expect(uploadReducer([withIdentity], { type: 'rebind', id: withIdentity.id, file: wrongSize })[0]).toMatchObject({
+      needsRebind: true,
+      sessionId: 'session-restore',
+    });
+
+    const wrongIdentity = new File([new Uint8Array(0)], 'archive.bin');
+    Object.defineProperty(wrongIdentity, 'size', { value: expectedSize, configurable: true });
+    Object.defineProperty(wrongIdentity, 'lastModified', { value: 1, configurable: true });
+    expect(uploadReducer([withIdentity], { type: 'rebind', id: withIdentity.id, file: wrongIdentity })[0]).toMatchObject({
+      error: 'FILE_IDENTITY_MISMATCH',
+      sessionId: 'session-restore',
+    });
+
+    const matching = new File([new Uint8Array(0)], 'archive.bin');
+    Object.defineProperty(matching, 'size', { value: expectedSize, configurable: true });
+    Object.defineProperty(matching, 'lastModified', { value: 1_700_000_000_000, configurable: true });
+    const rebound = uploadReducer([withIdentity], { type: 'rebind', id: withIdentity.id, file: matching })[0];
+    expect(rebound).toMatchObject({
+      needsRebind: false,
+      status: 'queued',
+      sessionId: 'session-restore',
+      expectedSize,
+      error: undefined,
+    });
+    expect(rebound.file.size).toBe(expectedSize);
+
+    // Server-only restore has no lastModified: rebind must restart rather than hybridize parts.
+    const serverOnly: UploadTask = { ...withIdentity, expectedLastModified: undefined, id: 'restore-2' };
+    const restarted = uploadReducer([serverOnly], { type: 'rebind', id: serverOnly.id, file: matching })[0];
+    expect(restarted).toMatchObject({
+      needsRebind: false,
+      status: 'queued',
+      sessionId: undefined,
+      uploadedParts: [],
+      restartSession: true,
+      uploadedBytes: 0,
+    });
   });
 
   it('releases a paused multipart task slot and resumes it once', async () => {

@@ -66,6 +66,7 @@ function fakeDriver(overrides: Partial<ResumableUploadAdapter> = {}): StorageDri
     upload: vi.fn(async () => item()),
     rename: vi.fn(async () => item()),
     move: vi.fn(async () => item()),
+    copy: vi.fn(async () => { throw new Error('not implemented'); }),
     remove: vi.fn(async () => undefined),
   };
 }
@@ -223,6 +224,10 @@ describe('admin upload session routes', () => {
       uploadedParts: [],
       expiresAt: expect.any(String),
       status: 'active',
+      name: expect.any(String),
+      parentItemId: expect.any(String),
+      mountId: mounted.id,
+      uploadedBytes: 0,
     });
     expect(driver.resumableUpload?.create).toHaveBeenCalledWith(expect.objectContaining({
       parentId: 'folder/with unicode 文档',

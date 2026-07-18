@@ -19,6 +19,10 @@ export interface UploadSessionView {
   uploadedParts: UploadSessionPart[];
   expiresAt: string;
   status: 'active' | 'completing' | 'completed' | 'aborted';
+  name?: string;
+  parentItemId?: string;
+  mountId?: string;
+  uploadedBytes?: number;
 }
 
 export interface UploadProgress {
@@ -107,7 +111,20 @@ function parseUploadSession(value: unknown): UploadSessionView {
     uploadedParts: value.uploadedParts.map(parseSessionPart),
     expiresAt: value.expiresAt,
     status: value.status as UploadSessionView['status'],
+    ...(typeof value.name === 'string' ? { name: value.name } : {}),
+    ...(typeof value.parentItemId === 'string' ? { parentItemId: value.parentItemId } : {}),
+    ...(typeof value.mountId === 'string' ? { mountId: value.mountId } : {}),
+    ...(isSafeNonNegativeInteger(value.uploadedBytes) ? { uploadedBytes: value.uploadedBytes } : {}),
   };
+}
+
+export async function listUploadSessions(signal?: AbortSignal): Promise<UploadSessionView[]> {
+  const result = await unwrap<unknown>(await fetch(SESSION_PATH, {
+    signal,
+    credentials: 'same-origin',
+  }));
+  if (!Array.isArray(result)) throw uploadResponseInvalid();
+  return result.map(parseUploadSession);
 }
 
 function xhrError(xhr: XMLHttpRequest): Error {

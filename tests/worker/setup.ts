@@ -17,6 +17,7 @@ import shares from '../../migrations/0014_shares.sql?raw';
 import authRateLimits from '../../migrations/0015_auth_rate_limits.sql?raw';
 import mountsPrivateDefault from '../../migrations/0016_mounts_private_default.sql?raw';
 import shareAuthRevision from '../../migrations/0017_share_auth_revision.sql?raw';
+import shareLimits from '../../migrations/0018_share_limits_and_counters.sql?raw';
 import type { Env } from '../../src/worker/types';
 
 beforeEach(async () => {
@@ -33,7 +34,10 @@ beforeEach(async () => {
           normalizedSql.startsWith('ALTER TABLE entries ADD COLUMN lifecycle_owner')
           || normalizedSql.startsWith('ALTER TABLE upload_sessions ADD COLUMN terminal_')
           || normalizedSql.startsWith('ALTER TABLE upload_sessions ADD COLUMN cleanup_attempted_at')
-          || normalizedSql.startsWith('ALTER TABLE shares ADD COLUMN auth_revision');
+          || normalizedSql.startsWith('ALTER TABLE shares ADD COLUMN auth_revision')
+          || normalizedSql.startsWith('ALTER TABLE shares ADD COLUMN download_count')
+          || normalizedSql.startsWith('ALTER TABLE shares ADD COLUMN max_downloads')
+          || normalizedSql.startsWith('ALTER TABLE shares ADD COLUMN access_count');
         if (!(repeatableAddColumn && error instanceof Error && error.message.includes('duplicate column'))) {
           throw error;
         }
@@ -47,6 +51,7 @@ beforeEach(async () => {
     await apply(mountsPrivateDefault);
   }
   await apply(shareAuthRevision);
+  await apply(shareLimits);
 
   const foreignKeys = await db.prepare('PRAGMA foreign_keys').first<{ foreign_keys: number }>();
   if (foreignKeys?.foreign_keys !== 1) throw new Error('Worker test D1 must enforce foreign keys');

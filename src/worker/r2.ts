@@ -139,12 +139,13 @@ function secureEntryResponse(
   response: Response,
   row: EntryRow,
   request: Request,
-  options: { download: boolean; publicFile: boolean },
+  options: { download: boolean; publicFile: boolean; sandboxedPreview?: boolean },
 ): Response {
   return secureFileResponse(response, {
     filename: row.name,
     contentType: row.content_type,
     download: options.download,
+    sandboxedPreview: options.sandboxedPreview,
     publicFile: options.publicFile,
     method: request.method,
   });
@@ -154,7 +155,7 @@ export async function streamEntryObject(
   bucket: R2Bucket,
   row: EntryRow,
   request: Request,
-  options: { download: boolean; publicFile: boolean },
+  options: { download: boolean; publicFile: boolean; sandboxedPreview?: boolean },
 ): Promise<Response> {
   if (row.kind !== 'file' || !row.storage_key || row.status !== 'ready') {
     throw new HttpError(404, 'ENTRY_NOT_FOUND', 'File not found');

@@ -1,6 +1,6 @@
 import { AlertCircle, LoaderCircle, RefreshCw } from 'lucide-react';
 import { useCallback, useEffect, useMemo, useRef, useState, type DragEvent } from 'react';
-import { createFolder, deleteEntries, entryPath, getEntry, moveEntries, patchEntry, setVisibility } from '../api/entries';
+import { copyEntries, createFolder, deleteEntries, entryPath, getEntry, moveEntries, patchEntry, setVisibility } from '../api/entries';
 import { ApiError } from '../api/client';
 import { ToastRegion, type ToastMessage, type ToastTone } from '../components/ToastRegion';
 import { EmptyState } from '../features/explorer/EmptyState';
@@ -79,18 +79,19 @@ export function ExplorerPage({
   onOpenPreview,
   onClosePreview,
 }: ExplorerPageProps) {
-  const directory = useDirectory(path, session.status);
   const selection = useSelection();
   const { t } = useI18n();
   const { preferences, updatePreferences } = usePreferences();
   const view: ExplorerView = preferences.defaultView;
   const [query, setQuery] = useState('');
+  const [serverQuery, setServerQuery] = useState('');
+  const directory = useDirectory(path, session.status, serverQuery);
   const [sort, setSort] = useState<ExplorerSort>({ field: 'name', order: 'asc' });
   const [previewEntry, setPreviewEntry] = useState<Entry | null>(null);
   const [previewLoading, setPreviewLoading] = useState(false);
   const [previewError, setPreviewError] = useState<Error | null>(null);
   const [menu, setMenu] = useState<{ entry: Entry; anchor: HTMLElement | null } | null>(null);
-  const [dialog, setDialog] = useState<{ type: 'rename' | 'create' | 'move' | 'delete' | 'properties' | 'share'; entries: Entry[] } | null>(null);
+  const [dialog, setDialog] = useState<{ type: 'rename' | 'create' | 'move' | 'copy' | 'delete' | 'properties' | 'share'; entries: Entry[] } | null>(null);
   const [operationPending, setOperationPending] = useState(false);
   const [shareError, setShareError] = useState<string | null>(null);
   const [toasts, setToasts] = useState<ToastMessage[]>([]);
@@ -128,15 +129,20 @@ export function ExplorerPage({
   useEffect(() => {
     selection.clear();
     setQuery('');
+    setServerQuery('');
     setMenu(null);
   }, [path, selection.clear]);
 
+  useEffect(() => {
+    const handle = window.setTimeout(() => setServerQuery(query.trim()), 200);
+    return () => window.clearTimeout(handle);
+  }, [query]);
+
   const entries = useMemo(() => {
-    const needle = query.trim().toLocaleLowerCase();
     return (directory.data?.items ?? [])
-      .filter((entry) => !needle || `${entry.name} ${entry.description}`.toLocaleLowerCase().includes(needle))
+      .slice()
       .sort((left, right) => compareEntries(left, right, sort));
-  }, [directory.data, query, sort]);
+  }, [directory.data, sort]);
 
   const admin = session.status === 'admin';
   const mutableVisibleIds = useMemo(() => admin ? entries.filter(isEntryMutable).map((entry) => entry.id) : [], [admin, entries]);
@@ -195,13 +201,21 @@ export function ExplorerPage({
     enqueueFiles(Array.from(event.dataTransfer.files));
   }
 
-  async function runBatch(operation: () => Promise<{ succeeded: string[]; failed: { id: string }[] }>) {
+  async function runBatch(operation: () => Promise<{ succeeded: string[]; failed: { id: string; code: string; message: string }[] }>) {
     setOperationPending(true);
     try {
       const result = await operation();
       if (result.failed.length) {
         selection.replace(result.failed.map((failure) => failure.id));
-        pushToast('error', t('feedback.batchPartial', { completed: result.succeeded.length, failed: result.failed.length }));
+        const detail = result.failed
+          .slice(0, 3)
+          .map((failure) => failure.message || failure.code)
+          .join('; ');
+        pushToast('error', t('feedback.batchPartialDetail', {
+          completed: result.succeeded.length,
+          failed: result.failed.length,
+          detail,
+        }));
       } else {
         selection.clear();
         pushToast('success', t('feedback.batchComplete', { completed: result.succeeded.length }));
@@ -217,7 +231,10 @@ export function ExplorerPage({
 
   function openEntryAction(action: EntryActionId, entry: Entry) {
     if (action === 'share') setShareError(null);
-    if (action === 'rename' || action === 'properties' || action === 'move' || action === 'delete' || action === 'share') setDialog({ type: action, entries: [entry] });
+    if (action === 'rename' || action === 'properties' || action === 'move' || action === 'delete' || action === 'share') {
+      setDialog({ type: action, entries: [entry] });
+    }
+    if (action === 'copyTo') setDialog({ type: 'copy', entries: [entry] });
     if (action === 'publish' || action === 'hide') void runBatch(() => setVisibility([entry.id], action === 'publish'));
   }
 
@@ -228,7 +245,7 @@ export function ExplorerPage({
       <main className="explorerPage" id="file-explorer">
         <div className="explorerBrowser">
           <div className="explorerToolbarSlot">
-            {admin && selectedEntries.length > 0 ? <SelectionToolbar count={selectedEntries.length} pending={operationPending} onMove={() => setDialog({ type: 'move', entries: selectedEntries })} onPublish={() => void runBatch(() => setVisibility(selectedEntries.map((entry) => entry.id), true))} onHide={() => void runBatch(() => setVisibility(selectedEntries.map((entry) => entry.id), false))} onDelete={() => setDialog({ type: 'delete', entries: selectedEntries })} onClear={selection.clear} /> : <ExplorerToolbar
+            {admin && selectedEntries.length > 0 ? <SelectionToolbar count={selectedEntries.length} pending={operationPending} onMove={() => setDialog({ type: 'move', entries: selectedEntries })} onCopy={() => setDialog({ type: 'copy', entries: selectedEntries })} onPublish={() => void runBatch(() => setVisibility(selectedEntries.map((entry) => entry.id), true))} onHide={() => void runBatch(() => setVisibility(selectedEntries.map((entry) => entry.id), false))} onDelete={() => setDialog({ type: 'delete', entries: selectedEntries })} onClear={selection.clear} /> : <ExplorerToolbar
               breadcrumbs={directory.data?.breadcrumbs ?? []}
               query={query}
               sort={sort}
@@ -266,15 +283,29 @@ export function ExplorerPage({
           </section>
         </div>
       </main>
-      <UploadPanel tasks={uploads.tasks} onPause={uploads.pause} onResume={uploads.resume} onCancel={uploads.cancel} onRetry={uploads.retry} onRemove={uploads.remove} onClearCompleted={uploads.clearCompleted} />
+      <UploadPanel tasks={uploads.tasks} onPause={uploads.pause} onResume={uploads.resume} onCancel={uploads.cancel} onRetry={uploads.retry} onRebind={uploads.rebind} onRemove={uploads.remove} onClearCompleted={uploads.clearCompleted} />
       <ToastRegion toasts={toasts} onDismiss={dismissToast} />
       {menu && !mobileActions ? <EntryActionMenu entry={menu.entry} anchor={menu.anchor} actions={currentEntryActions} onClose={() => setMenu(null)} /> : null}
       {menu && mobileActions ? <MobileActionSheet open title={t('entry.actions', { name: menu.entry.name })} anchor={menu.anchor} actions={currentEntryActions} translate={t} cancelLabel={t('action.cancel')} onClose={() => setMenu(null)} /> : null}
-      {dialog?.type === 'rename' ? <RenameDialog open title={t('dialog.renameTitle', { name: dialog.entries[0].name })} initialName={dialog.entries[0].name} onClose={() => setDialog(null)} onSubmit={async (name) => { await patchEntry(dialog.entries[0].id, { name }); directory.refresh(); pushToast('success', t('feedback.renamed')); }} /> : null}
-      {dialog?.type === 'create' && directory.data && canCreateFolder ? <RenameDialog open title={t('toolbar.createFolder')} submitLabel={t('common.save')} onClose={() => setDialog(null)} onSubmit={async (name) => { await createFolder(directory.data!.current.id, name); directory.refresh(); pushToast('success', t('feedback.folderCreated')); }} /> : null}
+      {dialog?.type === 'rename' ? <RenameDialog open title={t('dialog.renameTitle', { name: dialog.entries[0].name })} initialName={dialog.entries[0].name} onClose={() => setDialog(null)} onSubmit={async (name) => {
+        await patchEntry(dialog.entries[0].id, { name });
+        directory.refresh();
+        // Defer toast until after RenameDialog closes and clears modal inert.
+        queueMicrotask(() => { pushToast('success', t('feedback.renamed')); });
+      }} /> : null}
+      {dialog?.type === 'create' && directory.data && canCreateFolder ? <RenameDialog open title={t('toolbar.createFolder')} submitLabel={t('common.save')} onClose={() => setDialog(null)} onSubmit={async (name) => {
+        await createFolder(directory.data!.current.id, name);
+        directory.refresh();
+        queueMicrotask(() => { pushToast('success', t('feedback.folderCreated')); });
+      }} /> : null}
       {dialog?.type === 'move' ? <FolderPickerDialog entries={dialog.entries} onClose={() => setDialog(null)} onSubmit={(destinationId) => runBatch(() => moveEntries(dialog.entries.map((entry) => entry.id), destinationId))} /> : null}
+      {dialog?.type === 'copy' ? <FolderPickerDialog entries={dialog.entries} onClose={() => setDialog(null)} onSubmit={(destinationId) => runBatch(() => copyEntries(dialog.entries.map((entry) => entry.id), destinationId))} /> : null}
       {dialog?.type === 'delete' ? <DeleteDialog entries={dialog.entries} onClose={() => setDialog(null)} onSubmit={() => runBatch(() => deleteEntries(dialog.entries.map((entry) => entry.id)))} /> : null}
-      {dialog?.type === 'properties' ? <PropertiesDialog entry={dialog.entries[0]} onClose={() => setDialog(null)} onSubmit={async (entryPatch) => { await patchEntry(dialog.entries[0].id, entryPatch); directory.refresh(); pushToast('success', t('feedback.propertiesSaved')); }} /> : null}
+      {dialog?.type === 'properties' ? <PropertiesDialog entry={dialog.entries[0]} onClose={() => setDialog(null)} onSubmit={async (entryPatch) => {
+        await patchEntry(dialog.entries[0].id, entryPatch);
+        directory.refresh();
+        queueMicrotask(() => { pushToast('success', t('feedback.propertiesSaved')); });
+      }} /> : null}
       {dialog?.type === 'share' ? <ShareDialog entry={dialog.entries[0]} busy={operationPending} error={shareError} onClose={() => { setDialog(null); setShareError(null); }} onCreate={async (input) => { setOperationPending(true); setShareError(null); try { return await createShare(input); } catch (error) { setShareError(localizedApiError(error, t, 'share.unableSave')); throw error; } finally { setOperationPending(false); } }} /> : null}
       {previewId ? <PreviewOverlay entry={previewEntry} loading={previewLoading} error={previewError} onClose={onClosePreview} /> : null}
     </>

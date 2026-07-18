@@ -1,5 +1,6 @@
 import { createDriver } from './drivers/registry';
 import { requireResumableUploadAdapter, type StorageDriver, type StorageItem } from './drivers/types';
+import { matchesNameFilter } from './entries';
 import { encodeExternalId, decodeExternalId, type ExternalIdentity } from './external-identity';
 import { HttpError } from './http';
 import { getMount } from './mounts';
@@ -7,7 +8,16 @@ import type { Breadcrumb, Env, Mount, MountEntry, VirtualDirectoryResponse } fro
 
 const MAX_LIST_PAGES = 100;
 
-function capabilities(driver: StorageDriver, item: StorageItem, admin: boolean) {
+function canCopyItem(driver: StorageDriver, item: StorageItem, mount: Mount): boolean {
+  if (!driver.capabilities.has('copy') || item.id === driver.rootId) return false;
+  // Google Workspace-native files only export; they are not binary-copyable.
+  if (item.exportOptions?.length) return false;
+  // OneDrive/Google implement file copy only; S3 supports folder trees.
+  if (item.kind === 'folder') return mount.driverType === 's3';
+  return item.kind === 'file';
+}
+
+function capabilities(driver: StorageDriver, item: StorageItem, admin: boolean, mount: Mount) {
   const folder = item.kind === 'folder';
   const file = item.kind === 'file';
   return {
@@ -19,6 +29,7 @@ function capabilities(driver: StorageDriver, item: StorageItem, admin: boolean) 
     createFolder: admin && folder && driver.capabilities.has('createFolder'),
     rename: admin && item.id !== driver.rootId && driver.capabilities.has('rename'),
     move: admin && item.id !== driver.rootId && driver.capabilities.has('move'),
+    copy: admin && canCopyItem(driver, item, mount),
     delete: admin && item.id !== driver.rootId && driver.capabilities.has('delete'),
     changeVisibility: false,
   };
@@ -42,7 +53,7 @@ export function externalEntry(item: StorageItem, mount: Mount, driver: StorageDr
     exportOptions: item.exportOptions?.map((option) => ({ ...option })),
     driverType: mount.driverType,
     provider: mount.provider,
-    capabilities: capabilities(driver, item, admin),
+    capabilities: capabilities(driver, item, admin, mount),
   };
 }
 
@@ -67,6 +78,7 @@ export async function listExternalDirectory(
   mount: Mount,
   relativePath: string,
   admin: boolean,
+  nameFilter: string | null = null,
 ): Promise<VirtualDirectoryResponse> {
   const driver = await createDriver(env, mount);
   const segments = relativePath === '/' ? [] : relativePath.slice(1).split('/');
@@ -94,7 +106,9 @@ export async function listExternalDirectory(
   return {
     current: externalEntry(current, mount, driver, admin),
     breadcrumbs,
-    items: (await listAll(driver, current.id)).map((entry) => externalEntry(entry, mount, driver, admin)),
+    items: (await listAll(driver, current.id))
+      .filter((entry) => matchesNameFilter(entry.name, nameFilter))
+      .map((entry) => externalEntry(entry, mount, driver, admin)),
   };
 }
 

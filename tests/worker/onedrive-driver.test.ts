@@ -251,7 +251,7 @@ describe('OneDrive read driver', () => {
     expect(api.update).toHaveBeenNthCalledWith(1, 'item-1', { name: 'renamed.txt' });
     expect(api.update).toHaveBeenNthCalledWith(2, 'item-1', { parentReference: { id: 'destination' } });
     expect(api.remove).toHaveBeenCalledWith('item-1');
-    expect(driver.capabilities).toEqual(new Set(['list', 'download', 'upload', 'multipartUpload', 'createFolder', 'rename', 'move', 'delete']));
+    expect(driver.capabilities).toEqual(new Set(['list', 'download', 'upload', 'multipartUpload', 'createFolder', 'rename', 'move', 'copy', 'delete']));
   });
 
   it('sends correctly encoded Graph write requests and preserves streamed bodies', async () => {

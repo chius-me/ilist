@@ -1,10 +1,11 @@
-import { Eye, EyeOff, FolderInput, Trash2, X } from 'lucide-react';
+import { CopyPlus, Eye, EyeOff, FolderInput, Trash2, X } from 'lucide-react';
 import { useI18n } from '../../i18n/I18nProvider';
 
-export function SelectionToolbar({ count, pending, onMove, onPublish, onHide, onDelete, onClear }: {
+export function SelectionToolbar({ count, pending, onMove, onCopy, onPublish, onHide, onDelete, onClear }: {
   count: number;
   pending: boolean;
   onMove: () => void;
+  onCopy: () => void;
   onPublish: () => void;
   onHide: () => void;
   onDelete: () => void;
@@ -15,6 +16,7 @@ export function SelectionToolbar({ count, pending, onMove, onPublish, onHide, on
     <strong>{t('selection.count', { count })}</strong>
     <div className="selectionActions">
       <button className="button" type="button" onClick={onMove} disabled={pending}><FolderInput aria-hidden="true" size={16} />{t('action.move')}</button>
+      <button className="button" type="button" onClick={onCopy} disabled={pending}><CopyPlus aria-hidden="true" size={16} />{t('action.copyTo')}</button>
       <button className="button" type="button" onClick={onPublish} disabled={pending}><Eye aria-hidden="true" size={16} />{t('selection.publish')}</button>
       <button className="button" type="button" onClick={onHide} disabled={pending}><EyeOff aria-hidden="true" size={16} />{t('selection.hide')}</button>
       <button className="button danger" type="button" onClick={onDelete} disabled={pending}><Trash2 aria-hidden="true" size={16} />{t('action.delete')}</button>

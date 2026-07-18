@@ -10,6 +10,9 @@ export interface ShareView {
   expiresAt: string | null;
   allowDownload: boolean;
   enabled: boolean;
+  downloadCount: number;
+  maxDownloads: number | null;
+  accessCount: number;
   createdAt: string;
   updatedAt: string;
 }
@@ -20,6 +23,7 @@ export interface CreateShareInput {
   expiresAt?: string;
   allowDownload: boolean;
   enabled: boolean;
+  maxDownloads?: number | null;
 }
 
 export interface CreatedShare {
@@ -33,12 +37,15 @@ export interface UpdateShareInput {
   expiresAt?: string | null;
   allowDownload?: boolean;
   enabled?: boolean;
+  maxDownloads?: number | null;
 }
 
 export interface PublicShareMeta {
   name: string;
   targetKind: 'file' | 'folder';
   allowDownload: boolean;
+  maxDownloads?: number | null;
+  downloadCount?: number;
   protected: boolean;
   expiresAt: string | null;
   entry: Entry;

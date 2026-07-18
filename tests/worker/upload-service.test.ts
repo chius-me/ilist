@@ -88,6 +88,7 @@ function fakeDriver(
     upload: vi.fn(async () => storageItem()),
     rename: vi.fn(async () => storageItem()),
     move: vi.fn(async () => storageItem()),
+    copy: vi.fn(async () => { throw new Error('not implemented'); }),
     remove: vi.fn(async () => undefined),
   };
 }
@@ -263,6 +264,10 @@ describe('upload lifecycle service', () => {
       uploadedParts: [],
       expiresAt: expect.any(String),
       status: 'active',
+      name: 'archive.bin',
+      parentItemId: expect.stringMatching(/^ext_/),
+      mountId: mounted.id,
+      uploadedBytes: 0,
     });
     expect(driver.resumableUpload?.create).toHaveBeenCalledWith({
       parentId: 'folder',

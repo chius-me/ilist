@@ -10,6 +10,7 @@ export interface CreateShareRecordInput {
   expiresAt: number | null;
   allowDownload: boolean;
   enabled: boolean;
+  maxDownloads?: number | null;
 }
 
 export interface UpdateShareRecordInput {
@@ -17,6 +18,8 @@ export interface UpdateShareRecordInput {
   expiresAt?: number | null;
   allowDownload?: boolean;
   enabled?: boolean;
+  maxDownloads?: number | null;
+  tokenHash?: string;
 }
 
 function toShare(row: ShareRow): Share {
@@ -32,6 +35,9 @@ function toShare(row: ShareRow): Share {
     expiresAt: row.expires_at,
     allowDownload: row.allow_download === 1,
     enabled: row.enabled === 1,
+    downloadCount: row.download_count ?? 0,
+    maxDownloads: row.max_downloads ?? null,
+    accessCount: row.access_count ?? 0,
     createdAt: row.created_at,
     updatedAt: row.updated_at,
   };
@@ -42,8 +48,8 @@ export async function createShareRecord(db: D1Database, input: CreateShareRecord
   const now = new Date().toISOString();
   await db.prepare(`INSERT INTO shares (
     id, token_hash, mount_id, provider_item_id, target_kind, name,
-    password_hash, expires_at, allow_download, enabled, created_at, updated_at
-  ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`).bind(
+    password_hash, expires_at, allow_download, enabled, download_count, max_downloads, access_count, created_at, updated_at
+  ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 0, ?, 0, ?, ?)`).bind(
     id,
     input.tokenHash,
     input.mountId,
@@ -54,6 +60,7 @@ export async function createShareRecord(db: D1Database, input: CreateShareRecord
     input.expiresAt,
     input.allowDownload ? 1 : 0,
     input.enabled ? 1 : 0,
+    input.maxDownloads ?? null,
     now,
     now,
   ).run();
@@ -84,23 +91,51 @@ export async function updateShareRecord(
 ): Promise<Share | null> {
   const current = await getShareById(db, id);
   if (!current) return null;
+  const passwordChanging = input.passwordHash !== undefined;
   await db.prepare(`UPDATE shares
     SET password_hash = ?,
         auth_revision = auth_revision + ?,
         expires_at = ?,
         allow_download = ?,
         enabled = ?,
+        max_downloads = ?,
+        token_hash = ?,
         updated_at = ?
     WHERE id = ?`).bind(
-    input.passwordHash === undefined ? current.passwordHash : input.passwordHash,
-    input.passwordHash === undefined ? 0 : 1,
+    passwordChanging ? input.passwordHash : current.passwordHash,
+    passwordChanging ? 1 : 0,
     input.expiresAt === undefined ? current.expiresAt : input.expiresAt,
     input.allowDownload === undefined ? (current.allowDownload ? 1 : 0) : (input.allowDownload ? 1 : 0),
     input.enabled === undefined ? (current.enabled ? 1 : 0) : (input.enabled ? 1 : 0),
+    input.maxDownloads === undefined ? current.maxDownloads : input.maxDownloads,
+    input.tokenHash === undefined ? current.tokenHash : input.tokenHash,
     new Date().toISOString(),
     id,
   ).run();
   return getShareById(db, id);
+}
+
+export async function incrementShareAccessCount(db: D1Database, id: string): Promise<void> {
+  await db.prepare('UPDATE shares SET access_count = access_count + 1, updated_at = ? WHERE id = ?')
+    .bind(new Date().toISOString(), id)
+    .run();
+}
+
+/**
+ * Atomically reserve one download against the optional max_downloads limit.
+ * Returns false when downloads are disabled or the limit is already reached.
+ */
+export async function tryConsumeShareDownload(db: D1Database, id: string): Promise<boolean> {
+  const result = await db.prepare(`UPDATE shares
+    SET download_count = download_count + 1,
+        updated_at = ?
+    WHERE id = ?
+      AND allow_download = 1
+      AND (max_downloads IS NULL OR download_count < max_downloads)`).bind(
+    new Date().toISOString(),
+    id,
+  ).run();
+  return (result.meta.changes ?? 0) === 1;
 }
 
 export async function upgradeSharePasswordHash(

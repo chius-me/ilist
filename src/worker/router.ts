@@ -39,6 +39,7 @@ import { decodeExternalId } from './external-identity';
 import { secureFileResponse } from './file-response-security';
 import {
   createFolder,
+  copyEntries,
   deleteEntryTrees,
   listVirtualDirectory,
   moveEntries,
@@ -47,6 +48,7 @@ import {
   setEntriesVisibility,
   uploadFile,
 } from './file-system';
+import { LARGE_UPLOAD_THRESHOLD_BYTES } from './drivers/types';
 import { fail, HttpError, noContent, ok, readJson, requireSameOrigin, requireSameOriginWhenPresent } from './http';
 import { handleMountRoutes } from './mount-routes';
 import { handleOAuthRoutes } from './oauth-routes';
@@ -260,6 +262,32 @@ async function moveExternalEntries(env: Env, ids: string[], destinationId: strin
   return { succeeded, failed };
 }
 
+async function copyExternalEntries(env: Env, ids: string[], destinationId: string): Promise<BatchResult | null> {
+  const destinationIdentity = decodeExternalId(destinationId);
+  const externalIds = ids.filter((id) => decodeExternalId(id));
+  if (!destinationIdentity && externalIds.length === 0) return null;
+  const succeeded: string[] = [];
+  const failed: BatchFailure[] = [];
+
+  for (const id of new Set(ids)) {
+    const identity = decodeExternalId(id);
+    if (!identity || !destinationIdentity || identity.mountId !== destinationIdentity.mountId) {
+      failed.push({ id, code: 'CROSS_MOUNT_COPY_UNSUPPORTED', message: 'Entries cannot be copied between mounts' });
+      continue;
+    }
+    try {
+      const source = await resolveExternalEntry(env, id, true);
+      if (!source) throw new HttpError(404, 'ENTRY_NOT_FOUND', 'Entry not found');
+      requireExternalCapability(source.driver, 'copy');
+      await source.driver.copy(identity.itemId, destinationIdentity.itemId);
+      succeeded.push(id);
+    } catch (error) {
+      failed.push(operationFailure(id, error));
+    }
+  }
+  return { succeeded, failed };
+}
+
 async function deleteExternalEntries(env: Env, ids: string[]): Promise<BatchResult | null> {
   const externalIds = ids.filter((id) => decodeExternalId(id));
   if (externalIds.length === 0) return null;
@@ -300,7 +328,8 @@ async function handleFilesystem(request: Request, env: Env, url: URL): Promise<R
   const admin = Boolean(await currentUser(env, request));
 
   if (url.pathname === '/api/fs/list') {
-    return ok(await listVirtualDirectory(env, url.searchParams.get('path') ?? '/', admin));
+    const nameFilter = url.searchParams.get('q') ?? url.searchParams.get('name');
+    return ok(await listVirtualDirectory(env, url.searchParams.get('path') ?? '/', admin, nameFilter));
   }
 
   const match = /^\/api\/fs\/entries\/(.+)$/.exec(url.pathname);
@@ -444,6 +473,19 @@ async function handleAdmin(request: Request, env: Env, url: URL, options: RouteR
     if (external) {
       requireExternalCapability(external.driver, 'upload');
       if (!request.body) invalidRequest();
+      const contentLength = request.headers.get('content-length');
+      const declaredSize = contentLength && /^(0|[1-9][0-9]*)$/.test(contentLength) ? Number(contentLength) : null;
+      if (
+        declaredSize !== null
+        && declaredSize >= LARGE_UPLOAD_THRESHOLD_BYTES
+        && !external.driver.capabilities.has('multipartUpload')
+      ) {
+        throw new HttpError(
+          400,
+          'UPLOAD_SESSION_UNSUPPORTED',
+          'Resumable upload is not supported for this folder',
+        );
+      }
       const uploaded = await external.driver.upload(
         external.identity.itemId,
         validateEntryName(name),
@@ -451,6 +493,15 @@ async function handleAdmin(request: Request, env: Env, url: URL, options: RouteR
         request.headers.get('content-type'),
       );
       return ok(externalEntry(uploaded, external.mount, external.driver, true));
+    }
+    const contentLength = request.headers.get('content-length');
+    const declaredSize = contentLength && /^(0|[1-9][0-9]*)$/.test(contentLength) ? Number(contentLength) : null;
+    if (declaredSize !== null && declaredSize >= LARGE_UPLOAD_THRESHOLD_BYTES) {
+      throw new HttpError(
+        400,
+        'UPLOAD_SESSION_UNSUPPORTED',
+        'Resumable upload is not supported for this folder',
+      );
     }
     return reconcileAfterStorageFailure(env, async () => ok(await uploadFile(env, request, { id, parentId, name })));
   }
@@ -462,6 +513,15 @@ async function handleAdmin(request: Request, env: Env, url: URL, options: RouteR
     const ids = stringArray(body.ids);
     const external = await moveExternalEntries(env, ids, body.destinationId);
     return ok(external ?? await moveEntries(env.DB, ids, body.destinationId));
+  }
+
+  if (url.pathname === '/api/admin/entries/copy') {
+    if (request.method !== 'POST') return methodNotAllowed();
+    const body = await readJson<MoveEntriesBody>(request);
+    if (typeof body.destinationId !== 'string') invalidRequest();
+    const ids = stringArray(body.ids);
+    const external = await copyExternalEntries(env, ids, body.destinationId);
+    return ok(external ?? await copyEntries(env, ids, body.destinationId));
   }
 
   if (url.pathname === '/api/admin/entries/delete') {
@@ -586,6 +646,7 @@ async function handleFile(request: Request, env: Env, url: URL): Promise<Respons
       filename: exportOption ? `${external.item.name}.${exportOption.extension}` : external.item.name,
       contentType: exportOption?.contentType ?? external.item.contentType,
       download: url.searchParams.get('download') === '1',
+      sandboxedPreview: url.searchParams.get('preview') === '1',
       publicFile: external.mount.isPublic,
       method: request.method,
     });
@@ -594,6 +655,7 @@ async function handleFile(request: Request, env: Env, url: URL): Promise<Respons
     const { entry, effectivePublic } = await authorizeEntry(env, candidateId, admin);
     return streamEntryObject(env.R2_BUCKET, entry, request, {
       download: url.searchParams.get('download') === '1',
+      sandboxedPreview: url.searchParams.get('preview') === '1',
       publicFile: effectivePublic,
     });
   }
