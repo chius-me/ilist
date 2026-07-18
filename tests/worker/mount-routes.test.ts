@@ -1,6 +1,6 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { SELF, env } from 'cloudflare:test';
-import { getCredentials } from '../../src/worker/credentials';
+import { getCredentials, putCredentials } from '../../src/worker/credentials';
 import { driverRegistry } from '../../src/worker/drivers/registry';
 import { getMount } from '../../src/worker/mounts';
 import type { StorageDriver } from '../../src/worker/drivers/types';
@@ -64,6 +64,7 @@ describe('mount administration API', () => {
     await dropFailureTriggers();
     delete driverRegistry.s3;
     delete driverRegistry.onedrive;
+    delete driverRegistry.google;
     delete driverRegistry['native-r2'];
     await workerEnv().DB.prepare('DELETE FROM storage_credentials').run();
     await workerEnv().DB.prepare('DELETE FROM mounts').run();
@@ -82,6 +83,56 @@ describe('mount administration API', () => {
     expect(JSON.stringify(body)).not.toContain('secretAccessKey');
     expect(JSON.stringify(body)).not.toContain('accessKeyId');
     expect((body as { data: Array<{ connected: boolean }> }).data[0]!.connected).toBe(true);
+  });
+
+  it('creates, reports, and disconnects an independently authorized Google mount', async () => {
+    const created = await adminFetch('/api/admin/mounts', {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({
+        name: 'Google Projects',
+        mountPath: '/google-projects',
+        driverType: 'google',
+        provider: 'google',
+        rootItemId: 'folder-root-id',
+        config: {},
+      }),
+    });
+    expect(created.status).toBe(200);
+    const mount = (await created.json() as { data: { id: string; connected: boolean; rootItemId: string } }).data;
+    expect(mount).toMatchObject({ connected: false, rootItemId: 'folder-root-id' });
+
+    await putCredentials(workerEnv(), mount.id, {
+      accessToken: 'access', refreshToken: 'refresh', expiresAt: Date.now() + 60_000,
+    });
+    const listed = await adminFetch('/api/admin/mounts');
+    expect((await listed.json() as { data: Array<{ id: string; connected: boolean }> }).data)
+      .toContainEqual(expect.objectContaining({ id: mount.id, connected: true }));
+
+    const disconnected = await adminFetch(`/api/admin/mounts/${mount.id}/disconnect`, { method: 'POST' });
+    expect(disconnected.status).toBe(200);
+    await expect(getCredentials(workerEnv(), mount.id)).resolves.toBeNull();
+    await expect(getMount(workerEnv().DB, mount.id)).resolves.toMatchObject({ driverType: 'google' });
+  });
+
+  it('rejects browser-supplied credentials and non-empty config for Google mounts', async () => {
+    for (const body of [
+      { config: {}, credentials: { refreshToken: 'browser-secret' } },
+      { config: { clientSecret: 'browser-secret' } },
+    ]) {
+      const response = await adminFetch('/api/admin/mounts', {
+        method: 'POST',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({
+          name: `Invalid Google ${crypto.randomUUID()}`,
+          mountPath: `/invalid-google-${crypto.randomUUID()}`,
+          driverType: 'google',
+          provider: 'google',
+          ...body,
+        }),
+      });
+      expect(response.status).toBe(400);
+    }
   });
 
   it('creates an S3 mount and preserves a blank secret on update', async () => {

@@ -29,3 +29,7 @@ export function disconnectMount(id: string): Promise<Mount> {
 export function oneDriveConnectUrl(id: string): string {
   return `/api/admin/oauth/onedrive/start?mountId=${encodeURIComponent(id)}`;
 }
+
+export function googleDriveConnectUrl(id: string): string {
+  return `/api/admin/oauth/google/start?mountId=${encodeURIComponent(id)}`;
+}

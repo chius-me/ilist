@@ -47,7 +47,7 @@ interface S3Credentials extends StorageCredentials {
   secretAccessKey: string;
 }
 
-const MOUNT_DRIVER_TYPES = new Set<MountDriverType>(['s3', 'onedrive', 'native-r2']);
+const MOUNT_DRIVER_TYPES = new Set<MountDriverType>(['s3', 'onedrive', 'google', 'native-r2']);
 
 function methodNotAllowed(): Response {
   return fail(405, 'Method not allowed');
