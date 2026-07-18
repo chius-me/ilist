@@ -6,7 +6,7 @@
 
 面向 Cloudflare Workers 的自托管文件索引与管理器。
 
-[![Release](https://img.shields.io/badge/release-v0.1.4-2ea44f?logo=github)](https://github.com/chius-me/ilist/releases/tag/v0.1.4)
+[![Release](https://img.shields.io/badge/release-v0.1.5-2ea44f?logo=github)](https://github.com/chius-me/ilist/releases/tag/v0.1.5)
 [![License](https://img.shields.io/badge/license-GPL--3.0--only-blue)](https://github.com/chius-me/ilist/blob/main/LICENSE)
 ![Cloudflare Workers](https://img.shields.io/badge/Cloudflare-Workers-f38020?logo=cloudflare&logoColor=white)
 ![TypeScript](https://img.shields.io/badge/TypeScript-5.8-3178c6?logo=typescript&logoColor=white)
@@ -14,7 +14,7 @@
 
 </div>
 
-> [v0.1.4](https://github.com/chius-me/ilist/releases/tag/v0.1.4) 面向单管理员使用，并提供公开只读浏览。升级前请查看[限制](#限制)并备份 D1。
+> [v0.1.5](https://github.com/chius-me/ilist/releases/tag/v0.1.5) 新增可撤销的文件和文件夹分享。升级前请查看[限制](#限制)并备份 D1。
 
 ## 功能
 
@@ -24,6 +24,7 @@
 - 支持使用 AWS Signature Version 4 的 S3 兼容挂载
 - 支持通过 S3 凭据或内置 Worker 绑定使用 Cloudflare R2
 - 支持公开目录浏览、稳定文件链接、下载和常见文件预览
+- 支持可撤销的文件与文件夹分享，可选密码、过期时间和下载策略
 - 支持英文和简体中文界面，并提供跟随系统、浅色和深色主题，偏好保存在本地
 - 支持列表和网格视图、面包屑、排序、搜索、键盘选择及响应式布局
 - 支持适配桌面、平板和移动屏幕的存储与外观管理界面
@@ -55,7 +56,7 @@
         +-- 虚拟文件系统与存储驱动注册表
         +-- OneDrive Personal 驱动 -> Microsoft Graph
         +-- S3 驱动 -> R2 或其他 S3 兼容提供商
-        +-- D1 -> 挂载、加密凭据、文件条目和会话
+        +-- D1 -> 挂载、加密凭据、文件条目、会话和分享
         +-- R2 绑定 -> 内置兼容存储
 ```
 
@@ -144,7 +145,17 @@ Secret access key: R2 API token secret access key
 - 内置 `R2` Worker 绑定继续兼容已有部署，但不支持可续传上传；需要 multipart 上传时，请将 R2 配置为 S3 挂载。
 - 建议为 S3 兼容存储桶配置未完成 multipart 上传生命周期规则，以便在 Worker 无法完成清理时自动删除遗留上传。
 
-OneDrive 可续传上传继续使用上文所述的 `Files.ReadWrite` 委托权限。部署 v0.1.4 前必须应用全部 D1 迁移，包括 `0012_upload_sessions.sql` 和 `0013_upload_terminal_leases.sql`。
+OneDrive 可续传上传继续使用上文所述的 `Files.ReadWrite` 委托权限。部署 v0.1.5 前必须应用全部 D1 迁移，包括 `0012_upload_sessions.sql`、`0013_upload_terminal_leases.sql` 和 `0014_shares.sql`。
+
+## 受控分享
+
+管理员可以从任意文件或文件夹的操作菜单创建分享，并在 `/admin/shares` 管理已有分享。分享可设置密码、过期时间、禁止显式下载，也可随时停用或重新启用。文件夹分享支持嵌套浏览、列表与网格视图，以及主文件浏览器已有的安全预览类型。
+
+原始 `/s/:token` 链接只在创建成功时返回一次。D1 仅保存令牌的 SHA-256 哈希，因此管理页无法恢复或复制已有链接。公开条目 ID 是限定到单个分享的加密句柄，不会暴露挂载 ID 或提供商条目 ID。密码授权使用短时有效、`HttpOnly`、`SameSite=Lax` 且限定到该分享路径的 Cookie。
+
+每次元数据、目录、预览和文件请求都会重新检查密码、启用状态、过期时间、目标可用性和下载策略。分享响应使用 `Cache-Control: private, no-store`；不要添加覆盖该策略的 Cloudflare 缓存规则。停用或删除分享会在下一次请求时立即生效。
+
+公开分享路由位于 `/s/:token`。管理员自动化可使用 `/api/admin/shares` 下的 `GET`、`POST`、`PATCH` 和 `DELETE`，并继续受管理员会话与同源保护约束。
 
 ## 本地开发
 
@@ -184,6 +195,8 @@ npm run dev
 - 使用最小权限、限定存储桶范围的 S3 或 R2 凭据。
 - 不要提交 `.dev.vars`、D1 导出文件、访问令牌、client secret 或临时上传文件。
 - 私有挂载依赖 ilist 授权；请检查部署中的 Cloudflare 日志、Access 策略和缓存规则。
+- 分享链接属于持有者凭据，请通过合适的私密渠道发送；敏感内容应同时设置密码。
+- D1 无法恢复已有分享的原始 URL；链接丢失时应创建替代分享。
 
 ## 限制
 
@@ -193,6 +206,7 @@ npm run dev
 - 可续传恢复仅限当前页面会话；刷新页面后不会恢复上传队列
 - 内置 R2 绑定仍使用单请求上传，并受 Cloudflare 请求体限制
 - 不支持跨挂载复制或移动
+- 分享不支持上传、接收者账户、访问配额或访问计数
 - 不支持离线下载、归档解压、媒体转码或后台任务系统
 - 提供商列表实时获取；尚未实现分布式目录缓存
 - 内置 R2 的递归删除有数量上限，并会逐条报告失败；S3 兼容存储和 OneDrive 文件夹删除遵循各提供商的行为
