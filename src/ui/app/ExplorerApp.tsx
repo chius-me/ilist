@@ -1,6 +1,7 @@
 import { useEffect, useRef, useState } from 'react';
 import { LoginDialog } from '../features/explorer/LoginDialog';
 import { MountManager } from '../features/mounts/MountManager';
+import { ShareManager } from '../features/shares/ShareManager';
 import { useExplorerLocation } from '../hooks/useExplorerLocation';
 import { useSession } from '../hooks/useSession';
 import { AppShell } from './AppShell';
@@ -17,7 +18,8 @@ export function ExplorerApp() {
   const lastNonAdminPath = useRef('/');
   const storageRoute = path === '/admin/storages';
   const appearanceRoute = path === '/admin/appearance';
-  const adminSection: AdminSection | null = storageRoute ? 'storage' : appearanceRoute ? 'appearance' : null;
+  const sharesRoute = path === '/admin/shares';
+  const adminSection: AdminSection | null = storageRoute ? 'storage' : sharesRoute ? 'shares' : appearanceRoute ? 'appearance' : null;
   const adminRoute = path === '/admin' || adminSection !== null;
   const explorerPath = adminRoute ? lastNonAdminPath.current : path;
   const admin = session.status === 'admin';
@@ -55,15 +57,15 @@ export function ExplorerApp() {
     <AppShell
       admin={admin}
       username={session.user?.username}
-      contentId={adminSection === 'storage' && admin ? 'storage-manager' : adminSection === 'appearance' && admin ? 'appearance-preferences' : 'file-list'}
+      contentId={adminSection === 'storage' && admin ? 'storage-manager' : adminSection === 'shares' && admin ? 'share-manager' : adminSection === 'appearance' && admin ? 'appearance-preferences' : 'file-list'}
       onHome={() => openPath('/')}
       onStorage={() => openPath('/admin/storages')}
       onSignIn={() => openPath('/admin')}
       onSignOut={signOut}
     >
       {adminSection && admin
-        ? <AdminLayout active={adminSection} onNavigate={(section) => openPath(`/admin/${section === 'storage' ? 'storages' : 'appearance'}`)} onBack={() => openPath(lastNonAdminPath.current)}>
-            {adminSection === 'storage' ? <MountManager onBack={() => openPath(lastNonAdminPath.current)} /> : <PreferencesPage />}
+        ? <AdminLayout active={adminSection} onNavigate={(section) => openPath(`/admin/${section === 'storage' ? 'storages' : section}`)} onBack={() => openPath(lastNonAdminPath.current)}>
+            {adminSection === 'storage' ? <MountManager onBack={() => openPath(lastNonAdminPath.current)} /> : adminSection === 'shares' ? <ShareManager /> : <PreferencesPage />}
           </AdminLayout>
         : <ExplorerPage
             path={explorerPath}

@@ -20,7 +20,7 @@
 .adminPageHeader h1 { margin: 0 0 5px; font-size: 24px; letter-spacing: 0; }
 .adminPageHeader p { margin: 0; color: var(--color-muted); font-size: 13px; line-height: 1.45; }
 
-.preferencesPage, .storageManager { width: 100%; }
+.preferencesPage, .storageManager, .shareManager { width: 100%; }
 .preferencesForm { display: grid; }
 .preferencesForm > label { display: grid; grid-template-columns: minmax(220px, 1fr) minmax(180px, 240px); align-items: center; gap: 28px; min-height: 86px; border-bottom: 1px solid var(--color-border); padding: 14px 8px; }
 .preferencesForm label > span { display: grid; gap: 4px; }
@@ -74,3 +74,11 @@
 .confirmDialog { width: min(calc(100% - 24px), 420px); padding: 18px; }
 .confirmDialog p { color: var(--color-muted); line-height: 1.5; }
 .oneDriveConnectNote { grid-column: 1 / -1; border-left: 3px solid var(--color-primary); padding: 8px 10px; color: var(--color-muted); font-size: 13px; line-height: 1.5; }
+.shareTable thead th:first-child { width: 30%; }
+.shareTable thead th:nth-child(2) { width: 24%; }
+.shareTable thead th:nth-child(3) { width: 18%; }
+.shareTable thead th:nth-child(4) { width: 14%; }
+.sharePolicySummary { display: grid; gap: 3px; font-size: 12px; }
+.sharePolicySummary small { color: var(--color-muted); font-size: 11px; }
+.shareActions { display: flex; align-items: center; justify-content: flex-end; gap: 2px; }
+.dangerIcon { color: var(--color-danger-text); }

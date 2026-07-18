@@ -16,6 +16,8 @@ import { PropertiesDialog } from '../features/operations/PropertiesDialog';
 import { RenameDialog } from '../features/operations/RenameDialog';
 import { PreviewOverlay } from '../features/preview/PreviewOverlay';
 import { UploadPanel } from '../features/uploads/UploadPanel';
+import { ShareDialog } from '../features/shares/ShareDialog';
+import { createShare } from '../api/shares';
 import { useUploadQueue } from '../features/uploads/useUploadQueue';
 import { useDirectory } from '../hooks/useDirectory';
 import { useSelection } from '../hooks/useSelection';
@@ -102,8 +104,9 @@ export function ExplorerPage({
   const [previewLoading, setPreviewLoading] = useState(false);
   const [previewError, setPreviewError] = useState<Error | null>(null);
   const [menu, setMenu] = useState<{ entry: Entry; anchor: HTMLElement | null } | null>(null);
-  const [dialog, setDialog] = useState<{ type: 'rename' | 'create' | 'move' | 'delete' | 'properties'; entries: Entry[] } | null>(null);
+  const [dialog, setDialog] = useState<{ type: 'rename' | 'create' | 'move' | 'delete' | 'properties' | 'share'; entries: Entry[] } | null>(null);
   const [operationPending, setOperationPending] = useState(false);
+  const [shareError, setShareError] = useState<string | null>(null);
   const [toasts, setToasts] = useState<ToastMessage[]>([]);
   const toastSequence = useRef(0);
   const [dragOver, setDragOver] = useState(false);
@@ -227,11 +230,12 @@ export function ExplorerPage({
   }
 
   function openEntryAction(action: EntryActionId, entry: Entry) {
-    if (action === 'rename' || action === 'properties' || action === 'move' || action === 'delete') setDialog({ type: action, entries: [entry] });
+    if (action === 'share') setShareError(null);
+    if (action === 'rename' || action === 'properties' || action === 'move' || action === 'delete' || action === 'share') setDialog({ type: action, entries: [entry] });
     if (action === 'publish' || action === 'hide') void runBatch(() => setVisibility([entry.id], action === 'publish'));
   }
 
-  const currentEntryActions = menu ? entryActions(menu.entry, { onOpen: handlers.onOpen, onPreview: handlers.onPreview, onAction: openEntryAction, onCopyFailure: () => pushToast('error', t('feedback.copyFailed')) }) : [];
+  const currentEntryActions = menu ? entryActions(menu.entry, { onOpen: handlers.onOpen, onPreview: handlers.onPreview, onAction: openEntryAction, onCopyFailure: () => pushToast('error', t('feedback.copyFailed')), canShare: admin }) : [];
 
   return (
     <>
@@ -285,6 +289,7 @@ export function ExplorerPage({
       {dialog?.type === 'move' ? <FolderPickerDialog entries={dialog.entries} onClose={() => setDialog(null)} onSubmit={(destinationId) => runBatch(() => moveEntries(dialog.entries.map((entry) => entry.id), destinationId))} /> : null}
       {dialog?.type === 'delete' ? <DeleteDialog entries={dialog.entries} onClose={() => setDialog(null)} onSubmit={() => runBatch(() => deleteEntries(dialog.entries.map((entry) => entry.id)))} /> : null}
       {dialog?.type === 'properties' ? <PropertiesDialog entry={dialog.entries[0]} onClose={() => setDialog(null)} onSubmit={async (entryPatch) => { await patchEntry(dialog.entries[0].id, entryPatch); directory.refresh(); pushToast('success', t('feedback.propertiesSaved')); }} /> : null}
+      {dialog?.type === 'share' ? <ShareDialog entry={dialog.entries[0]} busy={operationPending} error={shareError} onClose={() => { setDialog(null); setShareError(null); }} onCreate={async (input) => { setOperationPending(true); setShareError(null); try { return await createShare(input); } catch (error) { setShareError(localizedApiError(error, t, 'share.unableSave')); throw error; } finally { setOperationPending(false); } }} /> : null}
       {previewId ? <PreviewOverlay entry={previewEntry} loading={previewLoading} error={previewError} onClose={onClosePreview} /> : null}
     </>
   );
