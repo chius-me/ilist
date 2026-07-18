@@ -1,3 +1,5 @@
+import type { Entry } from './entries';
+
 export interface ShareView {
   id: string;
   mountId: string;
@@ -31,4 +33,13 @@ export interface UpdateShareInput {
   expiresAt?: string | null;
   allowDownload?: boolean;
   enabled?: boolean;
+}
+
+export interface PublicShareMeta {
+  name: string;
+  targetKind: 'file' | 'folder';
+  allowDownload: boolean;
+  protected: boolean;
+  expiresAt: string | null;
+  entry: Entry;
 }

@@ -10,6 +10,7 @@ export function FileList({
   handlers,
   interactionProps,
   focusedId,
+  fileUrlFor,
 }: {
   entries: Entry[];
   selectedIds: Set<string>;
@@ -17,6 +18,7 @@ export function FileList({
   handlers: EntryHandlers;
   interactionProps?: HTMLAttributes<HTMLUListElement>;
   focusedId?: string | null;
+  fileUrlFor?: (entry: Entry, download: boolean) => string;
 }) {
   const { t } = useI18n();
   return (
@@ -29,7 +31,7 @@ export function FileList({
         <span>{t('mount.columnActions')}</span>
       </div>
       <ul className="fileList" aria-label={t('explorer.collection')} {...interactionProps}>
-        {entries.map((entry) => <EntryRow key={entry.id} entry={entry} selected={selectedIds.has(entry.id)} focused={focusedId === entry.id} admin={admin} {...handlers} />)}
+        {entries.map((entry) => <EntryRow key={entry.id} entry={entry} selected={selectedIds.has(entry.id)} focused={focusedId === entry.id} admin={admin} fileUrlFor={fileUrlFor} {...handlers} />)}
       </ul>
     </div>
   );

@@ -255,3 +255,36 @@
   .selectionActions .button { flex: 1 1 auto; }
   .fileListHeader, .entryRow { grid-template-columns: 48px minmax(0, 1fr) minmax(48px, auto); }
 }
+
+.publicSharePage { width: min(980px, calc(100% - 32px)); margin: 24px auto 48px; }
+.sharePageHeader { display: flex; align-items: center; justify-content: space-between; min-height: 70px; gap: 16px; border-bottom: 1px solid var(--color-border); padding: 10px 8px; }
+.sharePageHeader > div { display: flex; align-items: center; min-width: 0; gap: 10px; }
+.sharePageHeader span { min-width: 0; }
+.sharePageHeader h1 { margin: 0; overflow: hidden; font-size: 19px; text-overflow: ellipsis; white-space: nowrap; }
+.sharePageHeader small { color: var(--color-muted); font-size: 11px; }
+.shareViewControl { display: inline-flex; flex: 0 0 auto; border: 1px solid var(--color-border); border-radius: var(--radius-control); padding: 2px; }
+.shareViewControl button { display: grid; width: 32px; height: 30px; place-items: center; border: 0; border-radius: calc(var(--radius-control) - 2px); background: transparent; color: var(--color-muted); }
+.shareViewControl button.isActive { background: var(--color-selected); color: var(--color-accent-foreground-strong); }
+.shareBreadcrumbs { display: flex; min-height: 38px; align-items: center; gap: 4px; overflow-x: auto; border-bottom: 1px solid var(--color-border); padding: 4px 8px; white-space: nowrap; }
+.shareBreadcrumbs span { display: inline-flex; align-items: center; gap: 4px; }
+.shareBreadcrumbs button { max-width: 220px; overflow: hidden; border: 0; border-radius: var(--radius-control); background: transparent; padding: 5px 7px; color: var(--color-accent-foreground-strong); font-size: 12px; font-weight: 650; text-overflow: ellipsis; white-space: nowrap; }
+.shareBreadcrumbs button:not(:disabled):hover { background: var(--color-hover); }
+.shareBreadcrumbs button:disabled { color: var(--color-text); cursor: default; }
+.shareBreadcrumbs i { color: var(--color-muted); font-size: 12px; font-style: normal; }
+.sharedCollection { min-height: 220px; }
+.sharedFileButton { margin: 24px 8px; }
+.shareStatePage { display: grid; min-height: calc(100dvh - 64px); place-items: center; padding: 24px; }
+.sharePasswordForm { display: grid; width: min(100%, 380px); gap: 14px; padding: 24px; }
+.sharePasswordForm > svg { color: var(--color-accent-foreground); }
+.sharePasswordForm h1, .shareUnavailable h1 { margin: 0; font-size: 20px; }
+.sharePasswordForm p, .shareUnavailable p { margin: 0; color: var(--color-muted); font-size: 13px; line-height: 1.5; }
+.sharePasswordForm label { display: grid; gap: 6px; font-size: 13px; font-weight: 650; }
+.sharePasswordForm input { width: 100%; height: 38px; border: 1px solid var(--color-border-strong); border-radius: var(--radius-control); background: var(--color-surface); padding: 0 9px; color: var(--color-text); }
+.shareUnavailable { display: grid; max-width: 420px; justify-items: center; gap: 10px; text-align: center; }
+.shareUnavailable > svg { color: var(--color-muted); }
+
+@media (max-width: 600px) {
+  .publicSharePage { width: 100%; margin-top: 8px; }
+  .sharePageHeader { padding-inline: 12px; }
+  .shareStatePage { padding: 16px; }
+}

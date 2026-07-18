@@ -10,6 +10,7 @@ export interface AppShellProps extends PropsWithChildren {
   onStorage(): void;
   onSignIn(): void;
   onSignOut(): void | Promise<void>;
+  publicView?: boolean;
 }
 
 export function AppShell({
@@ -20,6 +21,7 @@ export function AppShell({
   onStorage,
   onSignIn,
   onSignOut,
+  publicView = false,
   children,
 }: AppShellProps) {
   const { t } = useI18n();
@@ -34,6 +36,7 @@ export function AppShell({
         onStorage={onStorage}
         onSignIn={onSignIn}
         onSignOut={onSignOut}
+        showSessionActions={!publicView}
       />
       <div className="appOutlet">{children}</div>
     </div>
