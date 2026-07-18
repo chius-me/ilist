@@ -54,7 +54,19 @@ async function insertNativeTree(): Promise<void> {
 function fakeDriver(): StorageDriver {
   const root: StorageItem = { id: 'root-id', parentId: null, name: 'Root', kind: 'folder', size: null, contentType: null, modifiedAt: null, etag: null };
   const folder: StorageItem = { id: 'provider-folder', parentId: root.id, name: 'External folder', kind: 'folder', size: null, contentType: null, modifiedAt: null, etag: null };
-  const file: StorageItem = { id: 'provider-file-secret', parentId: folder.id, name: 'external.txt', kind: 'file', size: 8, contentType: 'text/plain', modifiedAt: null, etag: 'etag' };
+  const file: StorageItem = {
+    id: 'provider-file-secret',
+    parentId: folder.id,
+    name: 'external.txt',
+    kind: 'file',
+    size: 8,
+    contentType: 'text/plain',
+    modifiedAt: null,
+    etag: 'etag',
+    exportOptions: [
+      { format: 'pdf', label: 'PDF', extension: 'pdf', contentType: 'application/pdf' },
+    ],
+  };
   return {
     rootId: root.id,
     capabilities: new Set(['list', 'download']),
@@ -124,7 +136,13 @@ describe('shared storage targets', () => {
     });
     const share = shareFor(mount.id, 'provider-folder', 'folder', 'External folder');
     const directory = await listSharedFolder(workerEnv(), share, null, registry);
-    expect(directory.items[0]).toMatchObject({ name: 'external.txt', effectivePublic: false });
+    expect(directory.items[0]).toMatchObject({
+      name: 'external.txt',
+      effectivePublic: false,
+      exportOptions: [
+        { format: 'pdf', label: 'PDF', extension: 'pdf', contentType: 'application/pdf' },
+      ],
+    });
     expect(JSON.stringify(directory)).not.toContain('provider-file-secret');
 
     const resolved = await resolveSharedItem(workerEnv(), share, directory.items[0].id, registry);
