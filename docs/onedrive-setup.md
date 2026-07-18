@@ -54,7 +54,7 @@ npx wrangler d1 migrations apply ilist-db --remote
 npm run deploy
 ```
 
-Migrations `0008` through `0011` add mounts, encrypted credentials, the native R2 compatibility mount, and one-time OAuth state. They do not delete files or legacy rows.
+Migrations `0008` through `0014` add mounts, encrypted credentials, the native R2 compatibility mount, one-time OAuth state, resumable upload sessions, and controlled shares. They do not delete files or legacy rows.
 
 ## 4. Connect drives
 
@@ -68,7 +68,7 @@ Disconnecting deletes only the encrypted OAuth credentials from ilist. Deleting 
 
 ## 5. Verification and rollback
 
-Verify the public root, a nested OneDrive folder, a small upload/download/delete cycle, a private mount as a guest, and the existing native R2 links. Uploads currently use one Worker request and Microsoft Graph's simple upload endpoint, so large/resumable uploads are deferred.
+Verify the public root, a nested OneDrive folder, small and resumable upload/download/delete cycles, a private mount as a guest, and existing native R2 links. Large files use a server-side OneDrive upload session; the provider upload URL and session proof are never returned to the browser.
 
 If the deployment fails, deploy the previous Worker version and keep migrations `0008` through `0011` in place; older code ignores the additive tables. Restore the D1 export only when data itself is damaged, not merely to roll back Worker code.
 

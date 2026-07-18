@@ -3,4 +3,6 @@ CREDENTIAL_MASTER_KEY=replace-with-32-byte-base64-key
 SESSION_SECRET=replace-with-at-least-32-random-characters
 MICROSOFT_CLIENT_ID=replace-with-application-client-id
 MICROSOFT_CLIENT_SECRET=replace-with-application-client-secret
+GOOGLE_CLIENT_ID=replace-with-google-oauth-client-id
+GOOGLE_CLIENT_SECRET=replace-with-google-oauth-client-secret
 PUBLIC_ORIGIN=https://ilist.example.com
