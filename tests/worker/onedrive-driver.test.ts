@@ -1,4 +1,4 @@
-import { afterEach, describe, expect, it, vi } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { env } from 'cloudflare:test';
 import { putCredentials } from '../../src/worker/credentials';
 import { createMount } from '../../src/worker/mounts';
@@ -57,7 +57,14 @@ function driverClient(overrides: Partial<OneDriveDriverClient> = {}): OneDriveDr
 }
 
 describe('OneDrive read driver', () => {
-  afterEach(() => vi.unstubAllGlobals());
+  beforeEach(() => {
+    vi.useFakeTimers();
+    vi.setSystemTime(new Date('2026-07-17T00:00:00.000Z'));
+  });
+  afterEach(() => {
+    vi.useRealTimers();
+    vi.unstubAllGlobals();
+  });
 
   it('maps files, folders, and packages without losing Unicode metadata', () => {
     expect(mapGraphItem(graphItem(), null)).toMatchObject({

@@ -5,7 +5,19 @@ export type DirectoryState = 'normal' | 'loading' | 'empty' | 'error';
 export interface ApiFixtureOptions {
   admin?: boolean;
   directoryState?: DirectoryState;
+  completionDelayMs?: number;
 }
+
+export interface UploadFixtureState {
+  createCalls: number;
+  partCalls: number[];
+  confirmedParts: Set<number>;
+  completeCalls: number;
+  abortCalls: number;
+  directoryCalls: number;
+}
+
+const UPLOAD_PART_SIZE = 10 * 1024 * 1024;
 
 const mutableCapabilities = {
   open: false,
@@ -35,7 +47,7 @@ const current = {
   id: 'root', parentId: null, name: '', kind: 'folder', size: 0, contentType: null,
   updatedAt: '2026-07-15T08:00:00.000Z', isPublic: true, effectivePublic: true,
   sortOrder: 0, description: '', mountPath: null,
-  capabilities: { ...folderCapabilities, upload: true, createFolder: true, rename: false, move: false, delete: false, changeVisibility: false },
+  capabilities: { ...folderCapabilities, upload: true, multipartUpload: true, createFolder: true, rename: false, move: false, delete: false, changeVisibility: false },
 };
 
 export const fixtureEntries = [
@@ -92,6 +104,30 @@ function json(route: Route, data: unknown, status = 200) {
 export async function installApiFixtures(page: Page, options: ApiFixtureOptions = {}) {
   const admin = options.admin ?? true;
   const directoryState = options.directoryState ?? 'normal';
+  const completionDelayMs = options.completionDelayMs ?? 1500;
+  const uploads: UploadFixtureState = {
+    createCalls: 0,
+    partCalls: [],
+    confirmedParts: new Set(),
+    completeCalls: 0,
+    abortCalls: 0,
+    directoryCalls: 0,
+  };
+  let uploadSize = UPLOAD_PART_SIZE * 2 + UPLOAD_PART_SIZE / 2;
+  let failedPartTwo = false;
+
+  const uploadSession = () => ({
+    id: 'e2e-upload-session',
+    kind: 'multipart',
+    partSize: UPLOAD_PART_SIZE,
+    size: uploadSize,
+    uploadedParts: [...uploads.confirmedParts].sort((a, b) => a - b).map((partNumber) => ({
+      partNumber,
+      size: Math.min(UPLOAD_PART_SIZE, uploadSize - (partNumber - 1) * UPLOAD_PART_SIZE),
+    })),
+    expiresAt: new Date(Date.now() + 60 * 60 * 1000).toISOString(),
+    status: 'active',
+  });
 
   await page.addInitScript(() => {
     localStorage.setItem('ilist.ui.preferences', JSON.stringify({ version: 1, locale: 'en', theme: 'light', defaultView: 'list' }));
@@ -106,6 +142,7 @@ export async function installApiFixtures(page: Page, options: ApiFixtureOptions 
   }, 401));
 
   await page.route('**/api/fs/list**', async (route) => {
+    uploads.directoryCalls += 1;
     if (directoryState === 'loading') {
       await new Promise((resolve) => setTimeout(resolve, 5000));
     }
@@ -136,6 +173,45 @@ export async function installApiFixtures(page: Page, options: ApiFixtureOptions 
   await page.route('**/api/admin/mounts', (route) => json(route, { ok: true, data: mounts }));
   await page.route('**/api/admin/mounts/**', (route) => json(route, { ok: true, data: mounts[0] }));
   await page.route('**/api/admin/entries/**', (route) => json(route, { ok: true, data: { succeeded: ['report'], failed: [] } }));
+  await page.route('**/api/admin/uploads/sessions**', async (route) => {
+    const request = route.request();
+    const url = new URL(request.url());
+    const path = url.pathname;
+    if (request.method() === 'POST' && path === '/api/admin/uploads/sessions') {
+      uploads.createCalls += 1;
+      uploads.confirmedParts.clear();
+      const body = request.postDataJSON() as { size?: number };
+      uploadSize = typeof body.size === 'number' ? body.size : uploadSize;
+      return json(route, { ok: true, data: uploadSession() }, 201);
+    }
+    if (request.method() === 'GET' && path === '/api/admin/uploads/sessions/e2e-upload-session') {
+      return json(route, { ok: true, data: uploadSession() });
+    }
+    const partMatch = /\/parts\/(\d+)$/.exec(path);
+    if (request.method() === 'PUT' && partMatch) {
+      const partNumber = Number(partMatch[1]);
+      uploads.partCalls.push(partNumber);
+      await new Promise((resolve) => setTimeout(resolve, partNumber === 2 ? 650 : 120));
+      if (request.failure()) return;
+      if (partNumber === 2 && !failedPartTwo) {
+        failedPartTwo = true;
+        return json(route, { ok: false, error: { code: 'UPLOAD_PROVIDER_RATE_LIMITED', message: 'Retry later' } }, 503);
+      }
+      uploads.confirmedParts.add(partNumber);
+      const size = Math.min(UPLOAD_PART_SIZE, uploadSize - (partNumber - 1) * UPLOAD_PART_SIZE);
+      return json(route, { ok: true, data: { partNumber, size } });
+    }
+    if (request.method() === 'POST' && path.endsWith('/complete')) {
+      uploads.completeCalls += 1;
+      await new Promise((resolve) => setTimeout(resolve, completionDelayMs));
+      return route.fulfill({ status: 204, body: '' });
+    }
+    if (request.method() === 'DELETE' && path === '/api/admin/uploads/sessions/e2e-upload-session') {
+      uploads.abortCalls += 1;
+      return route.fulfill({ status: 204, body: '' });
+    }
+    return json(route, { ok: false, error: { code: 'NOT_FOUND', message: 'Not found' } }, 404);
+  });
   await page.route('**/api/admin/files/**', async (route) => {
     await new Promise((resolve) => setTimeout(resolve, 1500));
     await route.fulfill({ status: 201, body: '' });
@@ -146,4 +222,5 @@ export async function installApiFixtures(page: Page, options: ApiFixtureOptions 
     contentType: 'text/plain',
     body: 'Quarterly report\n\nRevenue and delivery remained on plan.\nUnicode fixture: 项目资料',
   }));
+  return uploads;
 }

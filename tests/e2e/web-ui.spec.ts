@@ -238,6 +238,85 @@ test('@visual upload, storage, and appearance surfaces', async ({ page }) => {
   await expect(page).toHaveScreenshot('appearance-preferences.png', { fullPage: true });
 });
 
+test('resumable upload pauses, retries only the failed part, completes, and cancels', async ({ page }) => {
+  const uploads = await installApiFixtures(page, { admin: true });
+  await page.goto('/');
+  await expect(page.getByRole('list', { name: 'Files and folders' })).toBeVisible();
+  const initialDirectoryCalls = uploads.directoryCalls;
+  const fileName = 'large-release-资料.bin';
+  await page.locator('input[type="file"]').setInputFiles({
+    name: fileName,
+    mimeType: 'application/octet-stream',
+    buffer: Buffer.alloc(25 * 1024 * 1024),
+  });
+
+  const panel = page.getByRole('complementary', { name: 'Upload queue' });
+  await expect(panel).toBeVisible();
+  await expect(panel.getByText(/part 2 of 3/)).toBeVisible();
+  await panel.getByRole('button', { name: `Pause ${fileName}` }).click();
+  await expect(panel.getByText(/paused/)).toBeVisible();
+  expect(await page.evaluate(() => {
+    const event = new Event('beforeunload', { cancelable: true });
+    window.dispatchEvent(event);
+    return event.defaultPrevented;
+  })).toBe(true);
+
+  await panel.getByRole('button', { name: `Resume ${fileName}` }).click();
+  await expect(panel.getByText('The storage provider is temporarily unavailable. Retry shortly.')).toBeVisible();
+  await panel.getByRole('button', { name: `Retry ${fileName}` }).click();
+  await expect(panel.getByText('finishing upload')).toBeVisible();
+  await expect(panel.getByText(/completed/)).toBeVisible();
+  await expect.poll(() => uploads.completeCalls).toBe(1);
+  await expect.poll(() => uploads.directoryCalls).toBe(initialDirectoryCalls + 1);
+  expect(uploads.partCalls.filter((part) => part === 1)).toHaveLength(1);
+  expect(await page.evaluate(() => {
+    const event = new Event('beforeunload', { cancelable: true });
+    window.dispatchEvent(event);
+    return event.defaultPrevented;
+  })).toBe(false);
+
+  const cancelName = 'cancel-me.bin';
+  await page.locator('input[type="file"]').setInputFiles({
+    name: cancelName,
+    mimeType: 'application/octet-stream',
+    buffer: Buffer.alloc(10 * 1024 * 1024),
+  });
+  await expect(panel.getByText(/part 1 of 1/)).toBeVisible();
+  await panel.getByRole('button', { name: `Cancel ${cancelName}` }).click();
+  await expect(panel.getByText(/cancelled/)).toBeVisible();
+  await expect.poll(() => uploads.abortCalls).toBeGreaterThanOrEqual(1);
+});
+
+test('@visual resumable upload panel states stay in bounds', async ({ page }) => {
+  await installApiFixtures(page, { admin: true, completionDelayMs: 10_000 });
+  await page.goto('/');
+  const fileName = 'Quarterly-archive-with-a-very-long-name-项目资料.bin';
+  await page.locator('input[type="file"]').setInputFiles({
+    name: fileName,
+    mimeType: 'application/octet-stream',
+    buffer: Buffer.alloc(25 * 1024 * 1024),
+  });
+  const panel = page.getByRole('complementary', { name: 'Upload queue' });
+
+  await expect(panel.getByText(/part 2 of 3/)).toBeVisible();
+  await expectInsideViewport(page, panel);
+  await expectNoHorizontalOverflow(page);
+  await expect(page).toHaveScreenshot('upload-resumable-uploading.png', { fullPage: true });
+
+  await panel.getByRole('button', { name: `Pause ${fileName}` }).click();
+  await expect(panel.getByText(/paused/)).toBeVisible();
+  await expect(page).toHaveScreenshot('upload-resumable-paused.png', { fullPage: true });
+
+  await panel.getByRole('button', { name: `Resume ${fileName}` }).click();
+  await expect(panel.getByText('The storage provider is temporarily unavailable. Retry shortly.')).toBeVisible();
+  await expect(page).toHaveScreenshot('upload-resumable-failed.png', { fullPage: true });
+
+  await panel.getByRole('button', { name: `Retry ${fileName}` }).click();
+  await expect(panel.getByText('finishing upload')).toBeVisible();
+  await expect(page).toHaveScreenshot('upload-resumable-completing.png', { fullPage: true });
+  await expectInsideViewport(page, panel);
+});
+
 test('@visual navigates folders and exposes loading, empty, and retry states', async ({ page }) => {
   await installApiFixtures(page, { admin: true });
   await page.goto('/');
