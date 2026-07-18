@@ -56,6 +56,36 @@ export interface AdminUser {
 export type EntryKind = 'file' | 'folder';
 export type EntryStatus = 'uploading' | 'ready' | 'deleting';
 
+export interface ShareRow {
+  id: string;
+  token_hash: string;
+  mount_id: string;
+  provider_item_id: string;
+  target_kind: EntryKind;
+  name: string;
+  password_hash: string | null;
+  expires_at: number | null;
+  allow_download: number;
+  enabled: number;
+  created_at: string;
+  updated_at: string;
+}
+
+export interface Share {
+  id: string;
+  tokenHash: string;
+  mountId: string;
+  providerItemId: string;
+  targetKind: EntryKind;
+  name: string;
+  passwordHash: string | null;
+  expiresAt: number | null;
+  allowDownload: boolean;
+  enabled: boolean;
+  createdAt: string;
+  updatedAt: string;
+}
+
 export interface EntryRow {
   id: string;
   parent_id: string | null;
