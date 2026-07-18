@@ -1,4 +1,4 @@
-import { act, renderHook, waitFor } from '@testing-library/react';
+import { act, fireEvent, render, renderHook, screen, waitFor } from '@testing-library/react';
 import type { ReactNode } from 'react';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { AppProviders } from '../../src/ui/app/AppProviders';
@@ -11,6 +11,7 @@ import {
 } from '../../src/ui/api/uploads';
 import { ApiError } from '../../src/ui/api/client';
 import { uploadReducer } from '../../src/ui/features/uploads/upload-reducer';
+import { UploadPanel } from '../../src/ui/features/uploads/UploadPanel';
 import { useUploadQueue } from '../../src/ui/features/uploads/useUploadQueue';
 
 const PART_SIZE = 10 * 1024 * 1024;
@@ -238,7 +239,7 @@ describe('upload transport', () => {
     const file = new File([new Uint8Array(PART_SIZE * 2 + PART_SIZE / 2)], 'archive.bin', { type: 'application/custom' });
     const fetchMock = vi.fn()
       .mockResolvedValueOnce(apiResponse(sessionView(file.size)))
-      .mockResolvedValueOnce(apiResponse({ id: 'entry-1' }));
+      .mockResolvedValueOnce(new Response(null, { status: 204 }));
     vi.stubGlobal('fetch', fetchMock);
     const progress = vi.fn();
 
@@ -257,6 +258,7 @@ describe('upload transport', () => {
     expect(progress).toHaveBeenLastCalledWith(PART_SIZE * 2 + PART_SIZE / 2, PART_SIZE * 2 + PART_SIZE / 2);
     expect(fetchMock.mock.calls).toHaveLength(2);
     expect(fetchMock.mock.calls[1][0]).toBe('/api/admin/uploads/sessions/session-123/complete');
+    expect(fetchMock.mock.calls[1][1]).toMatchObject({ method: 'POST', credentials: 'same-origin' });
   });
 
   it('starts each part only after the previous part succeeds and reports committed plus active progress', async () => {
@@ -347,6 +349,26 @@ describe('upload transport', () => {
     expect(MockXMLHttpRequest.requests).toHaveLength(0);
   });
 
+  it('preserves a session when pausing during in-flight creation', async () => {
+    const controller = new AbortController();
+    const control: ResumableUploadControl = { paused: false };
+    const file = new File([new Uint8Array(PART_SIZE)], 'create-pause.bin', { type: 'application/octet-stream' });
+    let resolveCreate!: (response: Response) => void;
+    const fetchMock = vi.fn(() => new Promise<Response>((resolve) => { resolveCreate = resolve; }));
+    vi.stubGlobal('fetch', fetchMock);
+
+    const upload = uploadFile({ ...multipartInput(file, control), signal: controller.signal });
+    await waitFor(() => expect(fetchMock).toHaveBeenCalledOnce());
+    control.paused = true;
+    controller.abort();
+    resolveCreate(apiResponse(sessionView(file.size)));
+
+    await expect(upload).rejects.toBeInstanceOf(UploadPausedError);
+    expect(control.sessionId).toBe('session-123');
+    expect(fetchMock).toHaveBeenCalledTimes(1);
+    expect(MockXMLHttpRequest.requests).toHaveLength(0);
+  });
+
   it('pauses between parts without losing the server session or aborting it', async () => {
     const file = new File([new Uint8Array(PART_SIZE)], 'pause.bin', { type: 'application/octet-stream' });
     const control: ResumableUploadControl = { paused: true };
@@ -384,7 +406,7 @@ describe('upload transport', () => {
 describe('upload queue', () => {
   const wrapper = ({ children }: { children: ReactNode }) => <AppProviders>{children}</AppProviders>;
   it('tracks byte progress and retryable failure', () => {
-    const task = { id: 'upload-12345678', parentId: 'root', file: new File(['hello'], 'a.txt'), status: 'queued' as const, uploadedBytes: 0, progress: 0 };
+    const task = { id: 'upload-12345678', parentId: 'root', file: new File(['hello'], 'a.txt'), transport: 'single' as const, status: 'queued' as const, uploadedBytes: 0, progress: 0 };
     const uploading = uploadReducer([task], { type: 'progress', id: task.id, uploadedBytes: 3, totalBytes: 5 });
     expect(uploading[0]).toMatchObject({ status: 'uploading', uploadedBytes: 3, progress: 60 });
     const failed = uploadReducer(uploading, { type: 'failed', id: task.id, error: 'Upload failed' });
@@ -429,5 +451,133 @@ describe('upload queue', () => {
     expect(onCompleted).not.toHaveBeenCalled();
     act(() => finish());
     await waitFor(() => expect(onCompleted).toHaveBeenCalledWith('onedrive-folder'));
+  });
+
+  it('supports the full multipart lifecycle and preserves progress on retry', () => {
+    const file = new File([new Uint8Array(PART_SIZE * 2)], 'large.bin');
+    const task = { id: 'multipart-1', parentId: 'root', file, transport: 'multipart' as const, status: 'queued' as const, uploadedBytes: 0, progress: 0 };
+    let state = uploadReducer([task], { type: 'started', id: task.id, multipart: true });
+    expect(state[0].status).toBe('creating');
+    state = uploadReducer(state, { type: 'session', id: task.id, sessionId: 'session-1', uploadedParts: [], partCount: 2, uploadedBytes: 0 });
+    expect(state[0]).toMatchObject({ status: 'uploading', sessionId: 'session-1', partCount: 2 });
+    state = uploadReducer(state, { type: 'partConfirmed', id: task.id, partNumber: 1, uploadedBytes: PART_SIZE });
+    state = uploadReducer(state, { type: 'paused', id: task.id });
+    expect(state[0]).toMatchObject({ status: 'paused', uploadedBytes: PART_SIZE, uploadedParts: [1] });
+    state = uploadReducer(state, { type: 'resume', id: task.id });
+    state = uploadReducer(state, { type: 'started', id: task.id, multipart: true });
+    state = uploadReducer(state, { type: 'session', id: task.id, sessionId: 'session-1', uploadedParts: [1], partCount: 2, uploadedBytes: PART_SIZE });
+    const retryable = state;
+    state = uploadReducer(state, { type: 'completing', id: task.id });
+    expect(state[0]).toMatchObject({ status: 'completing', progress: 100 });
+    expect(uploadReducer(state, { type: 'completed', id: task.id })[0].status).toBe('completed');
+
+    const failed = uploadReducer(retryable, { type: 'failed', id: task.id, error: 'retry' });
+    const retried = uploadReducer(failed, { type: 'retry', id: task.id });
+    expect(retried[0]).toMatchObject({ status: 'queued', sessionId: 'session-1', uploadedParts: [1], uploadedBytes: PART_SIZE });
+  });
+
+  it('restarts a failed single upload from zero and cancels every nonterminal state', () => {
+    const file = new File(['small'], 'small.txt');
+    const base = { id: 'single-1', parentId: 'root', file, transport: 'single' as const, status: 'failed' as const, uploadedBytes: 3, progress: 60, error: 'failed' };
+    expect(uploadReducer([base], { type: 'retry', id: base.id })[0]).toMatchObject({ status: 'queued', uploadedBytes: 0, progress: 0 });
+    for (const status of ['queued', 'creating', 'uploading', 'paused', 'failed'] as const) {
+      expect(uploadReducer([{ ...base, status }], { type: 'cancelled', id: base.id })[0].status).toBe('cancelled');
+    }
+  });
+
+  it('releases a paused multipart task slot and resumes it once', async () => {
+    const starts: string[] = [];
+    const transport = vi.fn(({ id, signal }: Parameters<typeof uploadFile>[0]) => new Promise<void>((resolve, reject) => {
+      starts.push(id);
+      signal.addEventListener('abort', () => reject(new UploadPausedError()), { once: true });
+      if (id.endsWith('3')) resolve();
+    }));
+    vi.spyOn(crypto, 'randomUUID')
+      .mockReturnValueOnce('00000000-0000-4000-8000-000000000001')
+      .mockReturnValueOnce('00000000-0000-4000-8000-000000000002')
+      .mockReturnValueOnce('00000000-0000-4000-8000-000000000003');
+    const { result } = renderHook(() => useUploadQueue({ transport, multipartUpload: true, onCompleted: () => undefined }), { wrapper });
+    act(() => result.current.enqueue('root', [
+      new File([new Uint8Array(PART_SIZE)], '1.bin'),
+      new File([new Uint8Array(PART_SIZE)], '2.bin'),
+      new File([new Uint8Array(PART_SIZE)], '3.bin'),
+    ]));
+    await waitFor(() => expect(transport).toHaveBeenCalledTimes(2));
+    act(() => result.current.pause('00000000-0000-4000-8000-000000000001'));
+    await waitFor(() => expect(transport).toHaveBeenCalledTimes(3));
+    expect(result.current.tasks.find((task) => task.id.endsWith('1'))?.status).toBe('paused');
+    act(() => result.current.resume('00000000-0000-4000-8000-000000000001'));
+    await waitFor(() => expect(starts.filter((id) => id.endsWith('1'))).toHaveLength(2));
+  });
+
+  it('defers an immediate resume until the paused transport releases its controller', async () => {
+    let rejectFirst!: (error: unknown) => void;
+    const transport = vi.fn(({ signal }: Parameters<typeof uploadFile>[0]) => {
+      if (transport.mock.calls.length > 1) return Promise.resolve();
+      return new Promise<void>((_resolve, reject) => {
+        rejectFirst = reject;
+        signal.addEventListener('abort', () => undefined, { once: true });
+      });
+    });
+    const { result } = renderHook(() => useUploadQueue({ transport, multipartUpload: true, onCompleted: () => undefined }), { wrapper });
+    act(() => result.current.enqueue('root', [new File([new Uint8Array(PART_SIZE)], 'fast-resume.bin')]));
+    await waitFor(() => expect(transport).toHaveBeenCalledOnce());
+    const id = result.current.tasks[0].id;
+
+    act(() => {
+      result.current.pause(id);
+      result.current.resume(id);
+    });
+    expect(transport).toHaveBeenCalledOnce();
+    act(() => rejectFirst(new UploadPausedError()));
+    await waitFor(() => expect(transport).toHaveBeenCalledTimes(2));
+  });
+
+  it('warns before leaving only while a resumable server session remains', async () => {
+    const transport = vi.fn((input: Parameters<typeof uploadFile>[0]) => new Promise<void>((_resolve, reject) => {
+      input.control?.onSession?.(sessionView(input.file.size));
+      input.signal.addEventListener('abort', () => reject(new DOMException('cancelled', 'AbortError')), { once: true });
+    }));
+    const { result } = renderHook(() => useUploadQueue({ transport, multipartUpload: true, onCompleted: () => undefined }), { wrapper });
+    act(() => result.current.enqueue('root', [new File([new Uint8Array(PART_SIZE)], 'leave.bin')]));
+    await waitFor(() => expect(result.current.tasks[0]?.sessionId).toBe('session-123'));
+
+    const activeEvent = new Event('beforeunload', { cancelable: true });
+    window.dispatchEvent(activeEvent);
+    expect(activeEvent.defaultPrevented).toBe(true);
+
+    act(() => result.current.cancel(result.current.tasks[0].id));
+    await waitFor(() => expect(result.current.tasks[0]?.status).toBe('cancelled'));
+    const finishedEvent = new Event('beforeunload', { cancelable: true });
+    window.dispatchEvent(finishedEvent);
+    expect(finishedEvent.defaultPrevented).toBe(false);
+  });
+});
+
+describe('upload panel', () => {
+  const wrapper = ({ children }: { children: ReactNode }) => <AppProviders>{children}</AppProviders>;
+  it('invokes pause, resume, retry, and cancel with translated accessible controls', () => {
+    const file = new File(['content'], '报告-非常长的文件名.bin');
+    const base = { id: 'task-1', parentId: 'root', file, transport: 'multipart' as const, uploadedBytes: 2, progress: 40, sessionId: 'session-1' };
+    const handlers = { onPause: vi.fn(), onResume: vi.fn(), onCancel: vi.fn(), onRetry: vi.fn(), onRemove: vi.fn(), onClearCompleted: vi.fn() };
+    const { rerender } = render(<UploadPanel tasks={[{ ...base, status: 'uploading' }]} {...handlers} />, { wrapper });
+    fireEvent.click(screen.getByRole('button', { name: `Pause ${file.name}` }));
+    expect(handlers.onPause).toHaveBeenCalledWith('task-1');
+    const pauseResume = screen.getByRole('button', { name: `Pause ${file.name}` });
+    pauseResume.focus();
+
+    rerender(<UploadPanel tasks={[{ ...base, status: 'paused' }]} {...handlers} />);
+    const resume = screen.getByRole('button', { name: `Resume ${file.name}` });
+    expect(resume).toHaveFocus();
+    fireEvent.click(resume);
+    fireEvent.click(screen.getByRole('button', { name: `Cancel ${file.name}` }));
+    expect(handlers.onResume).toHaveBeenCalledWith('task-1');
+    expect(handlers.onCancel).toHaveBeenCalledWith('task-1');
+
+    rerender(<UploadPanel tasks={[{ ...base, status: 'failed', error: 'failed' }]} {...handlers} />);
+    fireEvent.click(screen.getByRole('button', { name: `Retry ${file.name}` }));
+    expect(handlers.onRetry).toHaveBeenCalledWith('task-1');
+    expect(screen.getByText(file.name)).toBeInTheDocument();
+    expect(screen.getByRole('progressbar')).toHaveAttribute('aria-valuenow', '40');
   });
 });

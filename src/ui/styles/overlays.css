@@ -173,6 +173,7 @@
 .uploadTaskDetails strong { font-size: 13px; font-weight: 650; }
 .uploadTaskDetails span { color: var(--color-muted); font-size: 12px; }
 .uploadTask-failed .uploadTaskDetails span { color: var(--color-danger-text); }
+.uploadTaskActions { display: flex; flex: 0 0 auto; align-items: center; gap: 2px; }
 .uploadProgress { height: 4px; overflow: hidden; border-radius: 2px; background: var(--color-progress-track); }
 .uploadProgress span { display: block; height: 100%; background: var(--color-primary); transition: width 120ms linear; }
 
@@ -183,4 +184,5 @@
   .previewOverlay { width: 100%; height: 100dvh; border: 0; border-radius: 0; }
   .toastRegion { top: calc(56px + env(safe-area-inset-top)); right: 12px; width: calc(100vw - 24px); }
   .uploadPanel { border-radius: var(--radius-panel) var(--radius-panel) 0 0; }
+  .uploadTaskActions .iconButton { width: 48px; min-width: 48px; height: 48px; }
 }

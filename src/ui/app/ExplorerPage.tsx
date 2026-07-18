@@ -155,6 +155,7 @@ export function ExplorerPage({
   const canCreateFolder = admin && directory.data?.current.capabilities.createFolder === true;
   const uploads = useUploadQueue({
     canUpload,
+    multipartUpload: directory.data?.current.capabilities.multipartUpload === true,
     existingNames: directory.data?.items.map((entry) => entry.name) ?? [],
     onCompleted: (parentId) => {
       if (directory.data?.current.id === parentId) directory.refresh();
@@ -275,7 +276,7 @@ export function ExplorerPage({
           </section>
         </div>
       </main>
-      <UploadPanel tasks={uploads.tasks} onCancel={uploads.cancel} onRetry={uploads.retry} onRemove={uploads.remove} onClearCompleted={uploads.clearCompleted} />
+      <UploadPanel tasks={uploads.tasks} onPause={uploads.pause} onResume={uploads.resume} onCancel={uploads.cancel} onRetry={uploads.retry} onRemove={uploads.remove} onClearCompleted={uploads.clearCompleted} />
       <ToastRegion toasts={toasts} onDismiss={dismissToast} />
       {menu && !mobileActions ? <EntryActionMenu entry={menu.entry} anchor={menu.anchor} actions={currentEntryActions} onClose={() => setMenu(null)} /> : null}
       {menu && mobileActions ? <MobileActionSheet open title={t('entry.actions', { name: menu.entry.name })} anchor={menu.anchor} actions={currentEntryActions} translate={t} cancelLabel={t('action.cancel')} onClose={() => setMenu(null)} /> : null}
