@@ -157,6 +157,56 @@ describe('Google Drive API client', () => {
     expect(multipart).toContain('streamed-body');
   });
 
+  it('creates a private resumable session and advances 308 ranges to final metadata', async () => {
+    const sessionUrl = 'https://www.googleapis.com/upload/drive/v3/files?upload_id=private-token';
+    const calls: Array<{ url: string; init: RequestInit }> = [];
+    let part = 0;
+    const fetcher = vi.fn(async (input: RequestInfo | URL, init: RequestInit = {}) => {
+      calls.push({ url: String(input), init });
+      if (init.method === 'POST') return new Response(null, { status: 200, headers: { location: sessionUrl } });
+      if (init.method === 'PUT' && part++ === 0) return new Response(null, { status: 308, headers: { range: 'bytes=0-10485759' } });
+      if (init.method === 'PUT') return Response.json(googleFile({ id: 'uploaded-final' }));
+      return new Response(null, { status: 499 });
+    });
+    const client = new GoogleDriveClient(workerEnv(), 'mount-google', fetcher, async () => 'test-access');
+
+    const session = await client.createResumableUpload('folder-1', 'video.mp4', 12 * 1024 * 1024, 'video/mp4');
+    expect(session.sessionUrl).toBe(sessionUrl);
+    expect(session.expiresAt).toBeGreaterThan(Date.now());
+    const first = await client.uploadResumablePart(
+      session.sessionUrl, new ReadableStream(), 'bytes 0-10485759/12582912', 10 * 1024 * 1024,
+    );
+    expect(first).toEqual({ completed: false, nextOffset: 10 * 1024 * 1024 });
+    const second = await client.uploadResumablePart(
+      session.sessionUrl, new ReadableStream(), 'bytes 10485760-12582911/12582912', 2 * 1024 * 1024,
+    );
+    expect(second).toMatchObject({ completed: true, item: { id: 'uploaded-final' } });
+    await expect(client.abortResumableUpload(session.sessionUrl)).resolves.toBeUndefined();
+
+    expect(calls[0]!.url).toContain('/upload/drive/v3/files?');
+    expect(new URL(calls[0]!.url).searchParams.get('uploadType')).toBe('resumable');
+    expect(new Headers(calls[0]!.init.headers).get('x-upload-content-length')).toBe(String(12 * 1024 * 1024));
+    expect(calls.slice(1).every((call) => new Headers(call.init.headers).get('authorization') === null)).toBe(true);
+    expect(new Headers(calls[1]!.init.headers).get('content-range')).toBe('bytes 0-10485759/12582912');
+  });
+
+  it.each([
+    [404, 'GOOGLE_UPLOAD_SESSION_EXPIRED', 410],
+    [410, 'GOOGLE_UPLOAD_SESSION_EXPIRED', 410],
+    [416, 'GOOGLE_UPLOAD_SESSION_INVALID_RANGE', 409],
+    [429, 'GOOGLE_UPLOAD_SESSION_RATE_LIMITED', 503],
+    [500, 'GOOGLE_UPLOAD_SESSION_FAILED', 502],
+  ])('normalizes resumable upload status %i', async (upstream, code, status) => {
+    const sessionUrl = 'https://www.googleapis.com/upload/drive/v3/files?upload_id=private-token';
+    const client = new GoogleDriveClient(workerEnv(), 'mount-google', vi.fn(async () => new Response(null, {
+      status: upstream,
+      headers: upstream === 429 ? { 'retry-after': '30' } : undefined,
+    })), async () => 'test-access');
+
+    await expect(client.uploadResumablePart(sessionUrl, new ReadableStream(), 'bytes 0-0/1', 1))
+      .rejects.toMatchObject({ code, status });
+  });
+
   it.each([
     [401, 'GOOGLE_AUTH_FAILED', 401],
     [403, 'GOOGLE_ACCESS_DENIED', 403],

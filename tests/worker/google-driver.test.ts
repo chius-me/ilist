@@ -27,6 +27,12 @@ function client(overrides: Partial<GoogleDriveDriverClient> = {}): GoogleDriveDr
     exportFile: vi.fn(async () => new Response('exported', { headers: { 'content-type': 'application/pdf' } })),
     createFolder: vi.fn(async (_parentId, name) => file({ id: 'folder-new', name, mimeType: GOOGLE_FOLDER_MIME_TYPE, size: undefined })),
     upload: vi.fn(async (_parentId, name) => file({ id: 'file-new', name })),
+    createResumableUpload: vi.fn(async () => ({
+      sessionUrl: 'https://www.googleapis.com/upload/drive/v3/files?upload_id=private-token',
+      expiresAt: Date.now() + 60 * 60_000,
+    })),
+    uploadResumablePart: vi.fn(async () => ({ completed: false as const, nextOffset: 10 * 1024 * 1024 })),
+    abortResumableUpload: vi.fn(async () => undefined),
     rename: vi.fn(async (id, name) => file({ id, name })),
     move: vi.fn(async (id, destinationId) => file({ id, parents: [destinationId] })),
     trash: vi.fn(async (id) => file({ id, trashed: true })),
@@ -49,7 +55,7 @@ describe('Google Drive storage driver', () => {
       nextCursor: 'next-page',
     });
     expect(driver.rootId).toBe('root');
-    expect(driver.capabilities).toEqual(new Set(['list', 'download', 'upload', 'createFolder', 'rename', 'move', 'delete']));
+    expect(driver.capabilities).toEqual(new Set(['list', 'download', 'upload', 'multipartUpload', 'createFolder', 'rename', 'move', 'delete']));
     expect(driverRegistry.google).toBeTypeOf('function');
   });
 
@@ -91,6 +97,44 @@ describe('Google Drive storage driver', () => {
     expect(api.rename).toHaveBeenCalledWith('file-1', 'renamed.txt');
     expect(api.move).toHaveBeenCalledWith('file-1', 'destination');
     expect(api.trash).toHaveBeenCalledWith('file-1');
+  });
+
+  it('keeps resumable session URLs in provider state and completes on the final chunk', async () => {
+    const uploadResumablePart = vi.fn()
+      .mockResolvedValueOnce({ completed: false as const, nextOffset: 10 * 1024 * 1024 })
+      .mockResolvedValueOnce({ completed: true as const, item: file({ id: 'uploaded-final', parents: ['root'] }) });
+    const api = client({ uploadResumablePart });
+    const driver = new GoogleDriveDriver(mount, api);
+    const adapter = driver.resumableUpload!;
+    const created = await adapter.create({
+      parentId: 'root', name: 'video.mp4', size: 12 * 1024 * 1024,
+      contentType: 'video/mp4', partSize: 10 * 1024 * 1024,
+    });
+
+    expect(created.state).toMatchObject({
+      sessionUrl: expect.stringContaining('upload_id=private-token'), nextOffset: 0,
+      parentId: 'root', name: 'video.mp4', contentType: 'video/mp4',
+    });
+    const first = await adapter.uploadPart({
+      state: created.state, partNumber: 1, offset: 0, totalSize: 12 * 1024 * 1024,
+      body: new ReadableStream(), size: 10 * 1024 * 1024, signal: new AbortController().signal,
+    });
+    expect(first.state).toMatchObject({ nextOffset: 10 * 1024 * 1024 });
+    expect(first.completedItem).toBeUndefined();
+    const second = await adapter.uploadPart({
+      state: first.state!, partNumber: 2, offset: 10 * 1024 * 1024, totalSize: 12 * 1024 * 1024,
+      body: new ReadableStream(), size: 2 * 1024 * 1024, signal: new AbortController().signal,
+    });
+    expect(second.completedItem).toMatchObject({ id: 'uploaded-final', parentId: 'root' });
+    await expect(adapter.complete({ state: first.state!, parts: [first.part, second.part], completedItem: second.completedItem }))
+      .resolves.toMatchObject({ id: 'uploaded-final' });
+    await adapter.abort(first.state!);
+
+    expect(uploadResumablePart).toHaveBeenNthCalledWith(
+      1, expect.stringContaining('upload_id=private-token'), expect.anything(),
+      'bytes 0-10485759/12582912', 10 * 1024 * 1024, expect.objectContaining({ signal: expect.anything() }),
+    );
+    expect(api.abortResumableUpload).toHaveBeenCalledWith(expect.stringContaining('upload_id=private-token'));
   });
 
   it('rejects reads and mutations outside a configured mount sub-root', async () => {

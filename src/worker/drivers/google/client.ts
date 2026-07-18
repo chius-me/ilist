@@ -27,6 +27,15 @@ export interface GoogleListResult {
   nextCursor: string | null;
 }
 
+export interface GoogleUploadSession {
+  sessionUrl: string;
+  expiresAt: number;
+}
+
+export type GoogleUploadPartResult =
+  | { completed: false; nextOffset: number }
+  | { completed: true; item: GoogleFile };
+
 interface GoogleListPayload {
   files?: GoogleFile[];
   nextPageToken?: string;
@@ -50,6 +59,37 @@ function validRange(value: string | null): string | null {
     throw new HttpError(400, 'INVALID_RANGE', 'Range header is invalid');
   }
   return value.trim();
+}
+
+function validatedSessionUrl(value: unknown): string {
+  if (typeof value !== 'string') throw new HttpError(502, 'GOOGLE_UPLOAD_SESSION_INVALID', 'Google upload session is invalid');
+  try {
+    const url = new URL(value);
+    if (url.protocol !== 'https:') throw new Error('Invalid protocol');
+    return url.toString();
+  } catch {
+    throw new HttpError(502, 'GOOGLE_UPLOAD_SESSION_INVALID', 'Google upload session is invalid');
+  }
+}
+
+function retryAfter(value: string | null): { retryAfter: number } | undefined {
+  if (value === null || !/^\d+$/.test(value.trim())) return undefined;
+  const seconds = Number(value.trim());
+  return Number.isSafeInteger(seconds) ? { retryAfter: seconds } : undefined;
+}
+
+function uploadSessionError(response: Response): HttpError {
+  const details = retryAfter(response.headers.get('retry-after'));
+  if (response.status === 404 || response.status === 410) {
+    return new HttpError(410, 'GOOGLE_UPLOAD_SESSION_EXPIRED', 'Google upload session has expired');
+  }
+  if (response.status === 416) {
+    return new HttpError(409, 'GOOGLE_UPLOAD_SESSION_INVALID_RANGE', 'Google upload part range is invalid');
+  }
+  if (response.status === 429) {
+    return new HttpError(503, 'GOOGLE_UPLOAD_SESSION_RATE_LIMITED', 'Google upload session is temporarily rate limited', details);
+  }
+  return new HttpError(502, 'GOOGLE_UPLOAD_SESSION_FAILED', 'Google upload session request failed', details);
 }
 
 function safeResponse(response: Response): Response {
@@ -193,6 +233,70 @@ export class GoogleDriveClient {
     });
   }
 
+  async createResumableUpload(
+    parentId: string,
+    name: string,
+    size: number,
+    contentType: string | null,
+  ): Promise<GoogleUploadSession> {
+    const url = new URL(`${DRIVE_UPLOAD_BASE}/files`);
+    url.searchParams.set('uploadType', 'resumable');
+    url.searchParams.set('fields', FILE_FIELDS);
+    const response = await this.request(url.toString(), {
+      method: 'POST',
+      headers: {
+        'content-type': 'application/json; charset=UTF-8',
+        'x-upload-content-length': String(size),
+        'x-upload-content-type': contentType ?? 'application/octet-stream',
+      },
+      body: JSON.stringify({ name, parents: [parentId] }),
+    });
+    const sessionUrl = validatedSessionUrl(response.headers.get('location'));
+    return { sessionUrl, expiresAt: Date.now() + 6 * 24 * 60 * 60_000 };
+  }
+
+  async uploadResumablePart(
+    sessionUrl: string,
+    body: ReadableStream,
+    contentRange: string,
+    contentLength: number,
+    options: { signal?: AbortSignal } = {},
+  ): Promise<GoogleUploadPartResult> {
+    const response = await this.requestUploadSession(sessionUrl, {
+      method: 'PUT',
+      headers: {
+        'content-length': String(contentLength),
+        'content-type': 'application/octet-stream',
+        'content-range': contentRange,
+      },
+      body: body as BodyInit,
+      signal: options.signal,
+    });
+    if (response.status === 308) {
+      const range = response.headers.get('range');
+      if (range === null) return { completed: false, nextOffset: 0 };
+      const match = /^bytes=0-(\d+)$/.exec(range);
+      if (!match) throw new HttpError(502, 'GOOGLE_UPLOAD_SESSION_INVALID', 'Google upload session is invalid');
+      const lastByte = Number(match[1]);
+      if (!Number.isSafeInteger(lastByte)) throw new HttpError(502, 'GOOGLE_UPLOAD_SESSION_INVALID', 'Google upload session is invalid');
+      return { completed: false, nextOffset: lastByte + 1 };
+    }
+    if (response.status !== 200 && response.status !== 201) {
+      throw new HttpError(502, 'GOOGLE_UPLOAD_SESSION_INVALID', 'Google upload session is invalid');
+    }
+    try {
+      return { completed: true, item: await response.json<GoogleFile>() };
+    } catch {
+      throw new HttpError(502, 'GOOGLE_UPLOAD_SESSION_INVALID', 'Google upload session is invalid');
+    }
+  }
+
+  async abortResumableUpload(sessionUrl: string): Promise<void> {
+    const response = await this.requestUploadSession(sessionUrl, { method: 'DELETE' }, true);
+    if (response.ok || response.status === 404 || response.status === 410 || response.status === 499) return;
+    throw uploadSessionError(response);
+  }
+
   rename(itemId: string, name: string): Promise<GoogleFile> {
     return this.updateMetadata(itemId, { name });
   }
@@ -260,5 +364,25 @@ export class GoogleDriveClient {
     }
     if (!response.ok) throw await googleError(response);
     return response;
+  }
+
+  private async requestUploadSession(
+    sessionUrl: string,
+    init: RequestInit,
+    allowTerminalStatus = false,
+  ): Promise<Response> {
+    const url = validatedSessionUrl(sessionUrl);
+    const headers = new Headers(init.headers);
+    headers.delete('authorization');
+    let response: Response;
+    try {
+      response = await this.fetcher.call(globalThis, url, { ...init, headers });
+    } catch {
+      throw new HttpError(502, 'GOOGLE_UPLOAD_SESSION_FAILED', 'Google upload session request failed');
+    }
+    if (response.status === 308 || response.ok || (allowTerminalStatus && [404, 410, 499].includes(response.status))) {
+      return response;
+    }
+    throw uploadSessionError(response);
   }
 }

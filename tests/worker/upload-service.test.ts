@@ -29,6 +29,7 @@ const ownerSessionId = 'upload-service-owner';
 const otherOwnerSessionId = 'upload-service-other-owner';
 const originalOneDriveFactory = driverRegistry.onedrive;
 const originalS3Factory = driverRegistry.s3;
+const originalGoogleFactory = driverRegistry.google;
 
 const workerEnv = () => env as unknown as Env;
 
@@ -96,7 +97,7 @@ async function insertOwner(id: string): Promise<void> {
     .run();
 }
 
-async function mount(driverType: 'onedrive' | 's3' = 'onedrive', name: string = crypto.randomUUID()): Promise<Mount> {
+async function mount(driverType: 'onedrive' | 's3' | 'google' = 'onedrive', name: string = crypto.randomUUID()): Promise<Mount> {
   return createMount(workerEnv().DB, {
     name: `Upload ${name}`,
     mountPath: `/upload-${name}`,
@@ -231,6 +232,19 @@ describe('upload lifecycle service', () => {
   afterEach(() => {
     driverRegistry.onedrive = originalOneDriveFactory;
     driverRegistry.s3 = originalS3Factory;
+    driverRegistry.google = originalGoogleFactory;
+  });
+
+  it('uses the common encrypted session service for Google mounts without exposing provider state', async () => {
+    const mounted = await mount('google');
+    const driver = fakeDriver('google');
+    driverRegistry.google = () => driver;
+
+    const view = await createResumableUpload(workerEnv(), ownerSessionId, createInput(mounted));
+
+    expect(view).toMatchObject({ kind: 'multipart', status: 'active', partSize: UPLOAD_PART_SIZE_BYTES });
+    expect(JSON.stringify(view)).not.toMatch(/uploadUrl|uploadId|integrityProof|private/);
+    expect(driver.resumableUpload?.create).toHaveBeenCalledOnce();
   });
 
   it('creates a safe server-sized session only for a supported external folder', async () => {
