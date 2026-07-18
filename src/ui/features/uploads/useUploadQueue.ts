@@ -25,6 +25,7 @@ interface PersistedUploadSession {
   uploadedBytes: number;
   uploadedParts: number[];
   partCount: number;
+  lastModified?: number;
 }
 
 interface UploadQueueOptions {
@@ -131,11 +132,13 @@ export function useUploadQueue({ transport = uploadFile, onCompleted, canUpload 
           const local = persisted.get(session.id);
           const name = session.name ?? local?.name ?? 'upload.bin';
           const size = session.size;
+          // Prefer the explorer-encoded parent from local persistence; server now also returns encoded IDs.
+          const parentId = local?.parentId || session.parentItemId || '';
           const uploadedBytes = session.uploadedBytes ?? local?.uploadedBytes ?? 0;
           const partCount = Math.ceil(size / session.partSize);
           return {
             id: crypto.randomUUID(),
-            parentId: session.parentItemId ?? local?.parentId ?? '',
+            parentId,
             file: placeholderFile(name, size),
             transport: 'multipart' as const,
             status: 'failed' as const,
@@ -147,6 +150,8 @@ export function useUploadQueue({ transport = uploadFile, onCompleted, canUpload 
             needsRebind: true,
             fileName: name,
             expectedSize: size,
+            // Only trust lastModified when we persisted it from the original File selection.
+            ...(typeof local?.lastModified === 'number' ? { expectedLastModified: local.lastModified } : {}),
             error: t('upload.rebindRequired'),
           };
         });
@@ -161,10 +166,11 @@ export function useUploadQueue({ transport = uploadFile, onCompleted, canUpload 
         sessionId: task.sessionId!,
         parentId: task.parentId,
         name: task.fileName ?? task.file.name,
-        size: task.file.size || 0,
+        size: task.expectedSize ?? task.file.size ?? 0,
         uploadedBytes: task.uploadedBytes,
         uploadedParts: task.uploadedParts ?? [],
         partCount: task.partCount ?? 0,
+        ...(task.expectedLastModified !== undefined ? { lastModified: task.expectedLastModified } : {}),
       }));
     writePersistedSessions(next);
   }, [tasks]);
@@ -194,7 +200,9 @@ export function useUploadQueue({ transport = uploadFile, onCompleted, canUpload 
       const multipart = task.transport === 'multipart';
       const control = controls.current.get(task.id) ?? resumableControl(task, dispatch);
       control.paused = false;
-      if (task.sessionId) control.sessionId = task.sessionId;
+      // Restart sessions intentionally drop control.sessionId so parts are not mixed.
+      if (task.restartSession) control.sessionId = undefined;
+      else if (task.sessionId) control.sessionId = task.sessionId;
       controls.current.set(task.id, control);
       controllers.current.set(task.id, controller);
       dispatch({ type: 'started', id: task.id, multipart });
@@ -240,8 +248,17 @@ export function useUploadQueue({ transport = uploadFile, onCompleted, canUpload 
       if (!error) occupiedNames.add(file.name);
       const transportKind = multipartUpload && file.size >= LARGE_UPLOAD_THRESHOLD_BYTES ? 'multipart' : 'single';
       return {
-        id: crypto.randomUUID(), parentId, file, transport: transportKind,
-        status: error ? 'failed' : 'queued', uploadedBytes: 0, progress: 0, fileName: file.name, ...(error ? { error } : {}),
+        id: crypto.randomUUID(),
+        parentId,
+        file,
+        transport: transportKind,
+        status: error ? 'failed' : 'queued',
+        uploadedBytes: 0,
+        progress: 0,
+        fileName: file.name,
+        expectedSize: file.size,
+        expectedLastModified: file.lastModified,
+        ...(error ? { error } : {}),
       };
     });
     if (additions.length) dispatch({ type: 'enqueue', tasks: additions });
@@ -279,7 +296,14 @@ export function useUploadQueue({ transport = uploadFile, onCompleted, canUpload 
   }, [tasks]);
 
   const retry = useCallback((id: string) => dispatch({ type: 'retry', id }), []);
-  const rebind = useCallback((id: string, file: File) => dispatch({ type: 'rebind', id, file }), []);
+  const rebind = useCallback((id: string, file: File) => {
+    const task = tasks.find((candidate) => candidate.id === id);
+    // When identity cannot be proven, abort the old server session before starting clean.
+    if (task?.sessionId && task.expectedLastModified === undefined) {
+      void abortUploadSession(task.sessionId).catch(() => undefined);
+    }
+    dispatch({ type: 'rebind', id, file });
+  }, [tasks]);
   const remove = useCallback((id: string) => {
     controls.current.delete(id);
     pendingResumes.current.delete(id);

@@ -18,7 +18,9 @@ export function UploadTaskRow({ task, onPause, onResume, onCancel, onRetry, onRe
   const fileInput = useRef<HTMLInputElement>(null);
   const displayName = task.fileName ?? task.file.name;
   const displaySize = task.file.size || 0;
-  const status = task.needsRebind
+  const status = task.error === 'FILE_IDENTITY_MISMATCH'
+    ? t('upload.fileIdentityMismatch')
+    : task.needsRebind
     ? t('upload.rebindRequired')
     : task.status === 'creating'
       ? t('upload.creating')
@@ -47,7 +49,7 @@ export function UploadTaskRow({ task, onPause, onResume, onCancel, onRetry, onRe
     <li className={`uploadTask uploadTask-${task.status}`}>
       <div className="uploadTaskDetails">
         <strong title={displayName}>{displayName}</strong>
-        <span>{task.error || t('upload.progress', { uploaded: formatBytes(task.uploadedBytes), total: formatBytes(displaySize), status })}</span>
+        <span>{(task.error && task.error !== 'FILE_IDENTITY_MISMATCH' ? task.error : null) || t('upload.progress', { uploaded: formatBytes(task.uploadedBytes), total: formatBytes(displaySize), status })}</span>
         {showProgress ? <div className="uploadProgress" role="progressbar" aria-valuemin={0} aria-valuemax={100} aria-valuenow={task.progress} aria-label={t('upload.progressLabel', { name: displayName, progress: task.progress })}><span style={{ width: `${task.progress}%` }} /></div> : null}
       </div>
       <div className="uploadTaskActions">

@@ -417,10 +417,16 @@ async function copyNativeEntryTree(
     if (!await insertEntryUnderReadyParent(env.DB, folder)) {
       throw new HttpError(404, 'ENTRY_NOT_FOUND', 'Folder not found');
     }
-    for (const child of await listChildRows(env.DB, source.id)) {
-      await copyNativeEntryTree(env, child, newId);
+    try {
+      for (const child of await listChildRows(env.DB, source.id)) {
+        await copyNativeEntryTree(env, child, newId);
+      }
+      return newId;
+    } catch (error) {
+      // Roll back the provisional destination tree so retries are not blocked by a name conflict.
+      await deleteEntryTrees(env, [newId]).catch(() => undefined);
+      throw error;
     }
-    return newId;
   }
 
   if (!source.storage_key) throw new HttpError(500, 'STORAGE_KEY_MISSING', 'File storage key is missing');

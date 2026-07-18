@@ -265,7 +265,7 @@ describe('upload lifecycle service', () => {
       expiresAt: expect.any(String),
       status: 'active',
       name: 'archive.bin',
-      parentItemId: 'folder',
+      parentItemId: expect.stringMatching(/^ext_/),
       mountId: mounted.id,
       uploadedBytes: 0,
     });

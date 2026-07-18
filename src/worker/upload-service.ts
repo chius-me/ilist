@@ -27,6 +27,7 @@ import {
   touchUploadSessionCleanupAttempt,
   type UploadSessionRecord,
 } from './upload-session-store';
+import { encodeExternalId } from './external-identity';
 import type { Env, Mount, MountEntry, UploadSessionStatus } from './types';
 
 const PART_CLAIM_DURATION_MS = 5 * 60_000;
@@ -213,7 +214,8 @@ function toSessionView(record: UploadSessionRecord): UploadSessionView {
     expiresAt: expirationIso(record.expiresAt),
     status: record.status,
     name: record.name,
-    parentItemId: record.parentItemId,
+    // Explorer uses mount-scoped external IDs; store raw provider id but expose encoded.
+    parentItemId: encodeExternalId(record.mountId, record.parentItemId),
     mountId: record.mountId,
     uploadedBytes: record.parts.reduce((total, part) => total + part.size, 0),
   };

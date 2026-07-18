@@ -17,6 +17,16 @@ export interface UploadTask {
   fileName?: string;
   /** Expected total size from the server session (used when rebinding after reload). */
   expectedSize?: number;
+  /**
+   * File.lastModified captured when the upload was first enqueued.
+   * When missing (restored only from the server), rebind restarts the session.
+   */
+  expectedLastModified?: number;
+  /**
+   * When true, the next multipart start must create a new server session
+   * (previous parts are not trusted for the rebound file).
+   */
+  restartSession?: boolean;
   error?: string;
 }
 
@@ -53,6 +63,7 @@ export function uploadReducer(tasks: UploadTask[], action: UploadAction): Upload
       ...task,
       status: task.status === 'paused' ? 'paused' : 'uploading',
       sessionId: action.sessionId,
+      restartSession: false,
       uploadedParts: action.uploadedParts,
       partCount: action.partCount,
       uploadedBytes: Math.max(task.uploadedBytes, action.uploadedBytes),
@@ -85,20 +96,42 @@ export function uploadReducer(tasks: UploadTask[], action: UploadAction): Upload
     if (action.type === 'cancelled') return { ...task, status: 'cancelled', error: undefined };
     if (action.type === 'retry') {
       if (task.needsRebind) return task;
-      if (task.transport === 'multipart' && task.sessionId) return { ...task, status: 'queued', error: undefined };
+      if (task.transport === 'multipart' && task.sessionId && !task.restartSession) {
+        return { ...task, status: 'queued', error: undefined };
+      }
       return { ...task, status: 'queued', uploadedBytes: 0, progress: 0, error: undefined };
     }
     if (action.type === 'rebind') {
       if (task.fileName && action.file.name !== task.fileName) return task;
       const expectedSize = task.expectedSize ?? task.file.size;
       if (expectedSize > 0 && action.file.size !== expectedSize) return task;
+
+      // Strong identity: when we know lastModified, require an exact match to reuse parts.
+      if (task.expectedLastModified !== undefined && action.file.lastModified !== task.expectedLastModified) {
+        return {
+          ...task,
+          error: 'FILE_IDENTITY_MISMATCH',
+        };
+      }
+
+      // Restored-from-server sessions have no lastModified — restart rather than hybrid parts.
+      const mustRestart = task.expectedLastModified === undefined;
       return {
         ...task,
         file: action.file,
         expectedSize: action.file.size,
+        expectedLastModified: action.file.lastModified,
+        fileName: action.file.name,
         needsRebind: false,
         status: 'queued',
         error: undefined,
+        ...(mustRestart ? {
+          sessionId: undefined,
+          uploadedParts: [],
+          uploadedBytes: 0,
+          progress: 0,
+          restartSession: true,
+        } : {}),
       };
     }
     if (action.type === 'released') return task;

@@ -214,6 +214,7 @@ export async function handleSharePublicRoutes(
     if (fileMatch) {
       if (request.method !== 'GET' && request.method !== 'HEAD') return methodNotAllowed();
       const download = url.searchParams.get('download') === '1';
+      const itemHandle = decodePathValue(fileMatch[1]);
       if (download) {
         if (!share.allowDownload) {
           throw new HttpError(403, 'SHARE_DOWNLOAD_DISABLED', 'Downloads are disabled for this share');
@@ -221,16 +222,17 @@ export async function handleSharePublicRoutes(
         if (isShareDownloadLimitReached(share)) {
           throw new HttpError(403, 'SHARE_DOWNLOAD_LIMIT', 'Share download limit has been reached');
         }
+        // Validate the sealed handle / target before consuming limited download quota.
+        const resolved = await resolveSharedItem(env, share, itemHandle);
+        if (resolved.item.kind !== 'file') throw new HttpError(400, 'NOT_A_FILE', 'Shared item is not a file');
         if (request.method === 'GET' && !await tryConsumeShareDownload(env.DB, share.id)) {
           throw new HttpError(403, 'SHARE_DOWNLOAD_LIMIT', 'Share download limit has been reached');
         }
-      } else if (!share.allowDownload && isShareDownloadLimitReached(share)) {
-        // Previews remain available unless downloads were never allowed; limits only block downloads.
       }
       return privateNoStore(await downloadSharedFile(
         env,
         share,
-        decodePathValue(fileMatch[1]),
+        itemHandle,
         request,
         download,
       ));
