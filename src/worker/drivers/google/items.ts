@@ -5,6 +5,7 @@ export const GOOGLE_FOLDER_MIME_TYPE = 'application/vnd.google-apps.folder';
 export const GOOGLE_DOC_MIME_TYPE = 'application/vnd.google-apps.document';
 export const GOOGLE_SHEET_MIME_TYPE = 'application/vnd.google-apps.spreadsheet';
 export const GOOGLE_SLIDE_MIME_TYPE = 'application/vnd.google-apps.presentation';
+const GOOGLE_NATIVE_MIME_PREFIX = 'application/vnd.google-apps.';
 
 const PDF = { format: 'pdf', label: 'PDF', extension: 'pdf', contentType: 'application/pdf' };
 
@@ -28,6 +29,10 @@ export function googleExportOptions(mimeType: string) {
     }];
   }
   return undefined;
+}
+
+export function isGoogleNativeFile(mimeType: string): boolean {
+  return mimeType.startsWith(GOOGLE_NATIVE_MIME_PREFIX) && mimeType !== GOOGLE_FOLDER_MIME_TYPE;
 }
 
 function fileSize(value: string | undefined): number | null {

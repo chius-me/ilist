@@ -130,6 +130,33 @@ describe('Google Drive API client', () => {
     expect(calls.some((call) => call.init.method === 'DELETE')).toBe(false);
   });
 
+  it('streams small uploads as multipart metadata and media', async () => {
+    let requestInit: RequestInit | undefined;
+    const fetcher = vi.fn(async (_input: RequestInfo | URL, init?: RequestInit) => {
+      requestInit = init;
+      return Response.json(googleFile({ id: 'uploaded' }));
+    });
+    const client = new GoogleDriveClient(workerEnv(), 'mount-google', fetcher, async () => 'test-access');
+    const body = new ReadableStream<Uint8Array>({
+      start(controller) {
+        controller.enqueue(new TextEncoder().encode('streamed-body'));
+        controller.close();
+      },
+    });
+
+    await expect(client.upload('folder-1', '中文.txt', body, 'text/plain')).resolves.toMatchObject({ id: 'uploaded' });
+
+    const url = new URL(String(fetcher.mock.calls[0]![0]));
+    expect(url.origin).toBe('https://www.googleapis.com');
+    expect(url.pathname).toBe('/upload/drive/v3/files');
+    expect(url.searchParams.get('uploadType')).toBe('multipart');
+    expect(new Headers(requestInit?.headers).get('content-type')).toMatch(/^multipart\/related; boundary=/);
+    const multipart = await new Response(requestInit?.body).text();
+    expect(multipart).toContain('"name":"中文.txt"');
+    expect(multipart).toContain('"parents":["folder-1"]');
+    expect(multipart).toContain('streamed-body');
+  });
+
   it.each([
     [401, 'GOOGLE_AUTH_FAILED', 401],
     [403, 'GOOGLE_ACCESS_DENIED', 403],
