@@ -1,5 +1,11 @@
+/*
+ * ilist design tokens — see docs/frontend-design-system.md
+ * Dials: DESIGN_VARIANCE=2, MOTION_INTENSITY=2, VISUAL_DENSITY=7
+ */
 :root {
   color-scheme: light;
+
+  /* Color — warm stone + single terracotta accent family */
   --color-page: #f2f2f1;
   --color-surface: #ffffff;
   --color-surface-raised: #ffffff;
@@ -30,18 +36,38 @@
   --color-media-canvas: #171716;
   --color-scrim: rgb(23 23 22 / 38%);
   --color-scrim-strong: rgb(23 23 22 / 52%);
+
+  /* Focus / elevation / motion */
   --focus-ring: 0 0 0 3px rgb(217 96 55 / 28%);
   --shadow-raised: 0 12px 30px rgb(64 47 39 / 12%);
+  --transition: 140ms ease;
+
+  /* Shape scale (one system) */
   --radius-control: 5px;
   --radius-panel: 7px;
+  --radius-media: 6px;
+
+  /* Spacing scale (4px base) */
+  --space-1: 4px;
+  --space-2: 8px;
+  --space-3: 12px;
+  --space-4: 16px;
+  --space-5: 24px;
   --control-size: 36px;
+  --control-size-sm: 34px;
+
+  /* Layers */
   --layer-header: 10;
+  --layer-sticky: 20;
   --layer-menu: 30;
   --layer-overlay: 40;
   --layer-toast: 50;
-  --transition: 140ms ease;
 
-  /* Temporary aliases keep feature styles stable until their scoped redesigns. */
+  /*
+   * Intentional short aliases (not a second palette).
+   * Prefer --color-* / --radius-* in new CSS; aliases exist for dense feature sheets.
+   * See docs/frontend-design-system.md § Intentional CSS aliases.
+   */
   --bg: var(--color-page);
   --surface: var(--color-surface);
   --surface-muted: var(--color-surface-muted);

@@ -1,7 +1,6 @@
 import { AlertCircle, LoaderCircle, RefreshCw } from 'lucide-react';
 import { useCallback, useEffect, useMemo, useRef, useState, type DragEvent } from 'react';
 import { copyEntries, createFolder, deleteEntries, entryPath, getEntry, moveEntries, patchEntry, setVisibility } from '../api/entries';
-import { ApiError } from '../api/client';
 import { ToastRegion, type ToastMessage, type ToastTone } from '../components/ToastRegion';
 import { EmptyState } from '../features/explorer/EmptyState';
 import { entryActions, EntryActionMenu, type EntryActionId } from '../features/explorer/EntryActionMenu';
@@ -24,17 +23,12 @@ import { useSelection } from '../hooks/useSelection';
 import type { useSession } from '../hooks/useSession';
 import { useI18n } from '../i18n/I18nProvider';
 import { localizedApiError } from '../i18n/apiErrors';
+import { scheduleDeferredFeedback } from '../lib/deferred-feedback';
+import { directoryErrorHint, directoryErrorTitle } from '../lib/directory-errors';
+import { DIRECTORY_QUERY_DEBOUNCE_MS, normalizeDirectoryQuery } from '../lib/directory-query';
+import { sortEntries } from '../lib/explorer-sort';
 import { usePreferences } from '../preferences/PreferencesProvider';
 import { isEntryMutable, type Entry } from '../types/entries';
-
-function compareEntries(left: Entry, right: Entry, sort: ExplorerSort): number {
-  if (left.kind !== right.kind) return left.kind === 'folder' ? -1 : 1;
-  const direction = sort.order === 'asc' ? 1 : -1;
-  let result = 0;
-  if (sort.field === 'size') result = left.size - right.size;
-  if (sort.field === 'updated') result = new Date(left.updatedAt).getTime() - new Date(right.updatedAt).getTime();
-  return (result || left.name.localeCompare(right.name, undefined, { numeric: true, sensitivity: 'base' })) * direction;
-}
 
 function LoadingCollection({ view, label }: { view: ExplorerView; label: string }) {
   if (view === 'grid') {
@@ -47,18 +41,6 @@ function LoadingCollection({ view, label }: { view: ExplorerView; label: string 
       {[0, 1, 2, 3, 4].map((row) => <div className="loadingRow" key={row}><span /><span /><span /></div>)}
     </div>
   );
-}
-
-function directoryErrorTitle(error: Error, t: ReturnType<typeof useI18n>['t']): string {
-  if (error instanceof ApiError && error.code === 'MOUNT_DISABLED') return t('state.disconnected');
-  if (error instanceof ApiError && (error.status === 404 || error.code === 'ENTRY_NOT_FOUND' || error.code === 'MOUNT_NOT_FOUND')) return t('state.unavailable');
-  return t('state.loadFailed');
-}
-
-function directoryErrorHint(error: Error, t: ReturnType<typeof useI18n>['t']): string {
-  if (error instanceof ApiError && error.code === 'MOUNT_DISABLED') return t('state.disconnectedHint');
-  if (error instanceof ApiError && (error.status === 404 || error.code === 'ENTRY_NOT_FOUND' || error.code === 'MOUNT_NOT_FOUND')) return t('state.unavailableHint');
-  return localizedApiError(error, t, 'state.loadFailed');
 }
 
 export interface ExplorerPageProps {
@@ -134,15 +116,17 @@ export function ExplorerPage({
   }, [path, selection.clear]);
 
   useEffect(() => {
-    const handle = window.setTimeout(() => setServerQuery(query.trim()), 200);
+    const handle = window.setTimeout(
+      () => setServerQuery(normalizeDirectoryQuery(query)),
+      DIRECTORY_QUERY_DEBOUNCE_MS,
+    );
     return () => window.clearTimeout(handle);
   }, [query]);
 
-  const entries = useMemo(() => {
-    return (directory.data?.items ?? [])
-      .slice()
-      .sort((left, right) => compareEntries(left, right, sort));
-  }, [directory.data, sort]);
+  const entries = useMemo(
+    () => sortEntries(directory.data?.items ?? [], sort),
+    [directory.data, sort],
+  );
 
   const admin = session.status === 'admin';
   const mutableVisibleIds = useMemo(() => admin ? entries.filter(isEntryMutable).map((entry) => entry.id) : [], [admin, entries]);
@@ -291,12 +275,12 @@ export function ExplorerPage({
         await patchEntry(dialog.entries[0].id, { name });
         directory.refresh();
         // Defer toast until after RenameDialog closes and clears modal inert.
-        queueMicrotask(() => { pushToast('success', t('feedback.renamed')); });
+        scheduleDeferredFeedback(() => { pushToast('success', t('feedback.renamed')); });
       }} /> : null}
       {dialog?.type === 'create' && directory.data && canCreateFolder ? <RenameDialog open title={t('toolbar.createFolder')} submitLabel={t('common.save')} onClose={() => setDialog(null)} onSubmit={async (name) => {
         await createFolder(directory.data!.current.id, name);
         directory.refresh();
-        queueMicrotask(() => { pushToast('success', t('feedback.folderCreated')); });
+        scheduleDeferredFeedback(() => { pushToast('success', t('feedback.folderCreated')); });
       }} /> : null}
       {dialog?.type === 'move' ? <FolderPickerDialog entries={dialog.entries} onClose={() => setDialog(null)} onSubmit={(destinationId) => runBatch(() => moveEntries(dialog.entries.map((entry) => entry.id), destinationId))} /> : null}
       {dialog?.type === 'copy' ? <FolderPickerDialog entries={dialog.entries} onClose={() => setDialog(null)} onSubmit={(destinationId) => runBatch(() => copyEntries(dialog.entries.map((entry) => entry.id), destinationId))} /> : null}
@@ -304,7 +288,7 @@ export function ExplorerPage({
       {dialog?.type === 'properties' ? <PropertiesDialog entry={dialog.entries[0]} onClose={() => setDialog(null)} onSubmit={async (entryPatch) => {
         await patchEntry(dialog.entries[0].id, entryPatch);
         directory.refresh();
-        queueMicrotask(() => { pushToast('success', t('feedback.propertiesSaved')); });
+        scheduleDeferredFeedback(() => { pushToast('success', t('feedback.propertiesSaved')); });
       }} /> : null}
       {dialog?.type === 'share' ? <ShareDialog entry={dialog.entries[0]} busy={operationPending} error={shareError} onClose={() => { setDialog(null); setShareError(null); }} onCreate={async (input) => { setOperationPending(true); setShareError(null); try { return await createShare(input); } catch (error) { setShareError(localizedApiError(error, t, 'share.unableSave')); throw error; } finally { setOperationPending(false); } }} /> : null}
       {previewId ? <PreviewOverlay entry={previewEntry} loading={previewLoading} error={previewError} onClose={onClosePreview} /> : null}

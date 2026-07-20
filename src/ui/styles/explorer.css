@@ -7,7 +7,7 @@
 .explorerBrowser {
   overflow: hidden;
   border: 1px solid var(--line);
-  border-radius: 8px;
+  border-radius: var(--radius-panel);
   background: var(--surface);
 }
 
@@ -37,7 +37,7 @@
   min-height: 30px;
   overflow: hidden;
   border: 0;
-  border-radius: 4px;
+  border-radius: var(--space-1);
   background: transparent;
   padding: 4px 5px;
   text-overflow: ellipsis;
@@ -70,7 +70,7 @@
 .searchControl input { min-width: 0; width: 100%; height: 34px; border: 0; outline: 0; background: transparent; color: var(--text); }
 .searchOverlay { width: 100%; min-width: 0; max-width: 360px; }
 
-.toolbarActions { position: relative; z-index: 2; margin-left: auto; display: flex; flex: 0 0 auto; align-items: center; justify-content: flex-end; gap: 6px; }
+.toolbarActions { position: relative; z-index: var(--layer-sticky); margin-left: auto; display: flex; flex: 0 0 auto; align-items: center; justify-content: flex-end; gap: 6px; }
 
 .sortControl select {
   width: auto;
@@ -159,7 +159,7 @@
   text-align: left;
 }
 
-.entryIcon { display: grid; width: 28px; height: 28px; place-items: center; border-radius: 4px; }
+.entryIcon { display: grid; width: 28px; height: 28px; place-items: center; border-radius: var(--space-1); }
 .entryIcon.folder, .gridIcon.folder { color: var(--color-folder-icon); background: var(--color-folder-icon-surface); }
 .entryIcon.file, .gridIcon.file { color: var(--color-file-icon); background: var(--color-file-icon-surface); }
 .entryName { min-width: 0; overflow: hidden; color: var(--text); font-size: 13px; font-weight: 650; text-overflow: ellipsis; white-space: nowrap; }
@@ -174,12 +174,12 @@
   padding: 12px;
 }
 
-.fileCard { position: relative; min-width: 0; overflow: hidden; border: 1px solid var(--line); border-radius: 8px; background: var(--color-surface); }
+.fileCard { position: relative; min-width: 0; overflow: hidden; border: 1px solid var(--line); border-radius: var(--radius-panel); background: var(--color-surface); }
 .fileCard:hover { border-color: var(--color-border-strong); background: var(--color-hover); }
 .fileCard.isSelected { border-color: var(--accent); background: var(--accent-soft); }
 .gridPrimary { display: block; width: 100%; border: 0; background: transparent; padding: 0; text-align: left; }
 .gridMedia { display: grid; width: 100%; aspect-ratio: 4 / 3; place-items: center; border-bottom: 1px solid var(--line); background: var(--color-surface-muted); }
-.gridIcon { display: grid; width: 48px; height: 48px; place-items: center; border-radius: 8px; }
+.gridIcon { display: grid; width: 48px; height: 48px; place-items: center; border-radius: var(--radius-panel); }
 .gridFooter { display: grid; min-height: 54px; align-content: center; gap: 3px; padding: 8px 38px 8px 10px; }
 .gridFooter strong, .gridFooter small { width: 100%; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .gridFooter strong { color: var(--text); font-size: 13px; }
@@ -193,11 +193,11 @@
 .errorState { color: var(--danger); }
 .retryBanner { display: flex; align-items: center; min-height: 42px; gap: 8px; border-bottom: 1px solid var(--color-danger-border); background: var(--danger-soft); color: var(--color-danger-text); padding: 7px 12px; font-size: 13px; }
 .retryBanner span { flex: 1 1 auto; min-width: 0; }
-.retryBanner button { display: inline-flex; align-items: center; gap: 5px; flex: 0 0 auto; border: 0; border-radius: 4px; background: transparent; color: inherit; padding: 5px; font-weight: 700; }
+.retryBanner button { display: inline-flex; align-items: center; gap: 5px; flex: 0 0 auto; border: 0; border-radius: var(--space-1); background: transparent; color: inherit; padding: 5px; font-weight: 700; }
 .retryBanner button:hover { background: var(--color-danger-hover); }
 .loadingRows { display: grid; padding: 0; }
 .loadingRow { display: grid; grid-template-columns: 28px minmax(160px, 1fr) 96px; align-items: center; height: 36px; gap: 8px; border-bottom: 1px solid var(--color-border); padding: 4px 8px; }
-.loadingRow span { display: block; height: 12px; border-radius: 3px; background: var(--color-skeleton); animation: skeleton 1.1s ease-in-out infinite alternate; }
+.loadingRow span { display: block; height: 12px; border-radius: var(--space-1); background: var(--color-skeleton); animation: skeleton 1.1s ease-in-out infinite alternate; }
 .loadingRow span:first-child { width: 28px; height: 28px; }
 .loadingRow span:last-child { width: 68px; justify-self: end; }
 @keyframes skeleton { to { opacity: 0.48; } }
@@ -213,7 +213,7 @@
 
 .mobileActionBackdrop { position: fixed; inset: 0; z-index: var(--layer-menu); display: flex; align-items: end; background: var(--color-scrim); }
 .mobileActionSheet { display: grid; width: 100%; max-height: min(80dvh, 560px); overflow-y: auto; border-radius: var(--radius-panel) var(--radius-panel) 0 0; background: var(--color-surface); box-shadow: var(--shadow-raised); padding: 8px 12px max(12px, env(safe-area-inset-bottom)); }
-.mobileActionSheetHandle { justify-self: center; width: 36px; height: 4px; border-radius: 2px; background: var(--color-border-strong); margin: 2px 0 8px; }
+.mobileActionSheetHandle { justify-self: center; width: 36px; height: 4px; border-radius: var(--space-1); background: var(--color-border-strong); margin: 2px 0 8px; }
 .mobileActionSheet h2 { margin: 0 4px 8px; overflow: hidden; font-size: 15px; text-overflow: ellipsis; white-space: nowrap; }
 .mobileActionList { display: grid; gap: 2px; }
 .mobileAction, .mobileActionCancel { display: flex; align-items: center; width: 100%; min-height: 48px; gap: 10px; border: 0; border-radius: var(--radius-control); background: transparent; padding: 10px; color: var(--color-text); font-size: 14px; font-weight: 650; text-align: left; text-decoration: none; }
