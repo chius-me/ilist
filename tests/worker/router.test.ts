@@ -125,6 +125,40 @@ describe('filesystem API', () => {
     await expect(response.text()).resolves.toBe('he');
   });
 
+  it('isolates active R2 content without changing Range semantics', async () => {
+    const cookie = await login();
+    const id = 'active-html-test';
+    await SELF.fetch(`${origin}/api/admin/files/${id}?parentId=root&name=report.html`, {
+      method: 'PUT',
+      headers: { cookie, origin, 'content-type': 'text/html; charset=utf-8' },
+      body: '<script>alert(1)</script>',
+    });
+
+    const response = await SELF.fetch(`${origin}/file/${id}/report.html`, {
+      headers: { range: 'bytes=0-7' },
+    });
+
+    expect(response.status).toBe(206);
+    expect(response.headers.get('content-range')).toBe('bytes 0-7/25');
+    expect(response.headers.get('content-type')).toBe('application/octet-stream');
+    expect(response.headers.get('content-disposition')).toMatch(/^attachment;/);
+    expect(response.headers.get('content-security-policy')).toBe("sandbox; default-src 'none'; frame-ancestors 'none'");
+    expect(response.headers.get('referrer-policy')).toBe('no-referrer');
+    await expect(response.text()).resolves.toBe('<script>');
+  });
+
+  it('adds application security headers to APIs and Workers Assets', async () => {
+    const api = await SELF.fetch(`${origin}/api/public/tree`);
+    const asset = await SELF.fetch(`${origin}/`);
+
+    for (const response of [api, asset]) {
+      expect(response.headers.get('content-security-policy')).toContain("default-src 'self'");
+      expect(response.headers.get('content-security-policy')).toContain("object-src 'none'");
+      expect(response.headers.get('x-frame-options')).toBe('DENY');
+      expect(response.headers.get('strict-transport-security')).toBe('max-age=31536000; includeSubDomains');
+    }
+  });
+
   it('hides private files from guests while permitting administrators', async () => {
     const cookie = await login();
     const id = 'file-private-test';

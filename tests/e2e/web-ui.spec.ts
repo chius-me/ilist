@@ -252,7 +252,7 @@ test('creates a Google Drive mount and enters its OAuth flow', async ({ page }) 
   await expect(page).toHaveURL(/\/api\/admin\/oauth\/google\/start\?mountId=google-e2e$/);
 });
 
-test('Workspace export actions and PDF preview work on every viewport', async ({ page }) => {
+test('Workspace export actions remain available without embedding PDF', async ({ page }) => {
   await installApiFixtures(page, { admin: true, workspaceExports: true });
   await page.goto('/');
   const name = 'Project brief';
@@ -267,7 +267,8 @@ test('Workspace export actions and PDF preview work on every viewport', async ({
 
   await page.getByRole('button', { name: `Open ${name}` }).click();
   const preview = page.getByRole('dialog', { name: `Preview ${name}` });
-  await expect(preview.getByTitle('PDF preview')).toHaveAttribute('src', /export=pdf/);
+  await expect(preview.getByTitle('PDF preview')).toHaveCount(0);
+  await expect(preview).toContainText('Preview is not available for this file type.');
   await expect(preview.getByRole('link', { name: `Export PDF ${name}` })).toHaveAttribute('href', /download=1.*export=pdf/);
 });
 

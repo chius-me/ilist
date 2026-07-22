@@ -103,14 +103,11 @@ function PreviewError({ message, entry, urlFor = fileUrl, allowDownload = true }
 
 function PreviewBody({ entry, urlFor }: { entry: Entry; urlFor: PreviewUrlFor }) {
   const { formatBytes, t } = useFeedbackI18n();
-  const exportOption = pdfExport(entry);
-  if (exportOption) return <iframe className="previewPdf" title={t('preview.pdfTitle')} src={urlFor(entry, false, exportOption.format)} />;
   const url = urlFor(entry, false);
   switch (previewKind(entry)) {
     case 'image': return <img className="previewImage" src={url} alt={entry.name} />;
     case 'video': return <video className="previewVideo" controls src={url}>{t('preview.videoFallback')}</video>;
     case 'audio': return <audio className="previewAudio" controls src={url}>{t('preview.audioFallback')}</audio>;
-    case 'pdf': return <iframe className="previewPdf" title={t('preview.pdfTitle')} src={url} />;
     case 'text': return <TextPreview entry={entry} urlFor={urlFor} />;
     case 'fallback': return (
       <div className="previewFallback">

@@ -1,4 +1,5 @@
 import { normalizeKey } from './db';
+import { secureFileResponse } from './file-response-security';
 import { HttpError } from './http';
 import type { EntryRow, Env, ObjectRow } from './types';
 
@@ -22,11 +23,6 @@ export async function putObject(env: Env, key: string, request: Request): Promis
   });
 }
 
-function contentDisposition(row: ObjectRow): string {
-  const filename = encodeURIComponent(row.name || row.key.split('/').pop() || 'download');
-  return `inline; filename*=UTF-8''${filename}`;
-}
-
 export async function streamObject(env: Env, row: ObjectRow, request: Request): Promise<Response> {
   const object = await env.R2_BUCKET.get(row.key, {
     range: request.headers,
@@ -39,26 +35,25 @@ export async function streamObject(env: Env, row: ObjectRow, request: Request): 
   object.writeHttpMetadata(headers);
   headers.set('etag', object.httpEtag);
   headers.set('accept-ranges', 'bytes');
-  headers.set('cache-control', 'public, max-age=3600');
-  headers.set('content-disposition', contentDisposition(row));
 
   if (!('body' in object)) {
-    return new Response(null, { status: 304, headers });
+    return secureFileResponse(new Response(null, { status: 304, headers }), {
+      filename: row.name || row.key.split('/').pop() || 'download',
+      contentType: row.content_type,
+      download: new URL(request.url).searchParams.get('download') === '1',
+      publicFile: row.is_public === 1,
+      method: request.method,
+    });
   }
 
   const status = request.headers.has('range') ? 206 : 200;
-  return new Response(object.body, { status, headers });
-}
-
-function disposition(name: string, download: boolean): string {
-  const attrChars = new Set('!#$&+-.^_`|~');
-  const filename = [...new TextEncoder().encode(name)].map((byte) => {
-    const character = String.fromCharCode(byte);
-    return /[A-Za-z0-9]/.test(character) || attrChars.has(character)
-      ? character
-      : `%${byte.toString(16).toUpperCase().padStart(2, '0')}`;
-  }).join('');
-  return `${download ? 'attachment' : 'inline'}; filename*=UTF-8''${filename}`;
+  return secureFileResponse(new Response(object.body, { status, headers }), {
+    filename: row.name || row.key.split('/').pop() || 'download',
+    contentType: row.content_type,
+    download: new URL(request.url).searchParams.get('download') === '1',
+    publicFile: row.is_public === 1,
+    method: request.method,
+  });
 }
 
 type ByteRange = { offset: number; length: number };
@@ -132,14 +127,27 @@ function ifRangeMatches(request: Request, object: R2Object): boolean {
   return date !== null && Math.floor(object.uploaded.getTime() / 1000) <= Math.floor(date / 1000);
 }
 
-function objectHeaders(object: R2Object, row: EntryRow, options: { download: boolean; publicFile: boolean }): Headers {
+function objectHeaders(object: R2Object): Headers {
   const headers = new Headers();
   object.writeHttpMetadata(headers);
   headers.set('etag', object.httpEtag);
   headers.set('accept-ranges', 'bytes');
-  headers.set('content-disposition', disposition(row.name, options.download));
-  headers.set('cache-control', options.publicFile ? 'public, max-age=3600' : 'private, no-store');
   return headers;
+}
+
+function secureEntryResponse(
+  response: Response,
+  row: EntryRow,
+  request: Request,
+  options: { download: boolean; publicFile: boolean },
+): Response {
+  return secureFileResponse(response, {
+    filename: row.name,
+    contentType: row.content_type,
+    download: options.download,
+    publicFile: options.publicFile,
+    method: request.method,
+  });
 }
 
 export async function streamEntryObject(
@@ -154,21 +162,21 @@ export async function streamEntryObject(
 
   const metadata = await bucket.head(row.storage_key);
   if (!metadata) throw new HttpError(404, 'STORAGE_OBJECT_NOT_FOUND', 'File content not found');
-  const headers = objectHeaders(metadata, row, options);
+  const headers = objectHeaders(metadata);
   const conditional = preconditionStatus(request, metadata);
-  if (conditional !== null) return new Response(null, { status: conditional, headers });
+  if (conditional !== null) return secureEntryResponse(new Response(null, { status: conditional, headers }), row, request, options);
 
   const requestedRange = ifRangeMatches(request, metadata)
     ? parseByteRange(request.headers.get('range'), metadata.size)
     : null;
   if (requestedRange === 'invalid') {
     headers.set('content-range', `bytes */${metadata.size}`);
-    return new Response(null, { status: 416, headers });
+    return secureEntryResponse(new Response(null, { status: 416, headers }), row, request, options);
   }
 
   const object = await bucket.get(row.storage_key, requestedRange ? { range: requestedRange } : undefined);
   if (!object) throw new HttpError(404, 'STORAGE_OBJECT_NOT_FOUND', 'File content not found');
-  const responseHeaders = objectHeaders(object, row, options);
+  const responseHeaders = objectHeaders(object);
   const range = object.range;
   const partialRange = requestedRange !== null
     && range
@@ -185,8 +193,8 @@ export async function streamEntryObject(
     responseHeaders.set('content-length', String(object.size));
   }
 
-  return new Response(request.method.toUpperCase() === 'HEAD' ? null : object.body, {
+  return secureEntryResponse(new Response(request.method.toUpperCase() === 'HEAD' ? null : object.body, {
     status: partialRange ? 206 : 200,
     headers: responseHeaders,
-  });
+  }), row, request, options);
 }

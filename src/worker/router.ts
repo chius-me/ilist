@@ -27,6 +27,7 @@ import { entryToApi, isEffectivelyPublic } from './entries';
 import { validateEntryName } from './entry-domain';
 import { externalEntry, requireExternalCapability, resolveExternalEntry } from './external-entries';
 import { decodeExternalId } from './external-identity';
+import { secureFileResponse } from './file-response-security';
 import {
   createFolder,
   deleteEntryTrees,
@@ -41,6 +42,7 @@ import { fail, HttpError, noContent, ok, readJson, requireSameOrigin, requireSam
 import { handleMountRoutes } from './mount-routes';
 import { handleOAuthRoutes } from './oauth-routes';
 import { keyFromPath, putObject, streamEntryObject } from './r2';
+import { withApplicationSecurityHeaders } from './response-security';
 import { handleShareAdminRoutes } from './share-admin-routes';
 import { handleSharePublicRoutes } from './share-public-routes';
 import type { BatchFailure, BatchResult, Env } from './types';
@@ -522,12 +524,16 @@ async function handleFile(request: Request, env: Env, url: URL): Promise<Respons
         headers: { location: download.url, 'cache-control': 'private, no-store' },
       });
     }
-    const headers = new Headers(download.response.headers);
-    if (!external.mount.isPublic) headers.set('cache-control', 'private, no-store');
-    return new Response(request.method === 'HEAD' ? null : download.response.body, {
-      status: download.response.status,
-      statusText: download.response.statusText,
-      headers,
+    const requestedExport = url.searchParams.get('export');
+    const exportOption = requestedExport
+      ? external.item.exportOptions?.find((option) => option.format === requestedExport)
+      : undefined;
+    return secureFileResponse(download.response, {
+      filename: exportOption ? `${external.item.name}.${exportOption.extension}` : external.item.name,
+      contentType: exportOption?.contentType ?? external.item.contentType,
+      download: url.searchParams.get('download') === '1',
+      publicFile: external.mount.isPublic,
+      method: request.method,
     });
   }
   if (/^[A-Za-z0-9_-]{8,80}$/.test(candidateId) && await getEntryById(env.DB, candidateId)) {
@@ -547,17 +553,6 @@ async function handleFile(request: Request, env: Env, url: URL): Promise<Respons
   return new Response(null, { status: 302, headers: { location: `/file/${entry.id}/${encodeURIComponent(entry.name)}` } });
 }
 
-function withSecurityHeaders(response: Response): Response {
-  const headers = new Headers(response.headers);
-  headers.set('x-content-type-options', 'nosniff');
-  headers.set('referrer-policy', 'same-origin');
-  return new Response(response.body, {
-    status: response.status,
-    statusText: response.statusText,
-    headers,
-  });
-}
-
 function withPrivateNoStore(response: Response): Response {
   const headers = new Headers(response.headers);
   headers.set('cache-control', 'private, no-store');
@@ -568,39 +563,45 @@ function withPrivateNoStore(response: Response): Response {
   });
 }
 
+function withAppropriateSecurityHeaders(response: Response, request: Request): Response {
+  return response.headers.get('content-security-policy')?.startsWith('sandbox;')
+    ? response
+    : withApplicationSecurityHeaders(response, request);
+}
+
 export async function routeRequest(request: Request, env: Env, options: RouteRequestOptions = {}): Promise<Response> {
   const url = new URL(request.url);
 
   if (request.method === 'OPTIONS') {
-    return noContent(JSON_HEADERS);
+    return withApplicationSecurityHeaders(noContent(JSON_HEADERS), request);
   }
 
   try {
     if (url.pathname.startsWith('/s/')) {
       const shareResponse = await handleSharePublicRoutes(request, env, url);
-      return withSecurityHeaders(withPrivateNoStore(shareResponse ?? await env.ASSETS.fetch(request)));
+      return withAppropriateSecurityHeaders(withPrivateNoStore(shareResponse ?? await env.ASSETS.fetch(request)), request);
     }
     if (url.pathname.startsWith('/api/public/')) {
-      return withSecurityHeaders(await handlePublic(request, env, url));
+      return withApplicationSecurityHeaders(await handlePublic(request, env, url), request);
     }
     if (url.pathname.startsWith('/api/fs/')) {
-      return withSecurityHeaders(await handleFilesystem(request, env, url));
+      return withApplicationSecurityHeaders(await handleFilesystem(request, env, url), request);
     }
     if (url.pathname.startsWith('/api/admin/')) {
-      return withSecurityHeaders(await handleAdmin(request, env, url, options));
+      return withApplicationSecurityHeaders(await handleAdmin(request, env, url, options), request);
     }
     if (url.pathname.startsWith('/file/')) {
-      return withSecurityHeaders(await handleFile(request, env, url));
+      return withAppropriateSecurityHeaders(await handleFile(request, env, url), request);
     }
 
-    return await env.ASSETS.fetch(request);
+    return withApplicationSecurityHeaders(await env.ASSETS.fetch(request), request);
   } catch (error) {
     if (error instanceof HttpError) {
       const response = fail(error.status, error.code, error.message, error.details);
-      return withSecurityHeaders(url.pathname.startsWith('/s/') ? withPrivateNoStore(response) : response);
+      return withApplicationSecurityHeaders(url.pathname.startsWith('/s/') ? withPrivateNoStore(response) : response, request);
     }
     console.error(error);
     const response = fail(500, 'Internal server error');
-    return withSecurityHeaders(url.pathname.startsWith('/s/') ? withPrivateNoStore(response) : response);
+    return withApplicationSecurityHeaders(url.pathname.startsWith('/s/') ? withPrivateNoStore(response) : response, request);
   }
 }

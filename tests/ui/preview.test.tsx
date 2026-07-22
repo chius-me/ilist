@@ -12,6 +12,8 @@ const base = {
 describe('preview', () => {
   it('selects supported preview kinds', () => {
     expect(previewKind(base)).toBe('image');
+    expect(previewKind({ ...base, name: 'graphic.svg', contentType: 'image/svg+xml' })).toBe('fallback');
+    expect(previewKind({ ...base, name: 'report.pdf', contentType: 'application/pdf' })).toBe('fallback');
     expect(previewKind({ ...base, name: 'notes.md', contentType: 'text/markdown' })).toBe('text');
     expect(previewKind({ ...base, name: 'archive.zip', contentType: 'application/zip' })).toBe('fallback');
   });
@@ -44,7 +46,7 @@ describe('preview', () => {
     await waitFor(() => expect(fetchMock).toHaveBeenCalledWith(expect.any(String), expect.objectContaining({ headers: { Range: 'bytes=0-524287' } })));
   });
 
-  it('previews a Workspace document through its first PDF export', () => {
+  it('offers a Workspace document export without embedding the PDF', () => {
     const urlFor = vi.fn((_entry, download: boolean, exportFormat?: string) => `/workspace?download=${download ? '1' : '0'}&export=${exportFormat ?? ''}`);
     render(<PreviewOverlay entry={{
       ...base,
@@ -56,7 +58,8 @@ describe('preview', () => {
       ],
     }} urlFor={urlFor} onClose={() => undefined} />);
 
-    expect(screen.getByTitle('PDF preview')).toHaveAttribute('src', '/workspace?download=0&export=pdf');
+    expect(screen.queryByTitle('PDF preview')).not.toBeInTheDocument();
+    expect(screen.getByText('Preview is not available for this file type.')).toBeVisible();
     expect(screen.getByRole('link', { name: 'Export PDF Project brief' })).toHaveAttribute('href', '/workspace?download=1&export=pdf');
   });
 });
