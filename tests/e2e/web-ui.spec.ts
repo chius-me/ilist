@@ -252,6 +252,33 @@ test('creates a Google Drive mount and enters its OAuth flow', async ({ page }) 
   await expect(page).toHaveURL(/\/api\/admin\/oauth\/google\/start\?mountId=google-e2e$/);
 });
 
+test('storage management publishes a new mount only after confirmation', async ({ page }) => {
+  await installApiFixtures(page, { admin: true });
+  let createRequests = 0;
+  page.on('request', (request) => {
+    if (new URL(request.url()).pathname === '/api/admin/mounts' && request.method() === 'POST') createRequests += 1;
+  });
+
+  await page.goto('/');
+  await page.getByRole('button', { name: 'Storage settings' }).click();
+  await page.getByRole('button', { name: 'Add storage' }).click();
+  await page.getByLabel('Display name').fill('Published archive');
+  await page.getByLabel('Mount path').fill('/published-archive');
+  await page.getByLabel('Account ID').fill('account');
+  await page.getByLabel('Bucket').fill('files');
+  await page.getByLabel('Access Key ID').fill('access');
+  await page.getByLabel('Secret Access Key').fill('secret');
+  await page.getByLabel('Visible to guests').check();
+  await page.getByRole('button', { name: 'Create mount' }).click();
+
+  const confirmation = page.getByRole('dialog', { name: 'Publish storage mount' });
+  await expect(confirmation).toBeVisible();
+  await expect(page.getByRole('button', { name: 'Cancel' })).toBeFocused();
+  expect(createRequests).toBe(0);
+  await page.getByRole('button', { name: 'Publish mount' }).click();
+  await expect.poll(() => createRequests).toBe(1);
+});
+
 test('Workspace export actions remain available without embedding PDF', async ({ page }) => {
   await installApiFixtures(page, { admin: true, workspaceExports: true });
   await page.goto('/');

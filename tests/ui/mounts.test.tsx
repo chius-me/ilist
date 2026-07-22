@@ -71,14 +71,85 @@ describe('MountManager', () => {
     await userEvent.type(screen.getByLabelText('Bucket'), 'files');
     await userEvent.type(screen.getByLabelText('Access Key ID'), 'access');
     await userEvent.type(screen.getByLabelText('Secret Access Key'), 'secret-value');
+    expect(screen.getByLabelText('Visible to guests')).not.toBeChecked();
     await userEvent.click(screen.getByRole('button', { name: 'Create mount' }));
 
     await waitFor(() => expect(submitted).not.toBeNull());
     expect(submitted).toMatchObject({
       name: 'Archive', mountPath: '/archive', driverType: 's3', provider: 'cloudflare-r2',
+      isPublic: false,
       config: { endpoint: 'https://account.r2.cloudflarestorage.com', region: 'auto', bucket: 'files', addressingMode: 'path' },
       credentials: { accessKeyId: 'access', secretAccessKey: 'secret-value' },
     });
+  });
+
+  it('requires confirmation before publishing a newly created mount and preserves the form on cancel', async () => {
+    const requests: RequestInit[] = [];
+    vi.stubGlobal('fetch', vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
+      const url = String(input);
+      if (url.includes('/api/admin/me')) return Response.json(admin);
+      if (url.endsWith('/api/admin/mounts') && !init?.method) return Response.json({ ok: true, data: [] });
+      if (url.endsWith('/api/admin/mounts') && init?.method === 'POST') {
+        requests.push(init);
+        return Response.json({ ok: true, data: savedMount });
+      }
+      if (url.includes('/api/fs/list')) return Response.json(emptyRoot);
+      throw new Error(`Unexpected fetch: ${url}`);
+    }));
+
+    render(<App />);
+    await userEvent.click(await screen.findByRole('button', { name: 'Add storage' }));
+    await userEvent.type(screen.getByLabelText('Display name'), 'Published archive');
+    await userEvent.type(screen.getByLabelText('Mount path'), '/published-archive');
+    await userEvent.type(screen.getByLabelText('Account ID'), 'account');
+    await userEvent.type(screen.getByLabelText('Bucket'), 'files');
+    await userEvent.type(screen.getByLabelText('Access Key ID'), 'access');
+    await userEvent.type(screen.getByLabelText('Secret Access Key'), 'secret-value');
+    await userEvent.click(screen.getByLabelText('Visible to guests'));
+    await userEvent.click(screen.getByRole('button', { name: 'Create mount' }));
+
+    expect(screen.getByRole('dialog', { name: 'Publish storage mount' })).toBeVisible();
+    expect(requests).toHaveLength(0);
+    expect(screen.getByRole('button', { name: 'Cancel' })).toHaveFocus();
+    fireEvent.keyDown(document, { key: 'Escape' });
+    expect(screen.getByRole('dialog', { name: 'Add storage' })).toBeVisible();
+    expect(screen.getByLabelText('Display name')).toHaveValue('Published archive');
+    expect(screen.getByLabelText('Visible to guests')).toBeChecked();
+
+    await userEvent.click(screen.getByRole('button', { name: 'Create mount' }));
+    await userEvent.click(screen.getByRole('button', { name: 'Cancel' }));
+    expect(screen.getByLabelText('Display name')).toHaveValue('Published archive');
+    expect(screen.getByLabelText('Visible to guests')).toBeChecked();
+
+    await userEvent.click(screen.getByRole('button', { name: 'Create mount' }));
+    await userEvent.click(screen.getByRole('button', { name: 'Publish mount' }));
+    await waitFor(() => expect(requests).toHaveLength(1));
+    expect(JSON.parse(String(requests[0]!.body))).toMatchObject({ isPublic: true, name: 'Published archive' });
+  });
+
+  it('requires confirmation only when an existing private mount becomes public', async () => {
+    const privateMount = { ...savedMount, isPublic: false };
+    const requests: RequestInit[] = [];
+    vi.stubGlobal('fetch', vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
+      const url = String(input);
+      if (url.includes('/api/admin/me')) return Response.json(admin);
+      if (url.endsWith('/api/admin/mounts') && !init?.method) return Response.json({ ok: true, data: [privateMount] });
+      if (url.includes('/api/admin/mounts/mount-1') && init?.method === 'PATCH') {
+        requests.push(init);
+        return Response.json({ ok: true, data: { ...privateMount, isPublic: true } });
+      }
+      if (url.includes('/api/fs/list')) return Response.json(emptyRoot);
+      throw new Error(`Unexpected fetch: ${url}`);
+    }));
+
+    render(<App />);
+    await chooseAction('Archive', 'Edit');
+    await userEvent.click(screen.getByLabelText('Visible to guests'));
+    await userEvent.click(screen.getByRole('button', { name: 'Save changes' }));
+    expect(screen.getByRole('dialog', { name: 'Publish storage mount' })).toBeVisible();
+    expect(requests).toHaveLength(0);
+    await userEvent.click(screen.getByRole('button', { name: 'Publish mount' }));
+    await waitFor(() => expect(requests).toHaveLength(1));
   });
 
   it('edits metadata with blank secrets, toggles enabled state, and confirms deletion', async () => {
@@ -100,6 +171,7 @@ describe('MountManager', () => {
     expect(screen.getByLabelText('Secret Access Key')).toHaveValue('');
     fireEvent.change(screen.getByLabelText('Display name'), { target: { value: 'Cold archive' } });
     await userEvent.click(screen.getByRole('button', { name: 'Save changes' }));
+    expect(screen.queryByRole('dialog', { name: 'Publish storage mount' })).not.toBeInTheDocument();
     await chooseAction('Archive', 'Disable');
     await chooseAction('Archive', 'Delete');
     expect(screen.getByRole('dialog', { name: 'Delete storage mount' })).toBeVisible();

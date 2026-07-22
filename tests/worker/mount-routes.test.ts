@@ -85,6 +85,24 @@ describe('mount administration API', () => {
     expect((body as { data: Array<{ connected: boolean }> }).data[0]!.connected).toBe(true);
   });
 
+  it('creates mounts as private when the HTTP request omits isPublic', async () => {
+    const response = await adminFetch('/api/admin/mounts', {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({
+        name: 'Private mount',
+        mountPath: '/private-mount',
+        driverType: 's3',
+        provider: 'custom',
+        config: s3Config,
+        credentials: { accessKeyId: 'key', secretAccessKey: 'secret' },
+      }),
+    });
+
+    expect(response.status).toBe(200);
+    expect((await response.json() as { data: { isPublic: boolean } }).data.isPublic).toBe(false);
+  });
+
   it('creates, reports, and disconnects an independently authorized Google mount', async () => {
     const created = await adminFetch('/api/admin/mounts', {
       method: 'POST',

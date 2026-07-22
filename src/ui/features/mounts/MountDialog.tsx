@@ -6,6 +6,7 @@ import type { Mount, MountInput, S3MountConfig } from '../../types/mounts';
 
 interface Props {
   mount: Mount | null;
+  active?: boolean;
   busy: boolean;
   error: string | null;
   onClose: () => void;
@@ -28,11 +29,11 @@ function initialStorageType(mount: Mount | null): StorageType {
   return 's3';
 }
 
-export function MountDialog({ mount, busy, error, onClose, onSubmit }: Props) {
+export function MountDialog({ mount, active = true, busy, error, onClose, onSubmit }: Props) {
   const { t } = useI18n();
   const nameInput = useRef<HTMLInputElement>(null);
   const backdrop = useRef<HTMLDivElement>(null);
-  useModalFocus({ active: true, containerRef: backdrop, initialFocusRef: nameInput, onClose });
+  useModalFocus({ active, containerRef: backdrop, initialFocusRef: nameInput, onClose });
   const initialEndpoint = stringConfig(mount, 'endpoint');
   const [storageType, setStorageType] = useState<StorageType>(initialStorageType(mount));
   const [name, setName] = useState(mount?.name ?? '');
@@ -48,7 +49,7 @@ export function MountDialog({ mount, busy, error, onClose, onSubmit }: Props) {
   const [secretAccessKey, setSecretAccessKey] = useState('');
   const [rootItemId, setRootItemId] = useState(mount?.rootItemId ?? '');
   const [enabled, setEnabled] = useState(mount?.enabled ?? true);
-  const [isPublic, setIsPublic] = useState(mount?.isPublic ?? true);
+  const [isPublic, setIsPublic] = useState(mount?.isPublic ?? false);
   const derivedEndpoint = useMemo(() => provider === 'cloudflare-r2' && accountId ? `https://${accountId}.r2.cloudflarestorage.com` : endpoint, [accountId, endpoint, provider]);
 
   function submit(event: FormEvent) {

@@ -94,9 +94,11 @@ describe('multi-mount filesystem integration', () => {
     await db.prepare("DELETE FROM mounts WHERE id <> 'native-r2'").run();
     const personal = await createMount(db, {
       name: 'Google Personal', mountPath: '/google-personal', driverType: 'google', provider: 'google',
+      isPublic: true,
     });
     const archive = await createMount(db, {
       name: 'Google Archive', mountPath: '/google-archive', driverType: 'google', provider: 'google',
+      isPublic: true,
     });
     const drivers = new Map([[personal.id, fakeDriver('google-personal')], [archive.id, fakeDriver('google-archive')]]);
     driverRegistry.google = (_env, mount) => drivers.get(mount.id)!;
@@ -118,7 +120,7 @@ describe('multi-mount filesystem integration', () => {
   it('advertises resumable uploads only for authenticated external folders with a provider adapter', async () => {
     const db = (env as unknown as Env).DB;
     await db.prepare("DELETE FROM mounts WHERE id <> 'native-r2'").run();
-    await createMount(db, { name: 'Personal', mountPath: '/personal', driverType: 'onedrive', provider: 'onedrive' });
+    await createMount(db, { name: 'Personal', mountPath: '/personal', driverType: 'onedrive', provider: 'onedrive', isPublic: true });
     const driver = fakeDriver('personal', true);
     driverRegistry.onedrive = () => driver;
     const cookie = await login();
@@ -155,8 +157,8 @@ describe('multi-mount filesystem integration', () => {
   it('browses two mounts with collision-free IDs and downloads through the selected driver', async () => {
     const db = (env as unknown as Env).DB;
     await db.prepare("DELETE FROM mounts WHERE id <> 'native-r2'").run();
-    const first = await createMount(db, { name: 'Personal', mountPath: '/personal', driverType: 'onedrive', provider: 'onedrive' });
-    const second = await createMount(db, { name: 'Archive', mountPath: '/archive', driverType: 'onedrive', provider: 'onedrive' });
+    const first = await createMount(db, { name: 'Personal', mountPath: '/personal', driverType: 'onedrive', provider: 'onedrive', isPublic: true });
+    const second = await createMount(db, { name: 'Archive', mountPath: '/archive', driverType: 'onedrive', provider: 'onedrive', isPublic: true });
     const drivers = new Map([[first.id, fakeDriver('personal')], [second.id, fakeDriver('archive')]]);
     driverRegistry.onedrive = (_env, mount) => drivers.get(mount.id)!;
 
@@ -226,10 +228,10 @@ describe('multi-mount filesystem integration', () => {
   it('isolates private, disabled, and failing mounts while keeping healthy roots available', async () => {
     const db = (env as unknown as Env).DB;
     await db.prepare("DELETE FROM mounts WHERE id <> 'native-r2'").run();
-    const healthy = await createMount(db, { name: 'Healthy', mountPath: '/healthy', driverType: 'onedrive', provider: 'onedrive' });
+    const healthy = await createMount(db, { name: 'Healthy', mountPath: '/healthy', driverType: 'onedrive', provider: 'onedrive', isPublic: true });
     await createMount(db, { name: 'Private', mountPath: '/private', driverType: 'onedrive', provider: 'onedrive', isPublic: false });
     await createMount(db, { name: 'Disabled', mountPath: '/disabled', driverType: 'onedrive', provider: 'onedrive', enabled: false });
-    const failing = await createMount(db, { name: 'Failing', mountPath: '/failing', driverType: 'onedrive', provider: 'onedrive' });
+    const failing = await createMount(db, { name: 'Failing', mountPath: '/failing', driverType: 'onedrive', provider: 'onedrive', isPublic: true });
     driverRegistry.onedrive = (_env, mount) => {
       if (mount.id === failing.id) throw new Error('provider unavailable');
       return fakeDriver(mount.id === healthy.id ? 'healthy' : 'private');
@@ -286,6 +288,7 @@ describe('multi-mount filesystem integration', () => {
     await db.prepare("DELETE FROM mounts WHERE id <> 'native-r2'").run();
     await createMount(db, {
       name: `${driverType} streamed`, mountPath: '/streamed', driverType, provider,
+      isPublic: true,
     });
     const driver = fakeDriver(driverType);
     driver.getDownload = vi.fn(async () => ({
@@ -329,6 +332,7 @@ describe('multi-mount filesystem integration', () => {
     await db.prepare("DELETE FROM mounts WHERE id <> 'native-r2'").run();
     await createMount(db, {
       name: 'S3 Archive', mountPath: '/s3-archive', driverType: 's3', provider: 'cloudflare-r2',
+      isPublic: true,
       config: { endpoint: 'https://example.r2.cloudflarestorage.com', region: 'auto', bucket: 'archive', addressingMode: 'path' },
     });
     const driver = fakeDriver('s3');
