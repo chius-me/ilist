@@ -70,7 +70,7 @@ Disconnecting deletes only the encrypted OAuth credentials from ilist. Deleting 
 
 Verify the public root, a nested OneDrive folder, small and resumable upload/download/delete cycles, a private mount as a guest, and existing native R2 links. Large files use a server-side OneDrive upload session; the provider upload URL and session proof are never returned to the browser.
 
-If the deployment fails, deploy the previous Worker version and keep migrations `0008` through `0011` in place; older code ignores the additive tables. Restore the D1 export only when data itself is damaged, not merely to roll back Worker code.
+For the v0.1.7 security release, follow the [release abort procedure](releases/v0.1.7.md#emergency-abort-and-rollback). Do not restore public traffic to v0.1.6, and keep migrations `0015` and `0016` applied. Restore the D1 export only when data itself is damaged or a migration failed.
 
 Reference documentation:
 

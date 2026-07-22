@@ -20,7 +20,7 @@ async function login(): Promise<string> {
 }
 
 describe('filesystem API', () => {
-  it('serializes simultaneous login verification slots before invoking the verifier', async () => {
+  it('serializes simultaneous login verification slots across rotating usernames before invoking the verifier', async () => {
     let releaseVerification!: () => void;
     let enteredVerification!: () => void;
     const release = new Promise<void>((resolve) => { releaseVerification = resolve; });
@@ -38,15 +38,15 @@ describe('filesystem API', () => {
         },
       },
     };
-    const attempt = () => routeRequest(new Request(`${origin}/api/admin/login`, {
+    const attempt = (username: string) => routeRequest(new Request(`${origin}/api/admin/login`, {
       method: 'POST',
       headers: { 'content-type': 'application/json', origin },
-      body: JSON.stringify({ username: 'admin', password: 'wrong-password' }),
+      body: JSON.stringify({ username, password: 'wrong-password' }),
     }), workerEnv(), options);
 
-    const first = attempt();
+    const first = attempt('missing-0');
     await entered;
-    const concurrent = await Promise.all(Array.from({ length: 11 }, () => attempt()));
+    const concurrent = await Promise.all(Array.from({ length: 11 }, (_, index) => attempt(`missing-${index + 1}`)));
     expect(verificationCalls).toBe(1);
     expect(concurrent.map((response) => response.status)).toEqual(Array(11).fill(429));
     for (const response of concurrent) {
@@ -114,6 +114,44 @@ describe('filesystem API', () => {
     expect(verificationCalls).toBe(6);
   });
 
+  it('enforces a five-per-minute total administrator budget across distinct unknown usernames', async () => {
+    let now = 10_500;
+    let verificationCalls = 0;
+    const options = {
+      passwordAuthentication: {
+        now: () => now,
+        verifyPassword: async () => {
+          verificationCalls += 1;
+          return false;
+        },
+      },
+    };
+    const attempt = (username: string) => routeRequest(new Request(`${origin}/api/admin/login`, {
+      method: 'POST',
+      headers: {
+        'CF-Connecting-IP': '203.0.113.25',
+        'content-type': 'application/json',
+        origin,
+      },
+      body: JSON.stringify({ username, password: 'wrong-password' }),
+    }), workerEnv(), options);
+
+    for (const [index, delay] of [0, 1, 2, 4, 8].entries()) {
+      now += delay;
+      expect((await attempt(`missing-${index}`)).status).toBe(401);
+    }
+    expect(verificationCalls).toBe(5);
+    const totalState = await workerEnv().DB.prepare(`SELECT failure_count FROM auth_rate_limits
+      WHERE scope = 'admin-login-ip'`).first<{ failure_count: number }>();
+    expect(totalState?.failure_count).toBe(5);
+
+    const throttled = await attempt('missing-rotated-again');
+    expect(throttled.status).toBe(429);
+    expect(throttled.headers.get('retry-after')).toBe('45');
+    expect(await throttled.json()).toMatchObject({ error: { code: 'AUTH_RATE_LIMITED' } });
+    expect(verificationCalls).toBe(5);
+  });
+
   it('clears the login limiter after successful authentication', async () => {
     let now = 11_000;
     let valid = false;
@@ -141,6 +179,9 @@ describe('filesystem API', () => {
     now += 1;
     valid = true;
     expect((await attempt()).status).toBe(200);
+    const cleared = await workerEnv().DB.prepare(`SELECT scope FROM auth_rate_limits
+      WHERE scope IN ('admin-login', 'admin-login-ip')`).all<{ scope: string }>();
+    expect(cleared.results).toEqual([]);
     valid = false;
     expect((await attempt()).status).toBe(401);
     expect(verificationCalls).toBe(3);

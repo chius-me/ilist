@@ -218,7 +218,8 @@ Fill in test-only values before starting Wrangler. It normally serves the applic
 - Same-origin HTML, SVG, XML, PDF, and unknown file types are sent as attachments with a sandboxed file response policy. Only a narrow, exact image/audio/video MIME allowlist is previewed inline.
 - New mounts are private by default. Publishing a mount requires explicit administrator confirmation because unauthenticated visitors can browse it.
 - Share item handles are checked against the live share root on every access. Moving an item outside the shared folder revokes its old handle immediately.
-- Failed administrator and share-password attempts are rate-limited before PBKDF2 verification. Do not put a caching rule in front of share responses.
+- Failed administrator attempts are limited before PBKDF2 by both a five-per-minute IP-wide budget and a five-per-minute IP-plus-normalized-username budget. Share-password attempts remain limited to ten per minute per IP and share. Do not put a caching rule in front of share responses.
+- OneDrive and Google Drive share ancestry is checked live, but a provider-side move concurrent with a metadata or download request leaves a narrow unavoidable TOCTOU window. Restrict provider write access for sensitive public shares and disable a share when immediate revocation is required.
 
 ## Limitations
 
@@ -245,7 +246,7 @@ npm run migrate:objects -- --remote
 npm run deploy
 ```
 
-The `v0.1.x` releases are intended to remain compatible with legacy R2 object links. Migrations add the entry and mount model without deleting files or legacy rows. If deployment fails, deploy the previous Worker version and keep the additive migrations in place; restore the D1 export only when data itself is damaged, not merely to roll back Worker code.
+The `v0.1.x` releases are intended to remain compatible with legacy R2 object links. Migrations add the entry and mount model without deleting files or legacy rows. For the v0.1.7 security release, follow [the release abort procedure](docs/releases/v0.1.7.md#emergency-abort-and-rollback): do not return public traffic to v0.1.6, and retain `0015` and `0016`. Restore a D1 export only when data itself is damaged or a migration failed.
 
 ## Project Structure
 
