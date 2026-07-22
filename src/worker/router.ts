@@ -8,7 +8,14 @@ import {
   verifyPassword,
 } from './auth';
 import {
+  assertAuthAllowed,
+  clearAuthFailures,
+  recordAuthFailure,
+  type AuthRateLimitPolicy,
+} from './auth-rate-limit';
+import {
   deleteObjectIndex,
+  deleteAuthRateLimitsBefore,
   findEntryByStorageKey,
   getObject,
   getEntryById,
@@ -100,6 +107,10 @@ export interface LegacyObjectMutationReservationTiming {
 
 export interface RouteRequestOptions {
   legacyObjectMutationReservation?: LegacyObjectMutationReservationTiming;
+  passwordAuthentication?: {
+    now?: () => number;
+    verifyPassword?: typeof verifyPassword;
+  };
 }
 
 interface LegacyObjectMutationGuard {
@@ -303,20 +314,34 @@ async function handleFilesystem(request: Request, env: Env, url: URL): Promise<R
   throw new HttpError(404, 'Not found');
 }
 
-async function handleLogin(request: Request, env: Env): Promise<Response> {
+async function handleLogin(request: Request, env: Env, options: RouteRequestOptions): Promise<Response> {
   if (request.method !== 'POST') return methodNotAllowed();
   requireSameOriginWhenPresent(request);
 
   const body = await readJson<LoginBody>(request);
-  const username = body.username || '';
-  const password = body.password || '';
+  const username = typeof body.username === 'string' ? body.username : '';
+  const password = typeof body.password === 'string' ? body.password : '';
   const expectedUsername = env.ADMIN_USERNAME || 'admin';
+  const policy: AuthRateLimitPolicy = {
+    maxFailures: 5,
+    windowSeconds: 60,
+    now: options.passwordAuthentication?.now,
+  };
+  const rateLimit = await assertAuthAllowed(env, request, 'admin-login', username, policy);
+  const passwordMatches = await (options.passwordAuthentication?.verifyPassword ?? verifyPassword)(
+    password,
+    env.ADMIN_PASSWORD_HASH,
+  );
 
-  if (username !== expectedUsername || !(await verifyPassword(password, env.ADMIN_PASSWORD_HASH))) {
+  if (username !== expectedUsername || !passwordMatches) {
+    await recordAuthFailure(rateLimit);
     throw new HttpError(401, 'Invalid username or password');
   }
 
+  await clearAuthFailures(rateLimit);
   await cleanupExpiredSessions(env);
+  const now = Math.floor((options.passwordAuthentication?.now?.() ?? Date.now() / 1000));
+  await deleteAuthRateLimitsBefore(env.DB, now - 24 * 60 * 60, 100);
   const session = await createSession(env);
   return ok(
     { username: expectedUsername },
@@ -332,7 +357,7 @@ async function handleLogout(request: Request, env: Env): Promise<Response> {
 }
 
 async function handleAdmin(request: Request, env: Env, url: URL, options: RouteRequestOptions): Promise<Response> {
-  if (url.pathname === '/api/admin/login') return handleLogin(request, env);
+  if (url.pathname === '/api/admin/login') return handleLogin(request, env, options);
   if (url.pathname === '/api/admin/logout') return handleLogout(request, env);
 
   const session = await requireAdminSession(env, request);
@@ -578,7 +603,7 @@ export async function routeRequest(request: Request, env: Env, options: RouteReq
 
   try {
     if (url.pathname.startsWith('/s/')) {
-      const shareResponse = await handleSharePublicRoutes(request, env, url);
+      const shareResponse = await handleSharePublicRoutes(request, env, url, options.passwordAuthentication);
       return withAppropriateSecurityHeaders(withPrivateNoStore(shareResponse ?? await env.ASSETS.fetch(request)), request);
     }
     if (url.pathname.startsWith('/api/public/')) {
@@ -598,6 +623,11 @@ export async function routeRequest(request: Request, env: Env, options: RouteReq
   } catch (error) {
     if (error instanceof HttpError) {
       const response = fail(error.status, error.code, error.message, error.details);
+      if (error.code === 'AUTH_RATE_LIMITED'
+        && typeof error.details === 'object' && error.details !== null
+        && 'retryAfter' in error.details && Number.isInteger(error.details.retryAfter)) {
+        response.headers.set('retry-after', String(error.details.retryAfter));
+      }
       return withApplicationSecurityHeaders(url.pathname.startsWith('/s/') ? withPrivateNoStore(response) : response, request);
     }
     console.error(error);

@@ -13,6 +13,7 @@ export default defineConfig({
           CREDENTIAL_MASTER_KEY: 'MDEyMzQ1Njc4OTAxMjM0NTY3ODkwMTIzNDU2Nzg5MDE=',
           SESSION_SECRET: 'test-session-secret-at-least-32-characters',
           SESSION_TTL_SECONDS: '3600',
+          AUTH_RATE_LIMIT_TEST_CLIENT_IP: '127.0.0.1',
           MICROSOFT_CLIENT_ID: 'test-client-id',
           MICROSOFT_CLIENT_SECRET: 'test-client-secret',
           GOOGLE_CLIENT_ID: 'test-google-client-id',

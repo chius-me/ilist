@@ -14,11 +14,12 @@ import oauthStates from '../../migrations/0011_oauth_states.sql?raw';
 import uploadSessions from '../../migrations/0012_upload_sessions.sql?raw';
 import uploadTerminalLeases from '../../migrations/0013_upload_terminal_leases.sql?raw';
 import shares from '../../migrations/0014_shares.sql?raw';
+import authRateLimits from '../../migrations/0015_auth_rate_limits.sql?raw';
 import type { Env } from '../../src/worker/types';
 
 beforeEach(async () => {
   const db = (env as unknown as Env).DB;
-  for (const statement of `${initial}\n${entries}\n${lock}\n${reservations}\n${leaseExpiry}\n${storageKeyImmutable}\n${storageRecovery}\n${mounts}\n${storageCredentials}\n${nativeR2CompatibilityMount}\n${oauthStates}\n${uploadSessions}\n${uploadTerminalLeases}\n${shares}`.split(/;\s+(?=(?:PRAGMA|CREATE|INSERT|DROP|ALTER))/)) {
+  for (const statement of `${initial}\n${entries}\n${lock}\n${reservations}\n${leaseExpiry}\n${storageKeyImmutable}\n${storageRecovery}\n${mounts}\n${storageCredentials}\n${nativeR2CompatibilityMount}\n${oauthStates}\n${uploadSessions}\n${uploadTerminalLeases}\n${shares}\n${authRateLimits}`.split(/;\s+(?=(?:PRAGMA|CREATE|INSERT|DROP|ALTER))/)) {
     const sql = statement.trim();
     if (!sql) continue;
     try {
@@ -37,4 +38,5 @@ beforeEach(async () => {
 
   const foreignKeys = await db.prepare('PRAGMA foreign_keys').first<{ foreign_keys: number }>();
   if (foreignKeys?.foreign_keys !== 1) throw new Error('Worker test D1 must enforce foreign keys');
+  await db.prepare('DELETE FROM auth_rate_limits').run();
 });

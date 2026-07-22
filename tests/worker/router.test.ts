@@ -1,8 +1,13 @@
 import { SELF, env } from 'cloudflare:test';
 import { describe, expect, it } from 'vitest';
+import { routeRequest } from '../../src/worker/router';
 import type { Env } from '../../src/worker/types';
 
 const origin = 'https://ilist.example';
+
+function workerEnv(): Env {
+  return env as unknown as Env;
+}
 
 async function login(): Promise<string> {
   const response = await SELF.fetch(`${origin}/api/admin/login`, {
@@ -15,6 +20,93 @@ async function login(): Promise<string> {
 }
 
 describe('filesystem API', () => {
+  it('verifies once for unknown usernames and blocks before password verification', async () => {
+    let now = 10_000;
+    let verificationCalls = 0;
+    const options = {
+      passwordAuthentication: {
+        now: () => now,
+        verifyPassword: async () => {
+          verificationCalls += 1;
+          return false;
+        },
+      },
+    };
+    const attempt = (username = 'missing-user') => routeRequest(new Request(`${origin}/api/admin/login`, {
+      method: 'POST',
+      headers: {
+        'CF-Connecting-IP': '203.0.113.20',
+        'content-type': 'application/json',
+        origin,
+      },
+      body: JSON.stringify({ username, password: 'wrong-password' }),
+    }), workerEnv(), options);
+
+    const unknown = await attempt();
+    expect(unknown.status).toBe(401);
+    expect(await unknown.json()).toMatchObject({ error: { message: 'Invalid username or password' } });
+    expect(verificationCalls).toBe(1);
+
+    for (const delay of [1, 2, 4, 8]) {
+      now += delay;
+      const response = await attempt();
+      expect(response.status).toBe(401);
+    }
+    expect(verificationCalls).toBe(5);
+
+    now += 8;
+    const throttled = await attempt();
+    expect(throttled.status).toBe(429);
+    expect(throttled.headers.get('retry-after')).toBe('37');
+    expect(await throttled.json()).toMatchObject({ error: { code: 'AUTH_RATE_LIMITED' } });
+    expect(verificationCalls).toBe(5);
+
+    const wrongPassword = await routeRequest(new Request(`${origin}/api/admin/login`, {
+      method: 'POST',
+      headers: {
+        'CF-Connecting-IP': '203.0.113.21',
+        'content-type': 'application/json',
+        origin,
+      },
+      body: JSON.stringify({ username: 'admin', password: 'wrong-password' }),
+    }), workerEnv(), options);
+    expect(wrongPassword.status).toBe(401);
+    expect(await wrongPassword.json()).toMatchObject({ error: { message: 'Invalid username or password' } });
+    expect(verificationCalls).toBe(6);
+  });
+
+  it('clears the login limiter after successful authentication', async () => {
+    let now = 11_000;
+    let valid = false;
+    let verificationCalls = 0;
+    const options = {
+      passwordAuthentication: {
+        now: () => now,
+        verifyPassword: async () => {
+          verificationCalls += 1;
+          return valid;
+        },
+      },
+    };
+    const attempt = () => routeRequest(new Request(`${origin}/api/admin/login`, {
+      method: 'POST',
+      headers: {
+        'CF-Connecting-IP': '203.0.113.22',
+        'content-type': 'application/json',
+        origin,
+      },
+      body: JSON.stringify({ username: 'admin', password: 'test-password' }),
+    }), workerEnv(), options);
+
+    expect((await attempt()).status).toBe(401);
+    now += 1;
+    valid = true;
+    expect((await attempt()).status).toBe(200);
+    valid = false;
+    expect((await attempt()).status).toBe(401);
+    expect(verificationCalls).toBe(3);
+  });
+
   it('lists the native R2 mount while stable and legacy file routes still work', async () => {
     const db = (env as unknown as Env).DB;
     const cookie = await login();
