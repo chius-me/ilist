@@ -8,15 +8,19 @@ export function useModalFocus({
   initialFocusRef,
   onClose,
   restoreFocus,
+  focusInitial = true,
 }: {
   active?: boolean;
   containerRef: RefObject<HTMLElement | null>;
   initialFocusRef: RefObject<HTMLElement | null>;
   onClose: () => void;
   restoreFocus?: HTMLElement | null;
+  focusInitial?: boolean;
 }) {
   const closeRef = useRef(onClose);
   closeRef.current = onClose;
+  const focusInitialRef = useRef(focusInitial);
+  focusInitialRef.current = focusInitial;
   useEffect(() => {
     if (!active || !containerRef.current) return;
     const container = containerRef.current;
@@ -36,7 +40,7 @@ export function useModalFocus({
       if (branch === document.body) break;
     }
 
-    (initialFocusRef.current ?? container.querySelector<HTMLElement>(FOCUSABLE))?.focus();
+    if (focusInitialRef.current) (initialFocusRef.current ?? container.querySelector<HTMLElement>(FOCUSABLE))?.focus();
     const onKeyDown = (event: KeyboardEvent) => {
       if (event.key === 'Escape') {
         event.preventDefault();

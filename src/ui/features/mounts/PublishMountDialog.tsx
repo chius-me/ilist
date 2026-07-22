@@ -6,18 +6,19 @@ interface Props {
   busy: boolean;
   onCancel: () => void;
   onConfirm: () => void;
+  restoreFocus?: HTMLElement | null;
 }
 
-export function PublishMountDialog({ busy, onCancel, onConfirm }: Props) {
+export function PublishMountDialog({ busy, onCancel, onConfirm, restoreFocus }: Props) {
   const { t } = useI18n();
   const backdrop = useRef<HTMLDivElement>(null);
   const cancel = useRef<HTMLButtonElement>(null);
-  useModalFocus({ containerRef: backdrop, initialFocusRef: cancel, onClose: onCancel });
+  useModalFocus({ containerRef: backdrop, initialFocusRef: cancel, onClose: onCancel, restoreFocus });
 
   return <div ref={backdrop} className="dialogBackdrop overlayScrim" role="presentation" onMouseDown={onCancel}>
-    <section className="confirmDialog overlaySurface" role="dialog" aria-modal="true" aria-labelledby="publish-mount-dialog-title" onMouseDown={(event) => event.stopPropagation()}>
+    <section className="confirmDialog overlaySurface" role="dialog" aria-modal="true" aria-labelledby="publish-mount-dialog-title" aria-describedby="publish-mount-dialog-description" onMouseDown={(event) => event.stopPropagation()}>
       <h2 id="publish-mount-dialog-title">{t('mount.publishDialogTitle')}</h2>
-      <p>{t('mount.publishDialogMessage')}</p>
+      <p id="publish-mount-dialog-description">{t('mount.publishDialogMessage')}</p>
       <footer>
         <button ref={cancel} className="button" type="button" onClick={onCancel}>{t('action.cancel')}</button>
         <button className="button primary" type="button" disabled={busy} onClick={onConfirm}>{t('mount.publishConfirm')}</button>

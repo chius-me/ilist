@@ -6,7 +6,7 @@ import type { Env } from '../../src/worker/types';
 const db = () => (env as unknown as Env).DB;
 
 describe('native R2 compatibility migration', () => {
-  it('is applied by shared Worker test setup', async () => {
+  it('keeps the compatibility mount explicitly public independent of the private schema default', async () => {
     const mount = await db().prepare("SELECT * FROM mounts WHERE id = 'native-r2'").first();
 
     expect(mount).toMatchObject({

@@ -15,25 +15,34 @@ import uploadSessions from '../../migrations/0012_upload_sessions.sql?raw';
 import uploadTerminalLeases from '../../migrations/0013_upload_terminal_leases.sql?raw';
 import shares from '../../migrations/0014_shares.sql?raw';
 import authRateLimits from '../../migrations/0015_auth_rate_limits.sql?raw';
+import mountsPrivateDefault from '../../migrations/0016_mounts_private_default.sql?raw';
 import type { Env } from '../../src/worker/types';
 
 beforeEach(async () => {
   const db = (env as unknown as Env).DB;
-  for (const statement of `${initial}\n${entries}\n${lock}\n${reservations}\n${leaseExpiry}\n${storageKeyImmutable}\n${storageRecovery}\n${mounts}\n${storageCredentials}\n${nativeR2CompatibilityMount}\n${oauthStates}\n${uploadSessions}\n${uploadTerminalLeases}\n${shares}\n${authRateLimits}`.split(/;\s+(?=(?:PRAGMA|CREATE|INSERT|DROP|ALTER))/)) {
-    const sql = statement.trim();
-    if (!sql) continue;
-    try {
-      await db.prepare(sql).run();
-    } catch (error) {
-      const normalizedSql = sql.replace(/\s+/g, ' ');
-      const repeatableAddColumn =
-        normalizedSql.startsWith('ALTER TABLE entries ADD COLUMN lifecycle_owner')
-        || normalizedSql.startsWith('ALTER TABLE upload_sessions ADD COLUMN terminal_')
-        || normalizedSql.startsWith('ALTER TABLE upload_sessions ADD COLUMN cleanup_attempted_at');
-      if (!(repeatableAddColumn && error instanceof Error && error.message.includes('duplicate column'))) {
-        throw error;
+  const apply = async (migrationSql: string) => {
+    for (const statement of migrationSql.split(/;\s+(?=(?:PRAGMA|CREATE|INSERT|DROP|ALTER|SELECT))/)) {
+      const sql = statement.trim();
+      if (!sql) continue;
+      try {
+        await db.prepare(sql).run();
+      } catch (error) {
+        const normalizedSql = sql.replace(/\s+/g, ' ');
+        const repeatableAddColumn =
+          normalizedSql.startsWith('ALTER TABLE entries ADD COLUMN lifecycle_owner')
+          || normalizedSql.startsWith('ALTER TABLE upload_sessions ADD COLUMN terminal_')
+          || normalizedSql.startsWith('ALTER TABLE upload_sessions ADD COLUMN cleanup_attempted_at');
+        if (!(repeatableAddColumn && error instanceof Error && error.message.includes('duplicate column'))) {
+          throw error;
+        }
       }
     }
+  };
+
+  await apply(`${initial}\n${entries}\n${lock}\n${reservations}\n${leaseExpiry}\n${storageKeyImmutable}\n${storageRecovery}\n${mounts}\n${storageCredentials}\n${nativeR2CompatibilityMount}\n${oauthStates}\n${uploadSessions}\n${uploadTerminalLeases}\n${shares}\n${authRateLimits}`);
+  const publicationColumn = await db.prepare('PRAGMA table_info(mounts)').all<{ name: string; dflt_value: string | null }>();
+  if (publicationColumn.results.find((column) => column.name === 'is_public')?.dflt_value !== '0') {
+    await apply(mountsPrivateDefault);
   }
 
   const foreignKeys = await db.prepare('PRAGMA foreign_keys').first<{ foreign_keys: number }>();

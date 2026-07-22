@@ -108,16 +108,20 @@ describe('MountManager', () => {
     await userEvent.click(screen.getByLabelText('Visible to guests'));
     await userEvent.click(screen.getByRole('button', { name: 'Create mount' }));
 
-    expect(screen.getByRole('dialog', { name: 'Publish storage mount' })).toBeVisible();
+    const publishDialog = screen.getByRole('dialog', { name: 'Publish storage mount' });
+    expect(publishDialog).toBeVisible();
+    expect(publishDialog).toHaveAccessibleDescription('Guests without an account will be able to browse this mounted storage.');
     expect(requests).toHaveLength(0);
     expect(screen.getByRole('button', { name: 'Cancel' })).toHaveFocus();
     fireEvent.keyDown(document, { key: 'Escape' });
     expect(screen.getByRole('dialog', { name: 'Add storage' })).toBeVisible();
+    expect(screen.getByRole('button', { name: 'Create mount' })).toHaveFocus();
     expect(screen.getByLabelText('Display name')).toHaveValue('Published archive');
     expect(screen.getByLabelText('Visible to guests')).toBeChecked();
 
     await userEvent.click(screen.getByRole('button', { name: 'Create mount' }));
     await userEvent.click(screen.getByRole('button', { name: 'Cancel' }));
+    expect(screen.getByRole('button', { name: 'Create mount' })).toHaveFocus();
     expect(screen.getByLabelText('Display name')).toHaveValue('Published archive');
     expect(screen.getByLabelText('Visible to guests')).toBeChecked();
 
@@ -125,6 +129,79 @@ describe('MountManager', () => {
     await userEvent.click(screen.getByRole('button', { name: 'Publish mount' }));
     await waitFor(() => expect(requests).toHaveLength(1));
     expect(JSON.parse(String(requests[0]!.body))).toMatchObject({ isPublic: true, name: 'Published archive' });
+  });
+
+  it('submits a delayed publication confirmation only once', async () => {
+    let resolveCreate: ((response: Response) => void) | undefined;
+    const requests: RequestInit[] = [];
+    vi.stubGlobal('fetch', vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
+      const url = String(input);
+      if (url.includes('/api/admin/me')) return Response.json(admin);
+      if (url.endsWith('/api/admin/mounts') && !init?.method) return Response.json({ ok: true, data: [] });
+      if (url.endsWith('/api/admin/mounts') && init?.method === 'POST') {
+        requests.push(init);
+        return new Promise<Response>((resolve) => { resolveCreate = resolve; });
+      }
+      if (url.includes('/api/fs/list')) return Response.json(emptyRoot);
+      throw new Error(`Unexpected fetch: ${url}`);
+    }));
+
+    render(<App />);
+    await userEvent.click(await screen.findByRole('button', { name: 'Add storage' }));
+    await userEvent.type(screen.getByLabelText('Display name'), 'Published archive');
+    await userEvent.type(screen.getByLabelText('Mount path'), '/published-archive');
+    await userEvent.type(screen.getByLabelText('Account ID'), 'account');
+    await userEvent.type(screen.getByLabelText('Bucket'), 'files');
+    await userEvent.type(screen.getByLabelText('Access Key ID'), 'access');
+    await userEvent.type(screen.getByLabelText('Secret Access Key'), 'secret');
+    await userEvent.click(screen.getByLabelText('Visible to guests'));
+    await userEvent.click(screen.getByRole('button', { name: 'Create mount' }));
+
+    const confirm = screen.getByRole('button', { name: 'Publish mount' });
+    fireEvent.click(confirm);
+    fireEvent.click(confirm);
+    expect(requests).toHaveLength(1);
+    resolveCreate?.(Response.json({ ok: true, data: savedMount }, { status: 201 }));
+    await waitFor(() => expect(screen.queryByRole('dialog', { name: 'Add storage' })).not.toBeInTheDocument());
+  });
+
+  it('keeps validated values after a failed publication and permits one retry', async () => {
+    let attempts = 0;
+    vi.stubGlobal('fetch', vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
+      const url = String(input);
+      if (url.includes('/api/admin/me')) return Response.json(admin);
+      if (url.endsWith('/api/admin/mounts') && !init?.method) return Response.json({ ok: true, data: [] });
+      if (url.endsWith('/api/admin/mounts') && init?.method === 'POST') {
+        attempts += 1;
+        if (attempts === 1) return Response.json({ ok: false, error: { code: 'INTERNAL_ERROR', message: 'failed' } }, { status: 500 });
+        return Response.json({ ok: true, data: savedMount }, { status: 201 });
+      }
+      if (url.includes('/api/fs/list')) return Response.json(emptyRoot);
+      throw new Error(`Unexpected fetch: ${url}`);
+    }));
+
+    render(<App />);
+    await userEvent.click(await screen.findByRole('button', { name: 'Add storage' }));
+    await userEvent.type(screen.getByLabelText('Display name'), 'Retry archive');
+    await userEvent.type(screen.getByLabelText('Mount path'), '/retry-archive');
+    await userEvent.type(screen.getByLabelText('Account ID'), 'account');
+    await userEvent.type(screen.getByLabelText('Bucket'), 'files');
+    await userEvent.type(screen.getByLabelText('Access Key ID'), 'access');
+    await userEvent.type(screen.getByLabelText('Secret Access Key'), 'secret');
+    await userEvent.click(screen.getByLabelText('Visible to guests'));
+    await userEvent.click(screen.getByRole('button', { name: 'Create mount' }));
+    await userEvent.click(screen.getByRole('button', { name: 'Publish mount' }));
+
+    expect(await screen.findByRole('alert')).toBeVisible();
+    expect(screen.getByLabelText('Display name')).toHaveValue('Retry archive');
+    expect(screen.getByLabelText('Mount path')).toHaveValue('/retry-archive');
+    expect(screen.getByLabelText('Visible to guests')).toBeChecked();
+    expect(screen.getByRole('button', { name: 'Create mount' })).toHaveFocus();
+
+    await userEvent.click(screen.getByRole('button', { name: 'Create mount' }));
+    await userEvent.click(screen.getByRole('button', { name: 'Publish mount' }));
+    await waitFor(() => expect(attempts).toBe(2));
+    await waitFor(() => expect(screen.queryByRole('dialog', { name: 'Add storage' })).not.toBeInTheDocument());
   });
 
   it('requires confirmation only when an existing private mount becomes public', async () => {
