@@ -281,9 +281,11 @@ describe('multi-mount filesystem integration', () => {
   });
 
   it.each([
-    ['s3', 'cloudflare-r2'],
-    ['google', 'google'],
-  ] as const)('secures streamed %s downloads at the file route', async (driverType, provider) => {
+    ['s3', 'cloudflare-r2', 'HTML', 'text/html', 'html'],
+    ['s3', 'cloudflare-r2', 'SVG', 'image/svg+xml', 'svg'],
+    ['google', 'google', 'HTML', 'text/html', 'html'],
+    ['google', 'google', 'SVG', 'image/svg+xml', 'svg'],
+  ] as const)('secures streamed %s $s downloads at the file route', async (driverType, provider, _label, contentType, extension) => {
     const db = (env as unknown as Env).DB;
     await db.prepare("DELETE FROM mounts WHERE id <> 'native-r2'").run();
     await createMount(db, {
@@ -299,8 +301,8 @@ describe('multi-mount filesystem integration', () => {
           'accept-ranges': 'bytes',
           'content-range': 'bytes 0-12/20',
           'content-length': '13',
-          'content-type': 'text/html',
-          'content-disposition': 'inline; filename=provider.html',
+          'content-type': contentType,
+          'content-disposition': `inline; filename=provider.${extension}`,
           'set-cookie': 'provider=secret',
           'x-provider-debug': 'private',
         },
@@ -311,7 +313,7 @@ describe('multi-mount filesystem integration', () => {
 
     const listed = await SELF.fetch(`${origin}/api/fs/list?path=/streamed/Docs`);
     const entry = (await listed.json() as { data: { items: Array<{ id: string }> } }).data.items[0];
-    const response = await SELF.fetch(`${origin}/file/${entry.id}/provider.txt`, {
+    const response = await SELF.fetch(`${origin}/file/${entry.id}/provider.${extension}`, {
       headers: { range: 'bytes=0-12' },
     });
 

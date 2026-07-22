@@ -9,6 +9,12 @@
     "not_found_handling": "single-page-application",
     "run_worker_first": ["/api/*", "/file/*", "/s/*"]
   },
+  "routes": [
+    {
+      "pattern": "ilist.chius.cc",
+      "custom_domain": true
+    }
+  ],
   "vars": {
     "ADMIN_USERNAME": "admin",
     "SESSION_TTL_SECONDS": "604800"

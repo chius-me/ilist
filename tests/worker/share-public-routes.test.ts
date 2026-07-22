@@ -290,6 +290,29 @@ describe('public share routes', () => {
     expect(await denied.json()).toMatchObject({ error: { code: 'SHARE_DOWNLOAD_DISABLED' } });
   });
 
+  it.each([
+    ['HTML', 'unsafe.html', 'text/html', '<script>alert(1)</script>'],
+    ['SVG', 'unsafe.svg', 'image/svg+xml', '<svg><script>alert(1)</script></svg>'],
+  ])('forces shared $s content to download', async (_label, name, contentType, body) => {
+    const { folderId } = await nativeTree();
+    await workerEnv().DB.prepare('UPDATE entries SET name = ?, content_type = ?, size = ? WHERE id = ?')
+      .bind(name, contentType, new TextEncoder().encode(body).byteLength, 'share-public-file').run();
+    await workerEnv().R2_BUCKET.put('shares/public.txt', body, { httpMetadata: { contentType } });
+    const { token } = await createShare(folderId, { allowDownload: false });
+    const listed = await SELF.fetch(`${origin}/s/${token}/api/list`);
+    const item = (await listed.json() as { data: { items: Array<{ id: string }> } }).data.items[0]!;
+
+    const response = await SELF.fetch(`${origin}/s/${token}/file/${encodeURIComponent(item.id)}/${encodeURIComponent(name)}`);
+
+    expect(response.status).toBe(200);
+    expect(response.headers.get('content-type')).toBe('application/octet-stream');
+    expect(response.headers.get('content-disposition')).toMatch(/^attachment;/);
+    expect(response.headers.get('content-security-policy')).toBe("sandbox; default-src 'none'; frame-ancestors 'none'");
+    expect(response.headers.get('x-content-type-options')).toBe('nosniff');
+    expect(response.headers.get('cache-control')).toBe('private, no-store');
+    await expect(response.text()).resolves.toBe(body);
+  });
+
   it('applies disabled, expired, deleted, missing-target, and provider-unavailable state immediately', async () => {
     const { fileId } = await nativeTree();
     const cookie = await login();

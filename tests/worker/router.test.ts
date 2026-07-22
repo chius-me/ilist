@@ -303,26 +303,29 @@ describe('filesystem API', () => {
     await expect(response.text()).resolves.toBe('he');
   });
 
-  it('isolates active R2 content without changing Range semantics', async () => {
+  it.each([
+    ['HTML', 'report.html', 'text/html; charset=utf-8', '<script>alert(1)</script>'],
+    ['SVG', 'icon.svg', 'image/svg+xml', '<svg><script>alert(1)</script></svg>'],
+  ])('isolates active native R2 $s content without changing Range semantics', async (_label, name, contentType, body) => {
     const cookie = await login();
-    const id = 'active-html-test';
-    await SELF.fetch(`${origin}/api/admin/files/${id}?parentId=root&name=report.html`, {
+    const id = `active-${name.replace('.', '-')}-test`;
+    await SELF.fetch(`${origin}/api/admin/files/${id}?parentId=root&name=${encodeURIComponent(name)}`, {
       method: 'PUT',
-      headers: { cookie, origin, 'content-type': 'text/html; charset=utf-8' },
-      body: '<script>alert(1)</script>',
+      headers: { cookie, origin, 'content-type': contentType },
+      body,
     });
 
-    const response = await SELF.fetch(`${origin}/file/${id}/report.html`, {
+    const response = await SELF.fetch(`${origin}/file/${id}/${name}`, {
       headers: { range: 'bytes=0-7' },
     });
 
     expect(response.status).toBe(206);
-    expect(response.headers.get('content-range')).toBe('bytes 0-7/25');
+    expect(response.headers.get('content-range')).toBe(`bytes 0-7/${new TextEncoder().encode(body).byteLength}`);
     expect(response.headers.get('content-type')).toBe('application/octet-stream');
     expect(response.headers.get('content-disposition')).toMatch(/^attachment;/);
     expect(response.headers.get('content-security-policy')).toBe("sandbox; default-src 'none'; frame-ancestors 'none'");
     expect(response.headers.get('referrer-policy')).toBe('no-referrer');
-    await expect(response.text()).resolves.toBe('<script>');
+    await expect(response.text()).resolves.toBe(body.slice(0, 8));
   });
 
   it('adds application security headers to APIs and Workers Assets', async () => {
