@@ -97,6 +97,8 @@ The Worker acts as the control plane and streams or redirects file data where po
    openssl rand -hex 32    # SESSION_SECRET
    ```
 
+   The password command rejects password arguments. On a terminal it disables character echo while reading the prompt. Automation may provide exactly one password line through non-TTY standard input; stdout contains only the generated hash, while prompts and errors use stderr.
+
    New hashes use `pbkdf2-sha256:600000`. Legacy `pbkdf2` hashes remain valid for this release, but an administrator hash is a Cloudflare Secret and cannot be upgraded automatically. After a successful legacy login, rotate it with these exact commands:
 
    ```bash

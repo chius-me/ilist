@@ -170,6 +170,29 @@ describe('filesystem API', () => {
     expect(message).not.toContain(workerEnv().ADMIN_PASSWORD_HASH);
   });
 
+  it('releases the verification lease when the administrator verifier throws', async () => {
+    const request = () => new Request(`${origin}/api/admin/login`, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json', origin },
+      body: JSON.stringify({ username: 'admin', password: 'test-password' }),
+    });
+    const failed = await routeRequest(request(), workerEnv(), {
+      passwordAuthentication: {
+        clientIp: '203.0.113.24',
+        verifyPasswordDetailed: async () => { throw new Error('verifier unavailable'); },
+      },
+    });
+    expect(failed.status).toBe(500);
+
+    const retry = await routeRequest(request(), workerEnv(), {
+      passwordAuthentication: {
+        clientIp: '203.0.113.24',
+        verifyPassword: async () => false,
+      },
+    });
+    expect(retry.status).toBe(401);
+  });
+
   it('lists the native R2 mount while stable and legacy file routes still work', async () => {
     const db = (env as unknown as Env).DB;
     const cookie = await login();

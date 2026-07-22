@@ -2,6 +2,7 @@ import {
   clearAuthRateLimit,
   getAuthRateLimit,
   recordAuthRateLimitFailure,
+  releaseAuthRateLimitVerification,
   reserveAuthRateLimitVerification,
 } from './db';
 import { HttpError } from './http';
@@ -124,4 +125,16 @@ export async function recordAuthFailure(context: AuthRateLimitContext): Promise<
 
 export function clearAuthFailures(context: AuthRateLimitContext): Promise<boolean> {
   return clearAuthRateLimit(context.db, context.keyHash, context.reservationToken);
+}
+
+export function releaseAuthReservation(context: AuthRateLimitContext): Promise<boolean> {
+  return releaseAuthRateLimitVerification(context.db, context.keyHash, context.reservationToken);
+}
+
+export async function releaseAuthReservationSafely(context: AuthRateLimitContext): Promise<void> {
+  try {
+    await releaseAuthReservation(context);
+  } catch {
+    // Preserve the original authentication error if cleanup storage is unavailable.
+  }
 }

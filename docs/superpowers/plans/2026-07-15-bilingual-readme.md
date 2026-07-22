@@ -50,7 +50,7 @@ Use the exact sequence below:
 8. Sign in as the ADMIN_USERNAME value, which defaults to admin
 ```
 
-Keep these commands exact: `npm install`, `npx wrangler d1 create ilist-db`, `npx wrangler r2 bucket create ilist-files`, `npx wrangler d1 migrations apply ilist-db --remote`, `npm run hash-password -- "choose-a-strong-password"`, `openssl rand -base64 32`, `openssl rand -hex 32`, `npm run check`, and `npm run deploy`.
+Keep these commands exact: `npm install`, `npx wrangler d1 create ilist-db`, `npx wrangler r2 bucket create ilist-files`, `npx wrangler d1 migrations apply ilist-db --remote`, `npm run hash-password`, `openssl rand -base64 32`, `openssl rand -hex 32`, `npm run check`, and `npm run deploy`.
 
 - [ ] **Step 4: Add compact provider and operations guidance**
 

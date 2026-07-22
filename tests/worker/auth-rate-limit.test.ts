@@ -4,6 +4,7 @@ import {
   assertAuthAllowed,
   clearAuthFailures,
   recordAuthFailure,
+  releaseAuthReservation,
   type AuthRateLimitPolicy,
 } from '../../src/worker/auth-rate-limit';
 import { deleteAuthRateLimitsBefore } from '../../src/worker/db';
@@ -142,6 +143,32 @@ describe('authentication rate limiter', () => {
     await expect(recordAuthFailure(current)).resolves.toBe(1);
     await expect(assertAuthAllowed(workerEnv(), request(), 'admin-login', 'admin', policy))
       .rejects.toMatchObject({ status: 429, details: { retryAfter: 1 } });
+  });
+
+  it('releases only the owned reservation while preserving prior failures', async () => {
+    let now = 7_000;
+    const policy: AuthRateLimitPolicy = {
+      maxFailures: 5,
+      windowSeconds: 60,
+      now: () => now,
+      clientIp: '203.0.113.11',
+    };
+    const req = request();
+    const failed = await assertAuthAllowed(workerEnv(), req, 'admin-login', 'admin', policy);
+    await recordAuthFailure(failed);
+    now += 1;
+
+    const abandoned = await assertAuthAllowed(workerEnv(), req, 'admin-login', 'admin', policy);
+    await expect(releaseAuthReservation(abandoned)).resolves.toBe(true);
+    const state = await workerEnv().DB.prepare('SELECT failure_count FROM auth_rate_limits WHERE key_hash = ?')
+      .bind(abandoned.keyHash).first<{ failure_count: number }>();
+    expect(state?.failure_count).toBe(1);
+
+    const current = await assertAuthAllowed(workerEnv(), req, 'admin-login', 'admin', policy);
+    await expect(releaseAuthReservation(abandoned)).resolves.toBe(false);
+    await expect(assertAuthAllowed(workerEnv(), req, 'admin-login', 'admin', policy))
+      .rejects.toMatchObject({ status: 429, details: { retryAfter: 30 } });
+    await expect(releaseAuthReservation(current)).resolves.toBe(true);
   });
 
   it('bounds opportunistic cleanup and leaves recent records intact', async () => {

@@ -2,6 +2,7 @@ export const PBKDF2_SHA256_SCHEME = 'pbkdf2-sha256';
 export const PBKDF2_SHA256_ITERATIONS = 600_000;
 export const LEGACY_PBKDF2_SCHEME = 'pbkdf2';
 export const LEGACY_PBKDF2_MIN_ITERATIONS = 100_000;
+export const PBKDF2_SHA256_MAX_ITERATIONS = PBKDF2_SHA256_ITERATIONS;
 export const PASSWORD_MAX_UTF8_BYTES = 256;
 export const PASSWORD_SALT_BYTES = 16;
 export const PASSWORD_HASH_BYTES = 32;
@@ -28,7 +29,9 @@ export function parsePasswordHash(storedHash) {
   if (!Number.isSafeInteger(iterations)) return null;
 
   const current = scheme === PBKDF2_SHA256_SCHEME && iterations === PBKDF2_SHA256_ITERATIONS;
-  const legacy = scheme === LEGACY_PBKDF2_SCHEME && iterations >= LEGACY_PBKDF2_MIN_ITERATIONS;
+  const legacy = scheme === LEGACY_PBKDF2_SCHEME
+    && iterations >= LEGACY_PBKDF2_MIN_ITERATIONS
+    && iterations <= PBKDF2_SHA256_MAX_ITERATIONS;
   if (!current && !legacy) return null;
   if (saltHex.length !== PASSWORD_SALT_BYTES * 2 || !HEX.test(saltHex)) return null;
   if (hashHex.length !== PASSWORD_HASH_BYTES * 2 || !HEX.test(hashHex)) return null;

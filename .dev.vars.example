@@ -1,4 +1,5 @@
-# Generate with `npm run hash-password`. Rotate with `npx wrangler secret put ADMIN_PASSWORD_HASH`.
+# Generate interactively with `npm run hash-password`; password argv is rejected.
+# Rotate with `npx wrangler secret put ADMIN_PASSWORD_HASH`.
 ADMIN_PASSWORD_HASH=pbkdf2-sha256:600000:replace_with_32_character_salt_hex:replace_with_64_character_hash_hex
 CREDENTIAL_MASTER_KEY=replace-with-32-byte-base64-key
 SESSION_SECRET=replace-with-at-least-32-random-characters

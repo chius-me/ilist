@@ -12,6 +12,7 @@ import {
   assertAuthAllowed,
   clearAuthFailures,
   recordAuthFailure,
+  releaseAuthReservationSafely,
   type AuthRateLimitPolicy,
 } from './auth-rate-limit';
 import {
@@ -52,7 +53,7 @@ import { handleOAuthRoutes } from './oauth-routes';
 import { keyFromPath, putObject, streamEntryObject } from './r2';
 import { withApplicationSecurityHeaders } from './response-security';
 import { handleShareAdminRoutes } from './share-admin-routes';
-import { handleSharePublicRoutes } from './share-public-routes';
+import { handleSharePublicRoutes, type SharePublicRouteOptions } from './share-public-routes';
 import type { BatchFailure, BatchResult, Env } from './types';
 import { handleUploadRoutes } from './upload-routes';
 
@@ -113,6 +114,8 @@ export interface RouteRequestOptions {
     clientIp?: string;
     verifyPassword?: typeof verifyPassword;
     verifyPasswordDetailed?: typeof verifyPasswordDetailed;
+    hashPassword?: SharePublicRouteOptions['hashPassword'];
+    upgradeSharePasswordHash?: SharePublicRouteOptions['upgradeSharePasswordHash'];
   };
 }
 
@@ -332,34 +335,42 @@ async function handleLogin(request: Request, env: Env, options: RouteRequestOpti
     clientIp: options.passwordAuthentication?.clientIp,
   };
   const rateLimit = await assertAuthAllowed(env, request, 'admin-login', username, policy);
-  const verification = options.passwordAuthentication?.verifyPasswordDetailed
-    ? await options.passwordAuthentication.verifyPasswordDetailed(password, env.ADMIN_PASSWORD_HASH)
-    : options.passwordAuthentication?.verifyPassword
-      ? {
-          valid: await options.passwordAuthentication.verifyPassword(password, env.ADMIN_PASSWORD_HASH),
-          needsUpgrade: false,
-        }
-      : await verifyPasswordDetailed(password, env.ADMIN_PASSWORD_HASH);
+  let reservationFinalized = false;
+  try {
+    const verification = options.passwordAuthentication?.verifyPasswordDetailed
+      ? await options.passwordAuthentication.verifyPasswordDetailed(password, env.ADMIN_PASSWORD_HASH)
+      : options.passwordAuthentication?.verifyPassword
+        ? {
+            valid: await options.passwordAuthentication.verifyPassword(password, env.ADMIN_PASSWORD_HASH),
+            needsUpgrade: false,
+          }
+        : await verifyPasswordDetailed(password, env.ADMIN_PASSWORD_HASH);
 
-  if (username !== expectedUsername || !verification.valid) {
-    await recordAuthFailure(rateLimit);
-    throw new HttpError(401, 'Invalid username or password');
-  }
+    if (username !== expectedUsername || !verification.valid) {
+      await recordAuthFailure(rateLimit);
+      reservationFinalized = true;
+      throw new HttpError(401, 'Invalid username or password');
+    }
 
-  if (!await clearAuthFailures(rateLimit)) {
-    throw new HttpError(429, 'AUTH_RATE_LIMITED', 'Too many authentication attempts', { retryAfter: 1 });
+    if (!await clearAuthFailures(rateLimit)) {
+      throw new HttpError(429, 'AUTH_RATE_LIMITED', 'Too many authentication attempts', { retryAfter: 1 });
+    }
+    reservationFinalized = true;
+    if (verification.needsUpgrade) {
+      console.warn('ADMIN_PASSWORD_HASH uses the legacy PBKDF2 format; rotate it to pbkdf2-sha256:600000.');
+    }
+    await cleanupExpiredSessions(env);
+    const now = Math.floor((options.passwordAuthentication?.now?.() ?? Date.now() / 1000));
+    await deleteAuthRateLimitsBefore(env.DB, now - 24 * 60 * 60, 100);
+    const session = await createSession(env);
+    return ok(
+      { username: expectedUsername },
+      { headers: { 'set-cookie': sessionCookie(request, session.token, session.expiresAt) } },
+    );
+  } catch (error) {
+    if (!reservationFinalized) await releaseAuthReservationSafely(rateLimit);
+    throw error;
   }
-  if (verification.needsUpgrade) {
-    console.warn('ADMIN_PASSWORD_HASH uses the legacy PBKDF2 format; rotate it to pbkdf2-sha256:600000.');
-  }
-  await cleanupExpiredSessions(env);
-  const now = Math.floor((options.passwordAuthentication?.now?.() ?? Date.now() / 1000));
-  await deleteAuthRateLimitsBefore(env.DB, now - 24 * 60 * 60, 100);
-  const session = await createSession(env);
-  return ok(
-    { username: expectedUsername },
-    { headers: { 'set-cookie': sessionCookie(request, session.token, session.expiresAt) } },
-  );
 }
 
 async function handleLogout(request: Request, env: Env): Promise<Response> {
