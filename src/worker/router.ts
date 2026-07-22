@@ -6,6 +6,7 @@ import {
   requireAdminSession,
   sessionCookie,
   verifyPassword,
+  verifyPasswordDetailed,
 } from './auth';
 import {
   assertAuthAllowed,
@@ -111,6 +112,7 @@ export interface RouteRequestOptions {
     now?: () => number;
     clientIp?: string;
     verifyPassword?: typeof verifyPassword;
+    verifyPasswordDetailed?: typeof verifyPasswordDetailed;
   };
 }
 
@@ -330,18 +332,25 @@ async function handleLogin(request: Request, env: Env, options: RouteRequestOpti
     clientIp: options.passwordAuthentication?.clientIp,
   };
   const rateLimit = await assertAuthAllowed(env, request, 'admin-login', username, policy);
-  const passwordMatches = await (options.passwordAuthentication?.verifyPassword ?? verifyPassword)(
-    password,
-    env.ADMIN_PASSWORD_HASH,
-  );
+  const verification = options.passwordAuthentication?.verifyPasswordDetailed
+    ? await options.passwordAuthentication.verifyPasswordDetailed(password, env.ADMIN_PASSWORD_HASH)
+    : options.passwordAuthentication?.verifyPassword
+      ? {
+          valid: await options.passwordAuthentication.verifyPassword(password, env.ADMIN_PASSWORD_HASH),
+          needsUpgrade: false,
+        }
+      : await verifyPasswordDetailed(password, env.ADMIN_PASSWORD_HASH);
 
-  if (username !== expectedUsername || !passwordMatches) {
+  if (username !== expectedUsername || !verification.valid) {
     await recordAuthFailure(rateLimit);
     throw new HttpError(401, 'Invalid username or password');
   }
 
   if (!await clearAuthFailures(rateLimit)) {
     throw new HttpError(429, 'AUTH_RATE_LIMITED', 'Too many authentication attempts', { retryAfter: 1 });
+  }
+  if (verification.needsUpgrade) {
+    console.warn('ADMIN_PASSWORD_HASH uses the legacy PBKDF2 format; rotate it to pbkdf2-sha256:600000.');
   }
   await cleanupExpiredSessions(env);
   const now = Math.floor((options.passwordAuthentication?.now?.() ?? Date.now() / 1000));

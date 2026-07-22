@@ -1,4 +1,8 @@
 import { hashPassword } from './auth';
+import {
+  passwordFitsPolicy,
+  PASSWORD_MAX_UTF8_BYTES,
+} from '../../scripts/lib/password-policy.mjs';
 import { HttpError, noContent, ok, readJson } from './http';
 import { getMount } from './mounts';
 import { createShareToken } from './share-crypto';
@@ -30,8 +34,8 @@ function assertKeys(value: Record<string, unknown>, allowed: Set<string>): void 
 
 function password(value: unknown, required = false): string | null {
   if (value === undefined && !required) return null;
-  if (typeof value !== 'string' || value.length < 8 || value.length > 1024) {
-    invalid('Share password must contain between 8 and 1024 characters');
+  if (typeof value !== 'string' || value.length < 8 || !passwordFitsPolicy(value)) {
+    invalid(`Share password must contain at least 8 characters and at most ${PASSWORD_MAX_UTF8_BYTES} UTF-8 bytes`);
   }
   return value;
 }

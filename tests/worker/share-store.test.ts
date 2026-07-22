@@ -100,7 +100,7 @@ describe('share store', () => {
 
   it('hashes optional share passwords using the existing verification format', async () => {
     const stored = await hashPassword('share-password');
-    expect(stored).toMatch(/^pbkdf2:100000:[0-9a-f]{32}:[0-9a-f]{64}$/);
+    expect(stored).toMatch(/^pbkdf2-sha256:600000:[0-9a-f]{32}:[0-9a-f]{64}$/);
     await expect(verifyPassword('share-password', stored)).resolves.toBe(true);
     await expect(verifyPassword('wrong-password', stored)).resolves.toBe(false);
   });

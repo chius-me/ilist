@@ -4,6 +4,8 @@ import { routeRequest } from '../../src/worker/router';
 import type { Env } from '../../src/worker/types';
 
 const origin = 'https://ilist.example';
+const LEGACY_SHARE_PASSWORD_HASH =
+  'pbkdf2:100000:00112233445566778899aabbccddeeff:b6969f61fc76d6202a99f47012dcd5b041024c4bbaa2c79a2f63e9a8e88bc4d8';
 
 function workerEnv(): Env {
   return env as unknown as Env;
@@ -157,6 +159,51 @@ describe('public share routes', () => {
     expect(setCookie).toContain(`Path=/s/${token}`);
     const authorized = await SELF.fetch(`${origin}/s/${token}/api`, { headers: { cookie: setCookie.split(';')[0] } });
     expect(authorized.status).toBe(200);
+  });
+
+  it('upgrades only a successfully verified legacy share password hash', async () => {
+    const { fileId } = await nativeTree();
+    const { token, id } = await createShare(fileId, { password: 'temporary-password' });
+    await workerEnv().DB.prepare('UPDATE shares SET password_hash = ? WHERE id = ?')
+      .bind(LEGACY_SHARE_PASSWORD_HASH, id).run();
+
+    let verifiedHash = '';
+    const unlocked = await routeRequest(new Request(`${origin}/s/${token}/auth`, {
+      method: 'POST',
+      headers: { 'CF-Connecting-IP': '203.0.113.42', origin, 'content-type': 'application/json' },
+      body: JSON.stringify({ password: 'share-password' }),
+    }), workerEnv(), {
+      passwordAuthentication: {
+        verifyPasswordDetailed: async (_password, storedHash) => {
+          verifiedHash = storedHash;
+          return { valid: true, needsUpgrade: true };
+        },
+      },
+    });
+
+    expect(unlocked.status).toBe(200);
+    expect(verifiedHash).toBe(LEGACY_SHARE_PASSWORD_HASH);
+    const upgraded = await workerEnv().DB.prepare('SELECT password_hash FROM shares WHERE id = ?')
+      .bind(id).first<{ password_hash: string }>();
+    expect(upgraded?.password_hash).toMatch(/^pbkdf2-sha256:600000:[0-9a-f]{32}:[0-9a-f]{64}$/);
+  });
+
+  it('never rewrites a legacy share password hash after failed authentication', async () => {
+    const { fileId } = await nativeTree();
+    const { token, id } = await createShare(fileId, { password: 'temporary-password' });
+    await workerEnv().DB.prepare('UPDATE shares SET password_hash = ? WHERE id = ?')
+      .bind(LEGACY_SHARE_PASSWORD_HASH, id).run();
+
+    const denied = await SELF.fetch(`${origin}/s/${token}/auth`, {
+      method: 'POST',
+      headers: { 'CF-Connecting-IP': '203.0.113.43', origin, 'content-type': 'application/json' },
+      body: JSON.stringify({ password: 'wrong-password' }),
+    });
+
+    expect(denied.status).toBe(401);
+    const unchanged = await workerEnv().DB.prepare('SELECT password_hash FROM shares WHERE id = ?')
+      .bind(id).first<{ password_hash: string }>();
+    expect(unchanged?.password_hash).toBe(LEGACY_SHARE_PASSWORD_HASH);
   });
 
   it('lists a private folder, previews with Range, and enforces direct download policy', async () => {
