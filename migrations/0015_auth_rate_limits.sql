@@ -4,6 +4,8 @@ CREATE TABLE IF NOT EXISTS auth_rate_limits (
   window_started_at INTEGER NOT NULL,
   failure_count INTEGER NOT NULL,
   blocked_until INTEGER NOT NULL,
+  reservation_token TEXT,
+  reservation_expires_at INTEGER NOT NULL DEFAULT 0,
   updated_at INTEGER NOT NULL
 );
 

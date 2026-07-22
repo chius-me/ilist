@@ -75,7 +75,7 @@ function fakeDriver(label: string, resumable = false): StorageDriver {
 async function login(): Promise<string> {
   const response = await SELF.fetch(`${origin}/api/admin/login`, {
     method: 'POST',
-    headers: { 'content-type': 'application/json', origin },
+    headers: { 'CF-Connecting-IP': '127.0.0.1', 'content-type': 'application/json', origin },
     body: JSON.stringify({ username: 'admin', password: 'test-password' }),
   });
   expect(response.status).toBe(200);

@@ -20,6 +20,7 @@ const MAX_PASSWORD_BYTES = 256;
 
 export interface SharePublicRouteOptions {
   now?: () => number;
+  clientIp?: string;
   verifyPassword?: typeof verifyPassword;
 }
 
@@ -64,7 +65,12 @@ async function authenticate(
 ): Promise<Response> {
   if (request.method !== 'POST') return methodNotAllowed();
   requireSameOriginWhenPresent(request);
-  const policy: AuthRateLimitPolicy = { maxFailures: 10, windowSeconds: 60, now: options.now };
+  const policy: AuthRateLimitPolicy = {
+    maxFailures: 10,
+    windowSeconds: 60,
+    now: options.now,
+    clientIp: options.clientIp,
+  };
   const rateLimit = await assertAuthAllowed(env, request, 'share-password', share.id, policy);
   let body: { password?: unknown };
   try {
@@ -83,7 +89,9 @@ async function authenticate(
     await recordAuthFailure(rateLimit);
     throw new HttpError(401, 'SHARE_PASSWORD_INVALID', 'Share password is invalid');
   }
-  await clearAuthFailures(rateLimit);
+  if (!await clearAuthFailures(rateLimit)) {
+    throw new HttpError(429, 'AUTH_RATE_LIMITED', 'Too many authentication attempts', { retryAfter: 1 });
+  }
   const now = Math.floor(Date.now() / 1000);
   const expiresAt = Math.min(now + SHARE_AUTH_TTL_SECONDS, share.expiresAt ?? Number.MAX_SAFE_INTEGER);
   const authorization = await createShareAuthorization(env, share.id, expiresAt);

@@ -2,23 +2,27 @@ import {
   clearAuthRateLimit,
   getAuthRateLimit,
   recordAuthRateLimitFailure,
+  reserveAuthRateLimitVerification,
 } from './db';
 import { HttpError } from './http';
 import type { Env } from './types';
 
 const encoder = new TextEncoder();
 const MAX_BACKOFF_SECONDS = 8;
+const RESERVATION_SECONDS = 30;
 
 export interface AuthRateLimitPolicy {
   maxFailures: number;
   windowSeconds: number;
   now?: () => number;
+  clientIp?: string;
 }
 
 export interface AuthRateLimitContext {
   readonly db: D1Database;
   readonly keyHash: string;
   readonly scope: string;
+  readonly reservationToken: string;
   readonly policy: AuthRateLimitPolicy;
 }
 
@@ -30,10 +34,10 @@ function normalizedSubject(subject: string): string {
   return subject.normalize('NFKC').trim().toLowerCase();
 }
 
-function clientIp(env: Env, request: Request): string {
+function clientIp(request: Request, policy: AuthRateLimitPolicy): string {
   const cloudflareIp = request.headers.get('CF-Connecting-IP')?.trim();
   if (cloudflareIp) return cloudflareIp;
-  if (env.AUTH_RATE_LIMIT_TEST_CLIENT_IP) return env.AUTH_RATE_LIMIT_TEST_CLIENT_IP;
+  if (policy.clientIp?.trim()) return policy.clientIp.trim();
   throw new HttpError(500, 'AUTH_CLIENT_IP_UNAVAILABLE', 'Authentication client identity is unavailable');
 }
 
@@ -61,6 +65,11 @@ async function rateLimitKey(env: Env, scope: string, ip: string, subject: string
   return bytesToHex(await crypto.subtle.sign('HMAC', key, encoder.encode(identity)));
 }
 
+function reservationToken(): string {
+  const bytes = crypto.getRandomValues(new Uint8Array(16));
+  return [...bytes].map((byte) => byte.toString(16).padStart(2, '0')).join('');
+}
+
 function rateLimited(retryAfter: number): HttpError {
   return new HttpError(429, 'AUTH_RATE_LIMITED', 'Too many authentication attempts', {
     retryAfter: Math.max(1, Math.ceil(retryAfter)),
@@ -75,19 +84,29 @@ export async function assertAuthAllowed(
   policy: AuthRateLimitPolicy,
 ): Promise<AuthRateLimitContext> {
   validatePolicy(policy);
-  const keyHash = await rateLimitKey(env, scope, clientIp(env, request), subject);
-  const context = { db: env.DB, keyHash, scope, policy };
-  const state = await getAuthRateLimit(env.DB, keyHash);
-  if (!state) return context;
-
+  const keyHash = await rateLimitKey(env, scope, clientIp(request, policy), subject);
   const now = nowSeconds(policy);
-  const windowEndsAt = state.window_started_at + policy.windowSeconds;
-  if (now >= windowEndsAt) return context;
+  const token = reservationToken();
+  const reserved = await reserveAuthRateLimitVerification(
+    env.DB,
+    keyHash,
+    scope,
+    token,
+    now,
+    policy.windowSeconds,
+    policy.maxFailures,
+    RESERVATION_SECONDS,
+  );
+  if (reserved) {
+    return { db: env.DB, keyHash, scope, reservationToken: token, policy };
+  }
 
+  const state = await getAuthRateLimit(env.DB, keyHash);
+  if (!state) throw rateLimited(1);
+  const windowEndsAt = state.window_started_at + policy.windowSeconds;
   const thresholdBlockedUntil = state.failure_count >= policy.maxFailures ? windowEndsAt : 0;
-  const retryAt = Math.max(state.blocked_until, thresholdBlockedUntil);
-  if (now < retryAt) throw rateLimited(retryAt - now);
-  return context;
+  const retryAt = Math.max(state.blocked_until, thresholdBlockedUntil, state.reservation_expires_at);
+  throw rateLimited(Math.max(1, retryAt - now));
 }
 
 export async function recordAuthFailure(context: AuthRateLimitContext): Promise<number> {
@@ -96,12 +115,13 @@ export async function recordAuthFailure(context: AuthRateLimitContext): Promise<
     context.db,
     context.keyHash,
     context.scope,
+    context.reservationToken,
     now,
     context.policy.windowSeconds,
     MAX_BACKOFF_SECONDS,
   );
 }
 
-export async function clearAuthFailures(context: AuthRateLimitContext): Promise<void> {
-  await clearAuthRateLimit(context.db, context.keyHash);
+export function clearAuthFailures(context: AuthRateLimitContext): Promise<boolean> {
+  return clearAuthRateLimit(context.db, context.keyHash, context.reservationToken);
 }

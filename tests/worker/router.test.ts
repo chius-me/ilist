@@ -12,7 +12,7 @@ function workerEnv(): Env {
 async function login(): Promise<string> {
   const response = await SELF.fetch(`${origin}/api/admin/login`, {
     method: 'POST',
-    headers: { 'content-type': 'application/json', origin },
+    headers: { 'CF-Connecting-IP': '127.0.0.1', 'content-type': 'application/json', origin },
     body: JSON.stringify({ username: 'admin', password: 'test-password' }),
   });
   expect(response.status).toBe(200);
@@ -20,6 +20,45 @@ async function login(): Promise<string> {
 }
 
 describe('filesystem API', () => {
+  it('serializes simultaneous login verification slots before invoking the verifier', async () => {
+    let releaseVerification!: () => void;
+    let enteredVerification!: () => void;
+    const release = new Promise<void>((resolve) => { releaseVerification = resolve; });
+    const entered = new Promise<void>((resolve) => { enteredVerification = resolve; });
+    let verificationCalls = 0;
+    const options = {
+      passwordAuthentication: {
+        now: () => 9_000,
+        clientIp: '203.0.113.19',
+        verifyPassword: async () => {
+          verificationCalls += 1;
+          enteredVerification();
+          await release;
+          return false;
+        },
+      },
+    };
+    const attempt = () => routeRequest(new Request(`${origin}/api/admin/login`, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json', origin },
+      body: JSON.stringify({ username: 'admin', password: 'wrong-password' }),
+    }), workerEnv(), options);
+
+    const first = attempt();
+    await entered;
+    const concurrent = await Promise.all(Array.from({ length: 11 }, () => attempt()));
+    expect(verificationCalls).toBe(1);
+    expect(concurrent.map((response) => response.status)).toEqual(Array(11).fill(429));
+    for (const response of concurrent) {
+      expect(response.headers.get('retry-after')).toBe('30');
+      expect(Number.isInteger(Number(response.headers.get('retry-after')))).toBe(true);
+    }
+
+    releaseVerification();
+    expect((await first).status).toBe(401);
+    expect(verificationCalls).toBe(1);
+  });
+
   it('verifies once for unknown usernames and blocks before password verification', async () => {
     let now = 10_000;
     let verificationCalls = 0;
