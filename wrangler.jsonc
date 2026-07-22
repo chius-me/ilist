@@ -3,6 +3,7 @@
   "name": "ilist",
   "main": "src/worker/index.ts",
   "compatibility_date": "2026-07-03",
+  "workers_dev": true,
   "assets": {
     "directory": "./dist",
     "binding": "ASSETS",
