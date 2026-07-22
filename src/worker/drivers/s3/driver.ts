@@ -224,6 +224,21 @@ export class S3Driver implements StorageDriver {
     }
   }
 
+  async isWithin(itemId: string, ancestorId: string): Promise<boolean> {
+    try {
+      if (itemId === ancestorId) {
+        this.decodeItemId(itemId);
+        return true;
+      }
+      const item = this.decodeItemId(itemId);
+      const ancestor = this.decodeItemId(ancestorId);
+      return ancestor.kind === 'folder' && item.key.startsWith(ancestor.key);
+    } catch (error) {
+      if (error instanceof HttpError && error.status === 400) return false;
+      throw error;
+    }
+  }
+
   async getDownload(itemId: string, request: Request): Promise<DownloadResult> {
     const identity = this.decodeItemId(itemId);
     if (identity.kind !== 'file') throw new HttpError(400, 'INVALID_STORAGE_OPERATION', 'Folders cannot be downloaded');

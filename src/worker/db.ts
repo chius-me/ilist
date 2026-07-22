@@ -330,21 +330,34 @@ export async function listChildRows(db: D1Database, parentId: string): Promise<E
 }
 
 export async function listAncestorRows(db: D1Database, id: string): Promise<EntryRow[]> {
+  type AncestryRow = EntryRow & { ancestry_depth: number; ancestry_cycle: number };
   const result = await db
     .prepare(`
-      WITH RECURSIVE ancestors(id, depth) AS (
-        SELECT id, 0 FROM entries WHERE id = ?
+      WITH RECURSIVE ancestors(id, depth, path, cycle) AS (
+        SELECT id, 0, ',' || hex(id) || ',', 0 FROM entries WHERE id = ?
         UNION ALL
-        SELECT parent.id, child.depth + 1
+        SELECT
+          parent.id,
+          child.depth + 1,
+          child.path || hex(parent.id) || ',',
+          instr(child.path, ',' || hex(parent.id) || ',') > 0
         FROM entries parent
         JOIN entries current ON current.parent_id = parent.id
         JOIN ancestors child ON current.id = child.id
+        WHERE child.depth < 256 AND child.cycle = 0
       )
-      SELECT entry.* FROM ancestors JOIN entries entry ON entry.id = ancestors.id ORDER BY ancestors.depth ASC
+      SELECT entry.*, ancestors.depth AS ancestry_depth, ancestors.cycle AS ancestry_cycle
+      FROM ancestors
+      JOIN entries entry ON entry.id = ancestors.id
+      ORDER BY ancestors.depth ASC
     `)
     .bind(id)
-    .all<EntryRow>();
-  return result.results ?? [];
+    .all<AncestryRow>();
+  const rows = result.results ?? [];
+  if (rows.some((row) => row.ancestry_cycle === 1)) return [];
+  const last = rows.at(-1);
+  if (last?.ancestry_depth === 256 && last.parent_id !== null) return [];
+  return rows;
 }
 
 export async function listDescendantRows(db: D1Database, id: string): Promise<EntryRow[]> {

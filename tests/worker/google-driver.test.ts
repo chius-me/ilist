@@ -4,6 +4,7 @@ import { GoogleDriveDriver, type GoogleDriveDriverClient } from '../../src/worke
 import { GOOGLE_DOC_MIME_TYPE, GOOGLE_FOLDER_MIME_TYPE } from '../../src/worker/drivers/google/items';
 import { driverRegistry } from '../../src/worker/drivers/registry';
 import type { Mount } from '../../src/worker/types';
+import { HttpError } from '../../src/worker/http';
 
 const mount: Mount = {
   id: 'mount-google', name: 'My Drive', mountPath: '/google', driverType: 'google', provider: 'google',
@@ -156,6 +157,28 @@ describe('Google Drive storage driver', () => {
     await expect(driver.remove('outside')).rejects.toMatchObject({ code: 'STORAGE_ITEM_NOT_FOUND' });
     expect(api.move).not.toHaveBeenCalled();
     expect(api.trash).not.toHaveBeenCalled();
+  });
+
+  it('proves live ancestry inclusively and rejects cycles and paths deeper than 256', async () => {
+    const scoped = { ...mount, rootItemId: 'mounted-root' };
+    const stat = vi.fn(async (id: string) => {
+      if (id === 'mounted-root') return file({ id, mimeType: GOOGLE_FOLDER_MIME_TYPE, size: undefined, parents: ['drive-root'] });
+      if (id === 'inside') return file({ id, parents: ['mounted-root'] });
+      if (id === 'cycle-a') return file({ id, parents: ['cycle-b'] });
+      if (id === 'cycle-b') return file({ id, parents: ['cycle-a'] });
+      if (id.startsWith('deep-')) {
+        const depth = Number(id.slice(5));
+        return file({ id, parents: [depth === 0 ? 'mounted-root' : `deep-${depth - 1}`] });
+      }
+      throw new HttpError(404, 'GOOGLE_ITEM_NOT_FOUND', 'missing');
+    });
+    const driver = new GoogleDriveDriver(scoped, client({ stat }));
+
+    await expect(driver.isWithin('mounted-root', 'mounted-root')).resolves.toBe(true);
+    await expect(driver.isWithin('inside', 'mounted-root')).resolves.toBe(true);
+    await expect(driver.isWithin('cycle-a', 'mounted-root')).resolves.toBe(false);
+    await expect(driver.isWithin('deep-255', 'mounted-root')).resolves.toBe(true);
+    await expect(driver.isWithin('deep-256', 'mounted-root')).resolves.toBe(false);
   });
 
   it('protects the mount root and validates provider-safe names', async () => {

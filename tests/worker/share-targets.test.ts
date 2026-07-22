@@ -2,8 +2,9 @@ import { env } from 'cloudflare:test';
 import { describe, expect, it, vi } from 'vitest';
 import type { DriverRegistry, StorageDriver, StorageItem } from '../../src/worker/drivers/types';
 import { encodeExternalId } from '../../src/worker/external-identity';
+import { HttpError } from '../../src/worker/http';
 import { createMount } from '../../src/worker/mounts';
-import { openShareItem } from '../../src/worker/share-crypto';
+import { openShareItem, sealShareItem } from '../../src/worker/share-crypto';
 import {
   downloadSharedFile,
   listSharedFolder,
@@ -14,6 +15,25 @@ import type { Env, Share } from '../../src/worker/types';
 
 function workerEnv(): Env {
   return env as unknown as Env;
+}
+
+function base64Url(bytes: Uint8Array): string {
+  let binary = '';
+  for (const byte of bytes) binary += String.fromCharCode(byte);
+  return btoa(binary).replace(/\+/g, '-').replace(/\//g, '_').replace(/=+$/g, '');
+}
+
+async function legacyV1Handle(shareId: string, itemId: string): Promise<string> {
+  const encoder = new TextEncoder();
+  const keyBytes = await crypto.subtle.digest('SHA-256', encoder.encode(`ilist:share-item:v1:${workerEnv().SESSION_SECRET}`));
+  const key = await crypto.subtle.importKey('raw', keyBytes, 'AES-GCM', false, ['encrypt']);
+  const iv = crypto.getRandomValues(new Uint8Array(12));
+  const ciphertext = await crypto.subtle.encrypt(
+    { name: 'AES-GCM', iv, additionalData: encoder.encode(shareId) },
+    key,
+    encoder.encode(JSON.stringify({ v: 1, itemId })),
+  );
+  return `v1.${base64Url(iv)}.${base64Url(new Uint8Array(ciphertext))}`;
 }
 
 function shareFor(mountId: string, providerItemId: string, targetKind: 'file' | 'folder', name: string): Share {
@@ -70,6 +90,10 @@ function fakeDriver(): StorageDriver {
   return {
     rootId: root.id,
     capabilities: new Set(['list', 'download']),
+    isWithin: vi.fn(async (itemId, ancestorId) => {
+      if (itemId === ancestorId) return true;
+      return itemId === file.id && ancestorId === folder.id;
+    }),
     list: vi.fn(async (parentId: string) => ({ items: parentId === folder.id ? [file] : [folder], nextCursor: null })),
     stat: vi.fn(async (itemId: string) => {
       const item = [root, folder, file].find((candidate) => candidate.id === itemId);
@@ -110,7 +134,50 @@ describe('shared storage targets', () => {
       capabilities: { open: false, preview: true, download: false, upload: false, rename: false, delete: false },
     });
     expect(JSON.stringify(directory)).not.toContain('private-child');
-    await expect(openShareItem(workerEnv(), share.id, directory.items[0].id)).resolves.toBe('private-child');
+    await expect(openShareItem(workerEnv(), share.id, directory.items[0].id)).resolves.toEqual({
+      rootItemId: 'private-folder',
+      itemId: 'private-child',
+    });
+  });
+
+  it('invalidates native handles when an item leaves the live root and restores them when it returns', async () => {
+    await insertNativeTree();
+    const share = shareFor('native-r2', 'private-folder', 'folder', 'Private folder');
+    const handle = (await listSharedFolder(workerEnv(), share, null)).items[0]!.id;
+
+    await workerEnv().DB.prepare("UPDATE entries SET parent_id = 'root' WHERE id = 'private-child'").run();
+    await expect(resolveSharedItem(workerEnv(), share, handle)).rejects.toMatchObject({
+      status: 404,
+      code: 'SHARE_TARGET_MISSING',
+    });
+
+    await workerEnv().DB.prepare("UPDATE entries SET parent_id = 'private-folder' WHERE id = 'private-child'").run();
+    await expect(resolveSharedItem(workerEnv(), share, handle)).resolves.toMatchObject({ item: { id: 'private-child' } });
+  });
+
+  it('applies the same live ancestry proof to legacy v1 handles', async () => {
+    await insertNativeTree();
+    const share = shareFor('native-r2', 'private-folder', 'folder', 'Private folder');
+    const handle = await legacyV1Handle(share.id, 'private-child');
+
+    await expect(resolveSharedItem(workerEnv(), share, handle)).resolves.toMatchObject({ item: { id: 'private-child' } });
+    await workerEnv().DB.prepare("UPDATE entries SET parent_id = 'root' WHERE id = 'private-child'").run();
+    await expect(resolveSharedItem(workerEnv(), share, handle)).rejects.toMatchObject({
+      status: 404,
+      code: 'SHARE_TARGET_MISSING',
+    });
+  });
+
+  it('invalidates native handles when the shared root is deleted', async () => {
+    await insertNativeTree();
+    const share = shareFor('native-r2', 'private-folder', 'folder', 'Private folder');
+
+    await workerEnv().DB.prepare("DELETE FROM entries WHERE id = 'private-child'").run();
+    await workerEnv().DB.prepare("DELETE FROM entries WHERE id = 'private-folder'").run();
+    await expect(resolveSharedItem(workerEnv(), share, null)).rejects.toMatchObject({
+      status: 404,
+      code: 'SHARE_TARGET_MISSING',
+    });
   });
 
   it('streams private native R2 files with Range support through a sealed handle', async () => {
@@ -170,5 +237,52 @@ describe('shared storage targets', () => {
     expect(response.headers.get('cache-control')).toBe('private, no-store');
     expect(response.headers.get('set-cookie')).toBeNull();
     expect(response.headers.get('x-provider-debug')).toBeNull();
+  });
+
+  it('rechecks external ancestry and rejects cross-share handle replay', async () => {
+    const mount = await createMount(workerEnv().DB, {
+      name: 'Mutable external', mountPath: `/mutable-${crypto.randomUUID()}`, driverType: 's3', provider: 'custom', config: {},
+    });
+    let inside = true;
+    const driver = fakeDriver();
+    driver.isWithin = vi.fn(async (itemId, ancestorId) => itemId === ancestorId || (inside && itemId === 'provider-file-secret' && ancestorId === 'provider-folder'));
+    const registry: DriverRegistry = { s3: () => driver };
+    const share = shareFor(mount.id, 'provider-folder', 'folder', 'External folder');
+    const handle = (await listSharedFolder(workerEnv(), share, null, registry)).items[0]!.id;
+
+    inside = false;
+    await expect(resolveSharedItem(workerEnv(), share, handle, registry)).rejects.toMatchObject({
+      status: 404,
+      code: 'SHARE_TARGET_MISSING',
+    });
+    inside = true;
+    await expect(resolveSharedItem(workerEnv(), share, handle, registry)).resolves.toMatchObject({ item: { id: 'provider-file-secret' } });
+
+    const otherShare = { ...share, id: 'another-share' };
+    await expect(resolveSharedItem(workerEnv(), otherShare, handle, registry)).rejects.toMatchObject({
+      status: 400,
+      code: 'SHARE_ITEM_INVALID',
+    });
+
+    const wrongRoot = await sealShareItem(workerEnv(), share.id, 'other-root', 'provider-file-secret');
+    await expect(resolveSharedItem(workerEnv(), share, wrongRoot, registry)).rejects.toMatchObject({
+      status: 404,
+      code: 'SHARE_TARGET_MISSING',
+    });
+  });
+
+  it('preserves provider authorization and availability errors during ancestry checks', async () => {
+    const mount = await createMount(workerEnv().DB, {
+      name: 'Unavailable external', mountPath: `/unavailable-${crypto.randomUUID()}`, driverType: 's3', provider: 'custom', config: {},
+    });
+    const share = shareFor(mount.id, 'provider-folder', 'folder', 'External folder');
+    const handle = await sealShareItem(workerEnv(), share.id, share.providerItemId, 'provider-file-secret');
+    for (const status of [403, 503]) {
+      const driver = fakeDriver();
+      driver.isWithin = vi.fn(async () => {
+        throw new HttpError(status, 'PROVIDER_FAILURE', 'Provider failure');
+      });
+      await expect(resolveSharedItem(workerEnv(), share, handle, { s3: () => driver })).rejects.toMatchObject({ status });
+    }
   });
 });

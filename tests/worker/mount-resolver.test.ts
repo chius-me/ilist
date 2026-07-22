@@ -68,6 +68,7 @@ describe('createDriver', () => {
       rootId: 'root',
       capabilities: new Set(),
       list: async () => ({ items: [], nextCursor: null }),
+      isWithin: async () => true,
       stat: async () => {
         throw new Error('not used');
       },

@@ -37,6 +37,17 @@ function fakeDriver(label: string, resumable = false): StorageDriver {
       'list', 'download', 'upload', 'createFolder', 'rename', 'move', 'delete',
       ...(resumable ? ['multipartUpload' as const] : []),
     ]),
+    isWithin: vi.fn(async (itemId, ancestorId) => {
+      if (itemId === ancestorId) return true;
+      let current = [...children.values()].flat().find((entry) => entry.id === itemId);
+      const visited = new Set<string>();
+      while (current?.parentId && !visited.has(current.id)) {
+        if (current.parentId === ancestorId) return true;
+        visited.add(current.id);
+        current = [...children.values()].flat().find((entry) => entry.id === current!.parentId);
+      }
+      return false;
+    }),
     ...(resumable ? {
       resumableUpload: {
         create: vi.fn(async () => ({ state: {}, expiresAt: Date.now() + 60_000 })),

@@ -79,6 +79,7 @@ function fakeDriver(
     ]),
     ...(multipart ? { resumableUpload: adapter } : {}),
     list: vi.fn(async () => ({ items: [], nextCursor: null })),
+    isWithin: vi.fn(async () => true),
     stat: vi.fn(async (id) => id === 'file'
       ? storageItem({ id: 'file', kind: 'file' })
       : storageItem({ id, name: id, kind: 'folder', size: null, contentType: null })),

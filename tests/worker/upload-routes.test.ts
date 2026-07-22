@@ -59,6 +59,7 @@ function fakeDriver(overrides: Partial<ResumableUploadAdapter> = {}): StorageDri
     capabilities: new Set(['list', 'upload', 'multipartUpload']),
     resumableUpload: adapter,
     list: vi.fn(async () => ({ items: [], nextCursor: null })),
+    isWithin: vi.fn(async () => true),
     stat: vi.fn(async (id) => item({ id, name: 'Uploads', kind: 'folder', size: null, contentType: null })),
     getDownload: vi.fn(async () => ({ kind: 'redirect' as const, url: 'https://download.example/file' })),
     createFolder: vi.fn(async () => item({ kind: 'folder' })),

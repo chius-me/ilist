@@ -6,6 +6,7 @@ import { OneDriveClient, type GraphDriveItem, type GraphListResult, type GraphUp
 import { OneDriveDriver, type OneDriveDriverClient } from '../../src/worker/drivers/onedrive/driver';
 import { mapGraphItem } from '../../src/worker/drivers/onedrive/mapper';
 import { UPLOAD_PART_SIZE_BYTES } from '../../src/worker/drivers/types';
+import { HttpError } from '../../src/worker/http';
 import type { Env, Mount } from '../../src/worker/types';
 
 const workerEnv = () => env as unknown as Env;
@@ -104,9 +105,11 @@ describe('OneDrive read driver', () => {
   });
 
   it('fetches a fresh preauthenticated download URL and rejects folder downloads', async () => {
-    const stat = vi.fn()
-      .mockResolvedValueOnce(graphItem())
-      .mockResolvedValueOnce(graphItem({ id: 'folder', file: undefined, folder: { childCount: 1 } }));
+    const stat = vi.fn(async (id: string) => {
+      if (id === 'root') return graphItem({ id, file: undefined, folder: { childCount: 2 }, parentReference: undefined });
+      if (id === 'folder') return graphItem({ id, file: undefined, folder: { childCount: 1 }, parentReference: { id: 'root' } });
+      return graphItem({ id, parentReference: { id: 'root' } });
+    });
     const getDownloadUrl = vi.fn(async () => 'https://download.example/one');
     const driver = new OneDriveDriver(mount, driverClient({ stat, getDownloadUrl }));
 
@@ -114,7 +117,7 @@ describe('OneDrive read driver', () => {
       kind: 'redirect', url: 'https://download.example/one',
     });
     await expect(driver.getDownload('folder', new Request('https://ilist.example/file'))).rejects.toMatchObject({ code: 'INVALID_STORAGE_OPERATION' });
-    expect(stat).toHaveBeenCalledTimes(2);
+    expect(stat).toHaveBeenCalledTimes(4);
     expect(getDownloadUrl).toHaveBeenCalledOnce();
     expect(getDownloadUrl).toHaveBeenCalledWith('item-1');
   });
@@ -137,6 +140,28 @@ describe('OneDrive read driver', () => {
     });
     await expect(driver.remove('outside')).rejects.toMatchObject({ code: 'STORAGE_ITEM_NOT_FOUND' });
     expect(api.remove).not.toHaveBeenCalled();
+  });
+
+  it('proves live ancestry inclusively and rejects cycles and paths deeper than 256', async () => {
+    const scopedMount = { ...mount, rootItemId: 'mounted-root' };
+    const stat = vi.fn(async (id: string) => {
+      if (id === 'mounted-root') return graphItem({ id, file: undefined, folder: { childCount: 1 }, parentReference: { id: 'drive-root' } });
+      if (id === 'inside') return graphItem({ id, parentReference: { id: 'mounted-root' } });
+      if (id === 'cycle-a') return graphItem({ id, parentReference: { id: 'cycle-b' } });
+      if (id === 'cycle-b') return graphItem({ id, parentReference: { id: 'cycle-a' } });
+      if (id.startsWith('deep-')) {
+        const depth = Number(id.slice(5));
+        return graphItem({ id, parentReference: { id: depth === 0 ? 'mounted-root' : `deep-${depth - 1}` } });
+      }
+      throw new HttpError(404, 'ONEDRIVE_ITEM_NOT_FOUND', 'missing');
+    });
+    const driver = new OneDriveDriver(scopedMount, driverClient({ stat }));
+
+    await expect(driver.isWithin('mounted-root', 'mounted-root')).resolves.toBe(true);
+    await expect(driver.isWithin('inside', 'mounted-root')).resolves.toBe(true);
+    await expect(driver.isWithin('cycle-a', 'mounted-root')).resolves.toBe(false);
+    await expect(driver.isWithin('deep-255', 'mounted-root')).resolves.toBe(true);
+    await expect(driver.isWithin('deep-256', 'mounted-root')).resolves.toBe(false);
   });
 
   it('uses encoded Graph item paths and only accepts Graph nextLink cursors', async () => {

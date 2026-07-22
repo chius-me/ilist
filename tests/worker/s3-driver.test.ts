@@ -202,6 +202,19 @@ describe('S3Driver', () => {
     await expect(driver.upload(driver.rootId, 'nested/file', new ReadableStream(), null)).rejects.toThrow();
   });
 
+  it('proves ancestry only for exact roots and safe descendant prefixes', async () => {
+    const driver = new S3Driver(mount, client());
+    const sharedFolder = driver.itemId('tenant/root/shared/', 'folder');
+    const child = driver.itemId('tenant/root/shared/file.txt', 'file');
+    const siblingPrefix = driver.itemId('tenant/root/shared-escape/file.txt', 'file');
+    const ancestorFile = driver.itemId('tenant/root/shared', 'file');
+
+    await expect(driver.isWithin(sharedFolder, sharedFolder)).resolves.toBe(true);
+    await expect(driver.isWithin(child, sharedFolder)).resolves.toBe(true);
+    await expect(driver.isWithin(siblingPrefix, sharedFolder)).resolves.toBe(false);
+    await expect(driver.isWithin(child, ancestorFile)).resolves.toBe(false);
+  });
+
   it('creates a marked root-scoped S3 multipart session and completes without a post-complete HEAD', async () => {
     vi.useFakeTimers();
     vi.setSystemTime(new Date('2026-07-17T04:05:06.000Z'));
