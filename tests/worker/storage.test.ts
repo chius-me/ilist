@@ -29,6 +29,13 @@ function fileId(label: string): string {
   return `storage-${fixture}-${label}`;
 }
 
+function expectSecureFileHeaders(response: Response): void {
+  expect(response.headers.get('content-security-policy')).toBe("sandbox; default-src 'none'; frame-ancestors 'none'");
+  expect(response.headers.get('x-content-type-options')).toBe('nosniff');
+  expect(response.headers.get('referrer-policy')).toBe('no-referrer');
+  expect(response.headers.get('cross-origin-resource-policy')).toBe('same-origin');
+}
+
 async function upload(label: string, body: string, name = `${label}.txt`) {
   const id = fileId(label);
   fixtureIds.push(id);
@@ -438,6 +445,9 @@ describe('R2 file lifecycle', () => {
     expect(headMatch.status).toBe(304);
     expect(unsafeMatch.status).toBe(412);
     expect(ifMatchFailure.status).toBe(412);
+    expectSecureFileHeaders(ifMatchFailure);
+    expect(ifMatchFailure.headers.get('content-type')).toBe('application/octet-stream');
+    expect(ifMatchFailure.headers.get('content-disposition')).toMatch(/^attachment;/);
     expect(stale.status).toBe(412);
     expect(current.status).toBe(200);
   });
@@ -452,6 +462,9 @@ describe('R2 file lifecycle', () => {
       }), { download: false, publicFile: true });
       expect(response.status).toBe(416);
       expect(response.headers.get('content-range')).toBe('bytes */11');
+      expectSecureFileHeaders(response);
+      expect(response.headers.get('content-type')).toBe('application/octet-stream');
+      expect(response.headers.get('content-disposition')).toMatch(/^attachment;/);
     }
   });
 

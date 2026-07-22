@@ -165,6 +165,9 @@ describe('shared storage targets', () => {
     expect(response.headers.get('content-type')).toBe('application/octet-stream');
     expect(response.headers.get('content-disposition')).toMatch(/^attachment;/);
     expect(response.headers.get('content-security-policy')).toBe("sandbox; default-src 'none'; frame-ancestors 'none'");
+    expect(response.headers.get('x-content-type-options')).toBe('nosniff');
+    expect(response.headers.get('referrer-policy')).toBe('no-referrer');
+    expect(response.headers.get('cache-control')).toBe('private, no-store');
     expect(response.headers.get('set-cookie')).toBeNull();
     expect(response.headers.get('x-provider-debug')).toBeNull();
   });
