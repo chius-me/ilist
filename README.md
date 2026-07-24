@@ -205,6 +205,21 @@ Fill in test-only values before starting Wrangler. It normally serves the applic
 | `npm run migrate:objects -- --local` | Import legacy object rows into the entry model locally |
 | `npm run migrate:objects -- --remote` | Import legacy object rows in production |
 
+## Continuous Deployment
+
+[`.github/workflows/ci-cd.yml`](.github/workflows/ci-cd.yml) runs `npm run check` on every pull request and every push to `main`.
+
+After a green check on `main` (or on manual `workflow_dispatch`), the same workflow applies pending remote D1 migrations, then deploys the Worker and Assets with Wrangler. Worker secrets set with `wrangler secret put` stay in Cloudflare and are not re-uploaded by CI.
+
+Configure these **repository secrets** (Settings → Secrets and variables → Actions) before the first automated deploy:
+
+| Secret | Purpose |
+| --- | --- |
+| `CLOUDFLARE_API_TOKEN` | API token with permission to edit Workers, Workers Routes / Custom Domains, and D1 for this account |
+| `CLOUDFLARE_ACCOUNT_ID` | Cloudflare account ID that owns the `ilist` Worker, `ilist-db` D1 database, and `ilist-files` R2 bucket |
+
+Do not put `ADMIN_PASSWORD_HASH`, `CREDENTIAL_MASTER_KEY`, OAuth client secrets, or other Worker secrets into GitHub. Keep them only as Cloudflare Worker secrets.
+
 ## Security
 
 - Keep `CREDENTIAL_MASTER_KEY` stable. Changing it without a re-encryption migration makes stored provider credentials unreadable.
