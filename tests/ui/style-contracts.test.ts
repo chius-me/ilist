@@ -94,4 +94,14 @@ describe('visual style contracts', () => {
     expect(explorer).toContain('.explorerToolbar, .toolbarActions { gap: 0; }');
     expect(explorer).toContain('.sortControl select { width: 64px; max-width: 64px;');
   });
+
+  it('keeps the site header and command bar transparent so only the file list carries surface color', () => {
+    expect(shell).toContain('background: transparent;');
+    expect(shell).toMatch(/\.siteHeader\s*\{[\s\S]*?background: transparent;/);
+    expect(shell).toMatch(/\.siteHeader\s*\{[\s\S]*?border-bottom: 0;/);
+    expect(explorer).toMatch(/\.explorerBrowser\s*\{[\s\S]*?background: transparent;/);
+    expect(explorer).toMatch(/\.explorerToolbar\s*\{[\s\S]*?background: transparent;/);
+    expect(explorer).toMatch(/\.explorerContent\s*\{[\s\S]*?background: var\(--surface\);/);
+    expect(explorer).toMatch(/\.explorerContent\s*\{[\s\S]*?border: 1px solid var\(--line\);/);
+  });
 });
