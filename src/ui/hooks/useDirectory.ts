@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
 import { listDirectory } from '../api/entries';
+import { normalizeDirectoryQuery } from '../lib/directory-query';
 import type { DirectoryResponse } from '../types/entries';
 import type { SessionStatus } from './useSession';
 
@@ -22,7 +23,7 @@ export function useDirectory(path: string, sessionStatus: SessionStatus, nameFil
     manualRefresh.current = false;
     setState((current) => ({ data: keepData ? current.data : null, loading: true, error: null }));
 
-    void listDirectory(path, controller.signal, nameFilter)
+    void listDirectory(path, controller.signal, normalizeDirectoryQuery(nameFilter))
       .then((data) => {
         if (!controller.signal.aborted) setState({ data, loading: false, error: null });
       })

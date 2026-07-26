@@ -81,7 +81,7 @@ describe('visual style contracts', () => {
   it('keeps the compact command bar on one row with 48px mobile icon targets', () => {
     expect(explorer).toContain('.explorerToolbar { position: relative; display: flex; align-items: center; min-height: 54px;');
     expect(explorer).toMatch(/\.toolbarPath\s*\{[^}]*min-width: 0;[^}]*flex: 1 1 auto;[^}]*overflow: hidden;/);
-    expect(explorer).toContain('.toolbarActions { position: relative; z-index: 2; margin-left: auto;');
+    expect(explorer).toContain('.toolbarActions { position: relative; z-index: var(--layer-sticky); margin-left: auto;');
     expect(explorer).toContain('.searchOverlay { width: 100%; min-width: 0; max-width: 360px; }');
     expect(explorer).toMatch(/\.sortControl select\s*\{[\s\S]*?width: auto;[\s\S]*?max-width: 88px;/);
     expect(explorer).toContain('.explorerToolbar .iconButton, .mobileViewToggle button { width: 48px; height: 48px; flex-basis: 48px; }');
@@ -99,13 +99,25 @@ describe('visual style contracts', () => {
     expect(shell).toMatch(/\.siteHeader\s*\{[\s\S]*?background: transparent;/);
     expect(shell).toMatch(/\.siteHeader\s*\{[\s\S]*?border-bottom: 0;/);
     expect(explorer).toMatch(/\.explorerBrowser\s*\{[^}]*border: 1px solid var\(--line\);[^}]*\}/);
-    expect(explorer).toMatch(/\.explorerBrowser\s*\{[^}]*border-radius: 8px;[^}]*\}/);
+    expect(explorer).toMatch(/\.explorerBrowser\s*\{[^}]*border-radius: var\(--radius-panel\);[^}]*\}/);
     expect(explorer).toMatch(/\.explorerBrowser\s*\{[^}]*background: var\(--surface\);[^}]*\}/);
     expect(explorer).toMatch(/\.explorerToolbar\s*\{[^}]*background: transparent;[^}]*\}/);
     expect(explorer).toMatch(/\.explorerToolbar\s*\{[^}]*padding: 8px 10px;[^}]*\}/);
     expect(explorer).toMatch(/\.explorerContent\s*\{[^}]*border-top: 1px solid var\(--line\);[^}]*\}/);
     expect(explorer).toMatch(/\.explorerContent\s*\{[^}]*background: transparent;[^}]*\}/);
     expect(explorer).not.toMatch(/\.explorerContent\s*\{[^}]*\bborder: 1px solid var\(--line\);/);
-    expect(explorer).not.toMatch(/\.explorerContent\s*\{[^}]*border-radius: 8px;/);
+    expect(explorer).not.toMatch(/\.explorerContent\s*\{[^}]*border-radius: var\(--radius-panel\);/);
+  });
+
+  it('keeps tokenized shape and layer scales in tokens.css', () => {
+    expect(tokens).toMatch(/--radius-control:\s*5px;/);
+    expect(tokens).toMatch(/--radius-panel:\s*7px;/);
+    expect(tokens).toMatch(/--radius-media:\s*6px;/);
+    expect(tokens).toMatch(/--layer-header:\s*10;/);
+    expect(tokens).toMatch(/--layer-sticky:\s*20;/);
+    expect(tokens).toMatch(/--layer-menu:\s*30;/);
+    expect(tokens).toMatch(/--layer-overlay:\s*40;/);
+    expect(tokens).toMatch(/--layer-toast:\s*50;/);
+    expect(tokens).toContain('--radius: var(--radius-control);');
   });
 });

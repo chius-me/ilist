@@ -109,7 +109,7 @@
 
 .loadingCard { min-width: 0; overflow: hidden; border: 1px solid var(--color-border); border-radius: var(--radius-panel); background: var(--color-surface); }
 .loadingCard::before { display: block; aspect-ratio: 4 / 3; background: var(--color-skeleton); content: ''; animation: skeleton 1.2s ease-in-out infinite alternate; }
-.loadingCard span { display: block; height: 9px; margin-left: 10px; border-radius: 3px; background: var(--color-skeleton); animation: skeleton 1.2s ease-in-out infinite alternate; }
+.loadingCard span { display: block; height: 9px; margin-left: 10px; border-radius: var(--space-1); background: var(--color-skeleton); animation: skeleton 1.2s ease-in-out infinite alternate; }
 .loadingCard span:first-child { width: 62%; margin-top: 11px; }
 .loadingCard span:nth-child(2) { width: 38%; margin-top: 6px; }
 .loadingCard span:last-child { height: 10px; margin-top: 9px; background: transparent; }
@@ -183,7 +183,7 @@
 .uploadTaskDetails span { color: var(--color-muted); font-size: 12px; }
 .uploadTask-failed .uploadTaskDetails span { color: var(--color-danger-text); }
 .uploadTaskActions { display: flex; flex: 0 0 auto; align-items: center; gap: 2px; }
-.uploadProgress { height: 4px; overflow: hidden; border-radius: 2px; background: var(--color-progress-track); }
+.uploadProgress { height: 4px; overflow: hidden; border-radius: var(--space-1); background: var(--color-progress-track); }
 .uploadProgress span { display: block; height: 100%; background: var(--color-primary); transition: width 120ms linear; }
 
 @media (max-width: 760px) {

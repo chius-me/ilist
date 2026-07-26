@@ -56,6 +56,8 @@
 }
 
 .headerControl:hover { border-color: var(--color-border); background: var(--color-hover); color: var(--color-text); }
+.headerControl:active:not(:disabled) { transform: translateY(1px); }
+.headerControl:focus-visible { box-shadow: var(--focus-ring); }
 
 .languageControl {
   width: auto;
