@@ -48,7 +48,7 @@ export function FileGrid({
               else if (entry.kind === 'folder') handlers.onOpen(entry);
               else handlers.onPreview(entry);
             }}>
-              <span className={`gridMedia ${entry.kind}`}><FileIcon entry={entry} size={34} /></span>
+              <span className={`gridMedia ${entry.kind}`}><span className={`gridIcon ${entry.kind}`}><FileIcon entry={entry} size={34} /></span></span>
               <span className="gridFooter">
                 <strong title={entry.name}>{entry.name}</strong>
                 <small>{entry.kind === 'folder' ? t('entry.folder') : formatBytes(entry.size)}</small>

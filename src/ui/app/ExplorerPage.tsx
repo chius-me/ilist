@@ -195,18 +195,19 @@ export function ExplorerPage({
           .slice(0, 3)
           .map((failure) => failure.message || failure.code)
           .join('; ');
-        pushToast('error', t('feedback.batchPartialDetail', {
+        // Defer so move/copy/delete dialogs can release inert before toast chrome mounts.
+        scheduleDeferredFeedback(() => pushToast('error', t('feedback.batchPartialDetail', {
           completed: result.succeeded.length,
           failed: result.failed.length,
           detail,
-        }));
+        })));
       } else {
         selection.clear();
-        pushToast('success', t('feedback.batchComplete', { completed: result.succeeded.length }));
+        scheduleDeferredFeedback(() => pushToast('success', t('feedback.batchComplete', { completed: result.succeeded.length })));
       }
       directory.refresh();
     } catch (error) {
-      pushToast('error', localizedApiError(error, t, 'feedback.operationFailed'));
+      scheduleDeferredFeedback(() => pushToast('error', localizedApiError(error, t, 'feedback.operationFailed')));
       throw error;
     } finally {
       setOperationPending(false);
@@ -252,7 +253,7 @@ export function ExplorerPage({
             {directory.error && directory.data ? <div className="retryBanner" role="alert"><AlertCircle aria-hidden="true" size={18} /><span>{directoryErrorHint(directory.error, t)}</span><button type="button" onClick={directory.refresh}><RefreshCw aria-hidden="true" size={15} />{t('action.retry')}</button></div> : null}
             {directory.loading && !directory.data ? <LoadingCollection view={view} label={t('state.loadingFiles')} /> : null}
             {directory.error && !directory.data ? <div className="errorState" role="alert"><AlertCircle aria-hidden="true" size={32} /><strong>{directoryErrorTitle(directory.error, t)}</strong><span>{directoryErrorHint(directory.error, t)}</span><button className="button" type="button" onClick={directory.refresh}><RefreshCw aria-hidden="true" size={16} />{t('action.retry')}</button></div> : null}
-            {directory.data && !directory.loading && !directory.error && entries.length === 0 ? <EmptyState query={query} admin={admin} /> : null}
+            {directory.data && !directory.loading && !directory.error && entries.length === 0 ? <EmptyState query={serverQuery} admin={admin} /> : null}
             {directory.data && entries.length > 0 ? <ExplorerCollection
               view={view}
               entries={entries}
@@ -282,8 +283,8 @@ export function ExplorerPage({
         directory.refresh();
         scheduleDeferredFeedback(() => { pushToast('success', t('feedback.folderCreated')); });
       }} /> : null}
-      {dialog?.type === 'move' ? <FolderPickerDialog entries={dialog.entries} onClose={() => setDialog(null)} onSubmit={(destinationId) => runBatch(() => moveEntries(dialog.entries.map((entry) => entry.id), destinationId))} /> : null}
-      {dialog?.type === 'copy' ? <FolderPickerDialog entries={dialog.entries} onClose={() => setDialog(null)} onSubmit={(destinationId) => runBatch(() => copyEntries(dialog.entries.map((entry) => entry.id), destinationId))} /> : null}
+      {dialog?.type === 'move' ? <FolderPickerDialog mode="move" entries={dialog.entries} onClose={() => setDialog(null)} onSubmit={(destinationId) => runBatch(() => moveEntries(dialog.entries.map((entry) => entry.id), destinationId))} /> : null}
+      {dialog?.type === 'copy' ? <FolderPickerDialog mode="copy" entries={dialog.entries} onClose={() => setDialog(null)} onSubmit={(destinationId) => runBatch(() => copyEntries(dialog.entries.map((entry) => entry.id), destinationId))} /> : null}
       {dialog?.type === 'delete' ? <DeleteDialog entries={dialog.entries} onClose={() => setDialog(null)} onSubmit={() => runBatch(() => deleteEntries(dialog.entries.map((entry) => entry.id)))} /> : null}
       {dialog?.type === 'properties' ? <PropertiesDialog entry={dialog.entries[0]} onClose={() => setDialog(null)} onSubmit={async (entryPatch) => {
         await patchEntry(dialog.entries[0].id, entryPatch);

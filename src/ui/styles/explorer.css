@@ -142,6 +142,8 @@
 .entryRow:last-child { border-bottom: 0; }
 .entryRow:hover { background: var(--color-hover); }
 .entryRow.isSelected { background: var(--accent-soft); box-shadow: inset 3px 0 0 var(--accent); }
+.entryRow.isFocused { box-shadow: inset 0 0 0 2px var(--accent); }
+.entryRow.isSelected.isFocused { box-shadow: inset 3px 0 0 var(--accent), inset 0 0 0 2px var(--accent); }
 .entrySelect, .entrySelectPlaceholder { display: grid; width: 36px; height: 36px; place-items: center; }
 .entrySelect { opacity: 1; }
 .entrySelect input, .gridSelect { width: 16px; height: 16px; margin: 0; accent-color: var(--accent); }
@@ -162,7 +164,8 @@
 .entryIcon { display: grid; width: 28px; height: 28px; place-items: center; border-radius: var(--space-1); }
 .entryIcon.folder, .gridIcon.folder { color: var(--color-folder-icon); background: var(--color-folder-icon-surface); }
 .entryIcon.file, .gridIcon.file { color: var(--color-file-icon); background: var(--color-file-icon-surface); }
-.entryName { min-width: 0; overflow: hidden; color: var(--text); font-size: 13px; font-weight: 650; text-overflow: ellipsis; white-space: nowrap; }
+.entryName { display: block; min-width: 0; overflow: hidden; color: var(--text); font-size: 13px; font-weight: 650; text-overflow: ellipsis; white-space: nowrap; }
+.entryName strong { display: block; overflow: hidden; font-weight: inherit; text-overflow: ellipsis; white-space: nowrap; }
 .entrySize, .entryDate { min-width: 0; overflow: hidden; color: var(--muted); padding: 0 8px; font-size: 12px; font-variant-numeric: tabular-nums; text-overflow: ellipsis; white-space: nowrap; }
 .entryActions { display: flex; align-items: center; justify-content: flex-end; gap: 2px; padding-right: 6px; }
 .entryActions .iconButton { width: 30px; height: 30px; flex-basis: 30px; border-color: transparent; background: transparent; }
@@ -177,6 +180,7 @@
 .fileCard { position: relative; min-width: 0; overflow: hidden; border: 1px solid var(--line); border-radius: var(--radius-panel); background: var(--color-surface); }
 .fileCard:hover { border-color: var(--color-border-strong); background: var(--color-hover); }
 .fileCard.isSelected { border-color: var(--accent); background: var(--accent-soft); }
+.fileCard.isFocused { box-shadow: 0 0 0 2px var(--accent); }
 .gridPrimary { display: block; width: 100%; border: 0; background: transparent; padding: 0; text-align: left; }
 .gridMedia { display: grid; width: 100%; aspect-ratio: 4 / 3; place-items: center; border-bottom: 1px solid var(--line); background: var(--color-surface-muted); }
 .gridIcon { display: grid; width: 48px; height: 48px; place-items: center; border-radius: var(--radius-panel); }
@@ -221,21 +225,25 @@
 .mobileAction.destructive { color: var(--color-danger-text); }
 .mobileActionCancel { justify-content: center; margin-top: 8px; border-top: 1px solid var(--color-border); text-align: center; }
 
+@media (max-width: 960px) {
+  .selectionToolbar { align-items: flex-start; flex-direction: column; gap: 8px; }
+  .selectionActions { width: 100%; justify-content: flex-start; flex-wrap: wrap; }
+}
+
 @media (max-width: 760px) {
   .explorerPage { width: 100%; padding-top: 12px; }
   .explorerToolbar, .toolbarActions { gap: 0; }
   .toolbarPath .breadcrumbs { overflow: hidden; }
-  .toolbarPath .breadcrumbItem:not(:last-child) { display: none; }
-  .toolbarPath .breadcrumbItem:last-child { min-width: 0; }
-  .toolbarPath .breadcrumbItem:last-child button { max-width: 100%; }
+  /* Keep home + parent + current so nested paths remain navigable on small screens. */
+  .toolbarPath .breadcrumbItem:not(:first-child):not(:nth-last-child(-n+2)) { display: none; }
+  .toolbarPath .breadcrumbItem { min-width: 0; }
+  .toolbarPath .breadcrumbItem button { max-width: 100%; }
   .explorerToolbar .iconButton, .mobileViewToggle button { width: 48px; height: 48px; flex-basis: 48px; }
   .searchControl { height: 48px; }
   .searchControl input { height: 46px; }
   .sortControl select { width: 64px; max-width: 64px; height: 48px; padding: 0 20px 0 6px; }
   .desktopViewToggle, .desktopAdminActions { display: none; }
   .mobileViewToggle, .mobileAdminActions { display: inline-flex; }
-  .selectionToolbar { align-items: flex-start; flex-direction: column; }
-  .selectionActions { width: 100%; justify-content: flex-start; flex-wrap: wrap; }
   .fileListHeader, .entryRow { grid-template-columns: 48px minmax(0, 1fr) minmax(76px, auto); }
   .fileListHeader { min-width: 0; height: 40px; }
   .fileListHeader span:nth-child(3), .fileListHeader span:nth-child(4) { display: none; }

@@ -18,7 +18,7 @@ export function PreferencesPage() {
         <div><h1>{t('admin.appearanceTitle')}</h1><p>{t('admin.appearanceDescription')}</p></div>
         <button className="button" type="button" onClick={reset}><RotateCcw aria-hidden="true" size={16} />{t('preference.reset')}</button>
       </header>
-      <form className="preferencesForm">
+      <form className="preferencesForm" onSubmit={(event) => event.preventDefault()}>
         <label>
           <span><strong>{t('preference.language')}</strong><small>{t('preference.languageHint')}</small></span>
           <select aria-label={t('preference.language')} value={preferences.locale} onChange={(event) => updatePreferences({ locale: event.target.value as Locale })}>

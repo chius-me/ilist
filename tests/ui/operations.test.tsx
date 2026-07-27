@@ -181,6 +181,21 @@ describe('explorer operations', () => {
     ));
   });
 
+  it('labels the folder picker for copy instead of move', async () => {
+    const selected = entry('report', 'report.pdf', 'file');
+    vi.stubGlobal('fetch', vi.fn(async (input: RequestInfo | URL) => {
+      const url = String(input);
+      if (url.includes('/api/fs/list')) return new Response(JSON.stringify(root));
+      throw new Error(`Unexpected fetch: ${url}`);
+    }));
+
+    render(<FolderPickerDialog mode="copy" entries={[selected]} onClose={() => undefined} onSubmit={async () => undefined} />);
+    expect(await screen.findByRole('dialog', { name: 'Copy selected entries' })).toBeVisible();
+    expect(screen.getByRole('heading', { name: 'Copy report.pdf' })).toBeVisible();
+    expect(screen.getByRole('button', { name: 'Copy here' })).toBeVisible();
+    expect(screen.queryByRole('button', { name: 'Move here' })).not.toBeInTheDocument();
+  });
+
   it('disables the virtual root as a move destination and enables a writable mount', async () => {
     const selected = entry('report', 'report.pdf', 'file');
     const readOnlyCapabilities = {

@@ -28,7 +28,7 @@ interface ShareTrailItem {
 }
 
 export function SharePage({ token }: { token: string }) {
-  const { t } = useI18n();
+  const { formatDate, t } = useI18n();
   const { preferences, updatePreferences } = usePreferences();
   const [meta, setMeta] = useState<PublicShareMeta | null>(null);
   const [directory, setDirectory] = useState<DirectoryResponse | null>(null);
@@ -121,7 +121,7 @@ export function SharePage({ token }: { token: string }) {
     content = <main className="shareStatePage" id="shared-content"><div role="status">{t('publicShare.loading')}</div></main>;
   } else {
     content = <main className="publicSharePage" id="shared-content">
-      <header className="sharePageHeader"><div><Share2 aria-hidden="true" size={20} /><span><h1>{meta.name}</h1><small>{meta.expiresAt ? t('publicShare.expires', { date: meta.expiresAt }) : t('publicShare.sharedByIlist')}</small></span></div>{meta.targetKind === 'folder' ? <span className="shareViewControl"><button className={preferences.defaultView === 'list' ? 'isActive' : ''} aria-label={t('toolbar.list')} onClick={() => updatePreferences({ defaultView: 'list' })}><List aria-hidden="true" size={16} /></button><button className={preferences.defaultView === 'grid' ? 'isActive' : ''} aria-label={t('toolbar.grid')} onClick={() => updatePreferences({ defaultView: 'grid' })}><Grid2X2 aria-hidden="true" size={16} /></button></span> : null}</header>
+      <header className="sharePageHeader"><div><Share2 aria-hidden="true" size={20} /><span><h1>{meta.name}</h1><small>{meta.expiresAt ? t('publicShare.expires', { date: formatDate(meta.expiresAt) }) : t('publicShare.sharedByIlist')}</small></span></div>{meta.targetKind === 'folder' ? <span className="shareViewControl"><button type="button" className={preferences.defaultView === 'list' ? 'isActive' : ''} aria-label={t('toolbar.list')} onClick={() => updatePreferences({ defaultView: 'list' })}><List aria-hidden="true" size={16} /></button><button type="button" className={preferences.defaultView === 'grid' ? 'isActive' : ''} aria-label={t('toolbar.grid')} onClick={() => updatePreferences({ defaultView: 'grid' })}><Grid2X2 aria-hidden="true" size={16} /></button></span> : null}</header>
       {meta.targetKind === 'folder' ? <nav className="shareBreadcrumbs" aria-label={t('publicShare.path')}>{trail.map((item, index) => <span key={`${item.id ?? 'root'}:${index}`}><button type="button" disabled={index === trail.length - 1} onClick={() => void openTrail(index)}>{item.name}</button>{index < trail.length - 1 ? <i aria-hidden="true">/</i> : null}</span>)}</nav> : null}
       {directory ? <section className="sharedCollection"><ExplorerCollection view={preferences.defaultView} entries={directory.items} selectedIds={new Set()} admin={false} handlers={handlers} onSelectAll={() => undefined} onReplaceSelection={() => undefined} onClearSelection={() => undefined} fileUrlFor={urlFor} /></section> : <button className="sharedFileButton button" onClick={() => setPreview(meta.entry)}>{t('action.preview')}</button>}
     </main>;

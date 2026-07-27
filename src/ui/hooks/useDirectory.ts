@@ -13,14 +13,17 @@ interface DirectoryState {
 export function useDirectory(path: string, sessionStatus: SessionStatus, nameFilter = '') {
   const [refreshVersion, setRefreshVersion] = useState(0);
   const manualRefresh = useRef(false);
+  const previousPath = useRef(path);
   const [state, setState] = useState<DirectoryState>({ data: null, loading: sessionStatus === 'checking', error: null });
 
   useEffect(() => {
     if (sessionStatus === 'checking') return;
 
     const controller = new AbortController();
-    const keepData = manualRefresh.current;
+    // Keep listing visible for same-path search/refresh; only clear on navigation.
+    const keepData = manualRefresh.current || previousPath.current === path;
     manualRefresh.current = false;
+    previousPath.current = path;
     setState((current) => ({ data: keepData ? current.data : null, loading: true, error: null }));
 
     void listDirectory(path, controller.signal, normalizeDirectoryQuery(nameFilter))
