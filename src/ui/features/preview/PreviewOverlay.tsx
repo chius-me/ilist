@@ -153,8 +153,8 @@ export function PreviewOverlay({ entry = null, loading = false, error = null, on
   useModalFocus({ active: true, containerRef: backdrop, initialFocusRef: closeButton, onClose });
 
   return (
-    <div ref={backdrop} className="previewBackdrop overlayScrim overlayScrimStrong">
-      <section className="previewOverlay overlaySurface" role="dialog" aria-modal="true" aria-label={entry ? t('preview.title', { name: entry.name }) : t('preview.file')}>
+    <div ref={backdrop} className="previewBackdrop overlayScrim overlayScrimStrong" onMouseDown={onClose}>
+      <section className="previewOverlay overlaySurface" role="dialog" aria-modal="true" aria-label={entry ? t('preview.title', { name: entry.name }) : t('preview.file')} onMouseDown={(event) => event.stopPropagation()}>
         <header className="previewHeader overlayHeader">
           <h2 title={entry?.name}>{entry?.name || t('preview.file')}</h2>
           <span className="previewHeaderActions">

@@ -2,6 +2,31 @@ import { type RefObject, useEffect, useRef } from 'react';
 
 const FOCUSABLE = 'a[href], button:not([disabled]), input:not([disabled]), select:not([disabled]), textarea:not([disabled]), [tabindex]:not([tabindex="-1"])';
 
+let bodyScrollLocks = 0;
+let previousBodyOverflow = '';
+let previousBodyPaddingRight = '';
+
+function lockBodyScroll() {
+  if (typeof document === 'undefined') return;
+  if (bodyScrollLocks === 0) {
+    previousBodyOverflow = document.body.style.overflow;
+    previousBodyPaddingRight = document.body.style.paddingRight;
+    const scrollbar = window.innerWidth - document.documentElement.clientWidth;
+    document.body.style.overflow = 'hidden';
+    if (scrollbar > 0) document.body.style.paddingRight = `${scrollbar}px`;
+  }
+  bodyScrollLocks += 1;
+}
+
+function unlockBodyScroll() {
+  if (typeof document === 'undefined') return;
+  bodyScrollLocks = Math.max(0, bodyScrollLocks - 1);
+  if (bodyScrollLocks === 0) {
+    document.body.style.overflow = previousBodyOverflow;
+    document.body.style.paddingRight = previousBodyPaddingRight;
+  }
+}
+
 export function useModalFocus({
   active = true,
   containerRef,
@@ -9,6 +34,7 @@ export function useModalFocus({
   onClose,
   restoreFocus,
   focusInitial = true,
+  lockScroll = true,
 }: {
   active?: boolean;
   containerRef: RefObject<HTMLElement | null>;
@@ -16,6 +42,8 @@ export function useModalFocus({
   onClose: () => void;
   restoreFocus?: HTMLElement | null;
   focusInitial?: boolean;
+  /** Prevent background page scroll while the overlay is open. */
+  lockScroll?: boolean;
 }) {
   const closeRef = useRef(onClose);
   closeRef.current = onClose;
@@ -27,6 +55,7 @@ export function useModalFocus({
     const previous = restoreFocus ?? (document.activeElement instanceof HTMLElement ? document.activeElement : null);
     const isolated: Array<{ element: HTMLElement; inert: boolean; ariaHidden: string | null }> = [];
     container.dataset.modalActive = 'true';
+    if (lockScroll) lockBodyScroll();
 
     let branch: HTMLElement = container;
     while (branch.parentElement) {
@@ -64,6 +93,7 @@ export function useModalFocus({
     return () => {
       window.removeEventListener('keydown', onKeyDown);
       delete container.dataset.modalActive;
+      if (lockScroll) unlockBodyScroll();
       for (const item of isolated) {
         if (!item.inert) item.element.removeAttribute('inert');
         if (item.ariaHidden === null) item.element.removeAttribute('aria-hidden');
@@ -71,5 +101,5 @@ export function useModalFocus({
       }
       previous?.focus();
     };
-  }, [active, containerRef, initialFocusRef, restoreFocus]);
+  }, [active, containerRef, initialFocusRef, lockScroll, restoreFocus]);
 }

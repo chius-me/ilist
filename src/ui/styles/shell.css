@@ -1,11 +1,13 @@
 .appShell { min-height: 100dvh; }
 
 .siteHeader {
-  position: relative;
+  position: sticky;
+  top: 0;
   z-index: var(--layer-header);
   height: 56px;
   border-bottom: 0;
-  background: transparent;
+  /* Opaque so sticky chrome covers scrolled content under admin drawers. */
+  background: var(--color-page);
 }
 
 .headerInner {

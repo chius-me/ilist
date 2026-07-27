@@ -1,5 +1,5 @@
-import { AlertCircle, Grid2X2, List, Share2 } from 'lucide-react';
-import { useCallback, useEffect, useState } from 'react';
+import { AlertCircle, Grid2X2, List, RefreshCw, Share2 } from 'lucide-react';
+import { useCallback, useEffect, useRef, useState } from 'react';
 import { ApiError } from '../api/client';
 import { getPublicShare, listPublicShare, publicShareFileUrl, unlockPublicShare } from '../api/public-shares';
 import { ExplorerCollection } from '../features/explorer/ExplorerCollection';
@@ -27,22 +27,30 @@ interface ShareTrailItem {
   name: string;
 }
 
+type FailedNav =
+  | { type: 'open'; entry: Entry }
+  | { type: 'trail'; index: number };
+
 export function SharePage({ token }: { token: string }) {
   const { formatDate, t } = useI18n();
   const { preferences, updatePreferences } = usePreferences();
   const [meta, setMeta] = useState<PublicShareMeta | null>(null);
   const [directory, setDirectory] = useState<DirectoryResponse | null>(null);
   const [error, setError] = useState<ApiError | null>(null);
+  const [folderError, setFolderError] = useState<string | null>(null);
   const [passwordRequired, setPasswordRequired] = useState(false);
   const [passwordError, setPasswordError] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
   const [preview, setPreview] = useState<Entry | null>(null);
   const [trail, setTrail] = useState<ShareTrailItem[]>([]);
   const [menu, setMenu] = useState<{ entry: Entry; anchor: HTMLElement | null } | null>(null);
+  const failedNav = useRef<FailedNav | null>(null);
   const mobileActions = useMobileActions();
 
   const load = useCallback(async () => {
     setError(null);
+    setFolderError(null);
+    failedNav.current = null;
     try {
       const value = await getPublicShare(token);
       setMeta(value);
@@ -79,10 +87,14 @@ export function SharePage({ token }: { token: string }) {
 
   async function openFolder(entry: Entry) {
     try {
-      setDirectory(await listPublicShare(token, entry.id));
+      setFolderError(null);
+      const next = await listPublicShare(token, entry.id);
+      setDirectory(next);
       setTrail((current) => [...current, { id: entry.id, name: entry.name }]);
+      failedNav.current = null;
     } catch (cause) {
-      setError(cause instanceof ApiError ? cause : new ApiError(503, 'SHARE_PROVIDER_UNAVAILABLE', 'Unavailable'));
+      failedNav.current = { type: 'open', entry };
+      setFolderError(localizedApiError(cause, t, 'publicShare.unavailableHint'));
     }
   }
 
@@ -90,11 +102,25 @@ export function SharePage({ token }: { token: string }) {
     const target = trail[index];
     if (!target || index === trail.length - 1) return;
     try {
-      setDirectory(await listPublicShare(token, target.id ?? undefined));
+      setFolderError(null);
+      const next = await listPublicShare(token, target.id ?? undefined);
+      setDirectory(next);
       setTrail((current) => current.slice(0, index + 1));
+      failedNav.current = null;
     } catch (cause) {
-      setError(cause instanceof ApiError ? cause : new ApiError(503, 'SHARE_PROVIDER_UNAVAILABLE', 'Unavailable'));
+      failedNav.current = { type: 'trail', index };
+      setFolderError(localizedApiError(cause, t, 'publicShare.unavailableHint'));
     }
+  }
+
+  async function retryFolder() {
+    const failed = failedNav.current;
+    if (!failed) {
+      await load();
+      return;
+    }
+    if (failed.type === 'open') await openFolder(failed.entry);
+    else await openTrail(failed.index);
   }
 
   const handlers: EntryHandlers = {
@@ -123,11 +149,12 @@ export function SharePage({ token }: { token: string }) {
     content = <main className="publicSharePage" id="shared-content">
       <header className="sharePageHeader"><div><Share2 aria-hidden="true" size={20} /><span><h1>{meta.name}</h1><small>{meta.expiresAt ? t('publicShare.expires', { date: formatDate(meta.expiresAt) }) : t('publicShare.sharedByIlist')}</small></span></div>{meta.targetKind === 'folder' ? <span className="shareViewControl"><button type="button" className={preferences.defaultView === 'list' ? 'isActive' : ''} aria-label={t('toolbar.list')} onClick={() => updatePreferences({ defaultView: 'list' })}><List aria-hidden="true" size={16} /></button><button type="button" className={preferences.defaultView === 'grid' ? 'isActive' : ''} aria-label={t('toolbar.grid')} onClick={() => updatePreferences({ defaultView: 'grid' })}><Grid2X2 aria-hidden="true" size={16} /></button></span> : null}</header>
       {meta.targetKind === 'folder' ? <nav className="shareBreadcrumbs" aria-label={t('publicShare.path')}>{trail.map((item, index) => <span key={`${item.id ?? 'root'}:${index}`}><button type="button" disabled={index === trail.length - 1} onClick={() => void openTrail(index)}>{item.name}</button>{index < trail.length - 1 ? <i aria-hidden="true">/</i> : null}</span>)}</nav> : null}
-      {directory ? <section className="sharedCollection"><ExplorerCollection view={preferences.defaultView} entries={directory.items} selectedIds={new Set()} admin={false} handlers={handlers} onSelectAll={() => undefined} onReplaceSelection={() => undefined} onClearSelection={() => undefined} fileUrlFor={urlFor} /></section> : <button className="sharedFileButton button" onClick={() => setPreview(meta.entry)}>{t('action.preview')}</button>}
+      {folderError ? <div className="retryBanner" role="alert"><AlertCircle aria-hidden="true" size={18} /><span>{folderError}</span><button type="button" onClick={() => void retryFolder()}><RefreshCw aria-hidden="true" size={15} />{t('action.retry')}</button></div> : null}
+      {directory ? <section className="sharedCollection"><ExplorerCollection view={preferences.defaultView} entries={directory.items} selectedIds={new Set()} admin={false} handlers={handlers} onSelectAll={() => undefined} onReplaceSelection={() => undefined} onClearSelection={() => undefined} fileUrlFor={urlFor} /></section> : <button className="sharedFileButton button" type="button" onClick={() => setPreview(meta.entry)}>{t('action.preview')}</button>}
     </main>;
   }
 
-  return <AppShell admin={false} contentId="shared-content" publicView onHome={() => undefined} onStorage={() => undefined} onSignIn={() => undefined} onSignOut={() => undefined}>{content}
+  return <AppShell admin={false} contentId="shared-content" publicView onHome={() => { window.location.assign('/'); }} onStorage={() => undefined} onSignIn={() => undefined} onSignOut={() => undefined}>{content}
     {menu && !mobileActions ? <EntryActionMenu entry={menu.entry} anchor={menu.anchor} actions={currentEntryActions} onClose={() => setMenu(null)} /> : null}
     {menu && mobileActions ? <MobileActionSheet open title={t('entry.actions', { name: menu.entry.name })} anchor={menu.anchor} actions={currentEntryActions} translate={t} cancelLabel={t('action.cancel')} onClose={() => setMenu(null)} /> : null}
     {preview ? <PreviewOverlay entry={preview} onClose={() => setPreview(null)} urlFor={urlFor} allowDownload={meta?.allowDownload ?? false} /> : null}

@@ -173,7 +173,7 @@ export function ExplorerCollection({
     <>
       {view === 'list'
         ? <FileList entries={entries} selectedIds={selectedIds} admin={admin} handlers={handlers} interactionProps={interactionProps} focusedId={focusedId} fileUrlFor={fileUrlFor} />
-        : <FileGrid entries={entries} selectedIds={selectedIds} admin={admin} handlers={handlers} interactionProps={interactionProps} focusedId={focusedId} />}
+        : <FileGrid entries={entries} selectedIds={selectedIds} admin={admin} handlers={handlers} interactionProps={interactionProps} focusedId={focusedId} fileUrlFor={fileUrlFor} />}
       {marquee ? <div className="selectionMarquee" aria-hidden="true" style={marqueeStyle(marquee)} /> : null}
     </>
   );

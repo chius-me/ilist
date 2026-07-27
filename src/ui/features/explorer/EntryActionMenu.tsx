@@ -2,6 +2,7 @@ import { Copy, CopyPlus, Download, Eye, EyeOff, FolderInput, Info, Pencil, Share
 import type { ComponentType } from 'react';
 import { useEffect, useLayoutEffect, useRef, useState } from 'react';
 import { fileUrl } from '../../api/entries';
+import { useModalFocus } from '../../hooks/useModalFocus';
 import { useI18n } from '../../i18n/I18nProvider';
 import type { MessageKey } from '../../i18n/messages';
 import type { Entry } from '../../types/entries';
@@ -69,8 +70,18 @@ export function EntryActionMenu({ entry, anchor, actions, onClose }: {
 }) {
   const { t } = useI18n();
   const menu = useRef<HTMLDivElement>(null);
-  const restoreFocus = useRef<HTMLElement | null>(anchor ?? (document.activeElement instanceof HTMLElement ? document.activeElement : null));
+  const firstItem = useRef<HTMLElement | null>(null);
+  const restoreFocus = anchor ?? (document.activeElement instanceof HTMLElement ? document.activeElement : null);
   const [position, setPosition] = useState({ left: 8, top: 8 });
+
+  useModalFocus({
+    active: true,
+    containerRef: menu,
+    initialFocusRef: firstItem,
+    onClose,
+    restoreFocus,
+    lockScroll: false,
+  });
 
   useLayoutEffect(() => {
     if (!menu.current) return;
@@ -87,10 +98,9 @@ export function EntryActionMenu({ entry, anchor, actions, onClose }: {
   }, [anchor]);
 
   useEffect(() => {
-    menu.current?.querySelector<HTMLButtonElement>('[role="menuitem"]')?.focus();
-    const close = (event: KeyboardEvent) => {
-      if (event.key === 'Escape') { onClose(); return; }
+    const onArrowNav = (event: KeyboardEvent) => {
       if (!['ArrowDown', 'ArrowUp', 'Home', 'End'].includes(event.key) || !menu.current) return;
+      if (!menu.current.contains(document.activeElement)) return;
       event.preventDefault();
       const items = [...menu.current.querySelectorAll<HTMLElement>('[role="menuitem"]')];
       const current = items.indexOf(document.activeElement as HTMLElement);
@@ -100,17 +110,24 @@ export function EntryActionMenu({ entry, anchor, actions, onClose }: {
             : (current - 1 + items.length) % items.length;
       items[next]?.focus();
     };
-    const outside = (event: MouseEvent) => { if (menu.current && !menu.current.contains(event.target as Node)) onClose(); };
-    window.addEventListener('keydown', close);
+    const outside = (event: MouseEvent) => {
+      if (menu.current && !menu.current.contains(event.target as Node)) onClose();
+    };
+    window.addEventListener('keydown', onArrowNav);
     window.addEventListener('mousedown', outside);
-    return () => { window.removeEventListener('keydown', close); window.removeEventListener('mousedown', outside); restoreFocus.current?.focus(); };
+    return () => {
+      window.removeEventListener('keydown', onArrowNav);
+      window.removeEventListener('mousedown', outside);
+    };
   }, [onClose]);
+
   return <div className="actionMenu" ref={menu} role="menu" aria-label={t('entry.actions', { name: entry.name })} style={{ position: 'fixed', left: position.left, top: position.top, right: 'auto' }}>
-    {actions.map((action) => {
+    {actions.map((action, index) => {
       const Icon = action.icon;
       const content = <>{Icon ? <Icon aria-hidden={true} size={16} /> : null}{t(action.labelKey, action.labelValues)}</>;
-      if (action.href) return <a key={action.id} role="menuitem" href={action.href} onClick={onClose}>{content}</a>;
-      return <button key={action.id} className={action.destructive ? 'destructive' : undefined} role="menuitem" type="button" onClick={() => { action.onSelect(); onClose(); }}>{content}</button>;
+      const setFirst = index === 0 ? (node: HTMLElement | null) => { firstItem.current = node; } : undefined;
+      if (action.href) return <a key={action.id} ref={setFirst as never} role="menuitem" href={action.href} onClick={onClose}>{content}</a>;
+      return <button key={action.id} ref={setFirst as never} className={action.destructive ? 'destructive' : undefined} role="menuitem" type="button" onClick={() => { action.onSelect(); onClose(); }}>{content}</button>;
     })}
   </div>;
 }

@@ -41,6 +41,9 @@ describe('explorer operations', () => {
     render(<App />);
     fireEvent.click(await screen.findByRole('checkbox', { name: 'Select report.pdf' }));
     expect(screen.getByText('1 selected')).toBeVisible();
+    // Fixture has copy:false — Copy must not appear even while other batch actions do.
+    expect(screen.queryByRole('button', { name: 'Copy to' })).not.toBeInTheDocument();
+    expect(screen.getByRole('button', { name: 'Move' })).toBeVisible();
     fireEvent.click(screen.getByRole('button', { name: 'Hide selected' }));
     await waitFor(() => expect(fetch).toHaveBeenCalledWith(
       '/api/admin/entries/visibility',

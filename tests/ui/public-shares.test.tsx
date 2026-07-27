@@ -6,7 +6,7 @@ import { SharePage } from '../../src/ui/app/SharePage';
 
 const capabilities = (kind: 'file' | 'folder', download = false) => ({
   open: kind === 'folder', preview: kind === 'file', download, upload: false, multipartUpload: false,
-  createFolder: false, rename: false, move: false, delete: false, changeVisibility: false,
+  createFolder: false, rename: false, move: false, copy: false, delete: false, changeVisibility: false,
 });
 const folder = { id: 'sealed-folder', parentId: null, name: 'Shared folder', kind: 'folder', size: 0, contentType: null, updatedAt: '2026-07-18T00:00:00Z', isPublic: false, effectivePublic: false, sortOrder: 0, description: '', mountPath: null, capabilities: capabilities('folder') };
 const file = { id: 'sealed-file', parentId: null, name: 'private.txt', kind: 'file', size: 12, contentType: 'text/plain', updatedAt: '2026-07-18T00:00:00Z', isPublic: false, effectivePublic: false, sortOrder: 0, description: '', mountPath: null, capabilities: capabilities('file', false) };
@@ -68,5 +68,28 @@ describe('public share page', () => {
     render(<AppProviders><SharePage token="public-token" /></AppProviders>);
     expect(await screen.findByRole('heading', { name: 'Share disabled' })).toBeVisible();
     expect(screen.queryByText('internal policy details')).not.toBeInTheDocument();
+  });
+
+  it('keeps the folder browser when nested navigation fails and offers retry', async () => {
+    const nested = { ...folder, id: 'sealed-nested', name: 'Nested' };
+    let nestedCalls = 0;
+    vi.stubGlobal('fetch', vi.fn(async (input: RequestInfo | URL) => {
+      const url = String(input);
+      if (url === '/s/public-token/api') return Response.json({ ok: true, data: { name: 'Shared folder', targetKind: 'folder', allowDownload: true, protected: false, expiresAt: null, entry: folder } });
+      if (url === '/s/public-token/api/list') return Response.json({ ok: true, data: { current: folder, breadcrumbs: [], items: [nested] } });
+      if (url.includes('parent=sealed-nested')) {
+        nestedCalls += 1;
+        if (nestedCalls === 1) return Response.json({ ok: false, error: { code: 'SHARE_PROVIDER_UNAVAILABLE', message: 'down' } }, { status: 503 });
+        return Response.json({ ok: true, data: { current: nested, breadcrumbs: [], items: [file] } });
+      }
+      throw new Error(`Unexpected fetch: ${url}`);
+    }));
+
+    render(<AppProviders><SharePage token="public-token" /></AppProviders>);
+    await userEvent.click(await screen.findByRole('button', { name: 'Open Nested' }));
+    expect(await screen.findByRole('alert')).toBeVisible();
+    expect(screen.getByText('Nested')).toBeVisible();
+    await userEvent.click(screen.getByRole('button', { name: 'Retry' }));
+    expect(await screen.findByText('private.txt')).toBeVisible();
   });
 });
