@@ -25,6 +25,10 @@ export function FolderPickerDialog({
   onSubmit: (destinationId: string) => Promise<void>;
 }) {
   const { locale, t } = useFeedbackI18n();
+  // Keep a stable effect deps list: fallback t from useFeedbackI18n is a new function every render
+  // when I18nProvider is absent (unit tests), and must not retrigger directory loads.
+  const tRef = useRef(t);
+  tRef.current = t;
   const [directory, setDirectory] = useState<DirectoryResponse | null>(null);
   const [path, setPath] = useState('/');
   const [refreshVersion, setRefreshVersion] = useState(0);
@@ -37,9 +41,11 @@ export function FolderPickerDialog({
     let active = true;
     setDirectory(null);
     setError(null);
-    void listDirectory(path).then((value) => { if (active) setDirectory(value); }).catch((reason) => { if (active) setError(localizedApiError(reason, t, 'dialog.unableLoadFolders')); });
+    void listDirectory(path).then((value) => { if (active) setDirectory(value); }).catch((reason) => {
+      if (active) setError(localizedApiError(reason, tRef.current, 'dialog.unableLoadFolders'));
+    });
     return () => { active = false; };
-  }, [locale, path, refreshVersion, t]);
+  }, [locale, path, refreshVersion]);
   const selected = new Set(entries.map((entry) => entry.id));
   const canDropHere = canAcceptDestination(directory);
   const isCopy = mode === 'copy';
