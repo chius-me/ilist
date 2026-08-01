@@ -91,6 +91,28 @@ export function MountManager(props: MountManagerProps) {
     if (!busy && error && editing !== undefined && !pendingPublication) mountSubmitButton.current?.focus();
   }, [busy, editing, error, pendingPublication]);
   useEffect(() => {
+    if (!openMenuId) return;
+    const onPointerDown = (event: PointerEvent) => {
+      const target = event.target;
+      if (!(target instanceof Node)) return;
+      const menu = document.querySelector(`.mountActionMenu[open]`);
+      if (menu?.contains(target)) return;
+      setOpenMenuId(null);
+    };
+    const onKeyDown = (event: KeyboardEvent) => {
+      if (event.key === 'Escape') {
+        event.preventDefault();
+        setOpenMenuId(null);
+      }
+    };
+    document.addEventListener('pointerdown', onPointerDown);
+    document.addEventListener('keydown', onKeyDown);
+    return () => {
+      document.removeEventListener('pointerdown', onPointerDown);
+      document.removeEventListener('keydown', onKeyDown);
+    };
+  }, [openMenuId]);
+  useEffect(() => {
     const search = new URL(window.location.href).searchParams;
     const oneDrive = search.get('onedrive');
     const google = search.get('google');

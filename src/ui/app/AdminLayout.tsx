@@ -16,11 +16,26 @@ export function AdminLayout({ active, onNavigate, onBack, children }: AdminLayou
   const [narrow, setNarrow] = useState(() => window.matchMedia('(max-width: 760px)').matches);
   useEffect(() => {
     const media = window.matchMedia('(max-width: 760px)');
-    const update = () => setNarrow(media.matches);
+    const update = () => {
+      setNarrow(media.matches);
+      if (!media.matches) setDrawerOpen(false);
+    };
     update();
     media.addEventListener('change', update);
     return () => media.removeEventListener('change', update);
   }, []);
+
+  useEffect(() => {
+    if (!drawerOpen || !narrow) return;
+    const onKeyDown = (event: KeyboardEvent) => {
+      if (event.key === 'Escape') {
+        event.preventDefault();
+        setDrawerOpen(false);
+      }
+    };
+    window.addEventListener('keydown', onKeyDown);
+    return () => window.removeEventListener('keydown', onKeyDown);
+  }, [drawerOpen, narrow]);
 
   function navigate(event: MouseEvent<HTMLAnchorElement>, section: AdminSection) {
     event.preventDefault();
@@ -33,6 +48,8 @@ export function AdminLayout({ active, onNavigate, onBack, children }: AdminLayou
     setDrawerOpen(false);
     onBack();
   }
+
+  const isolateContent = narrow && drawerOpen;
 
   return (
     <div className={`adminLayout${drawerOpen ? ' adminDrawerOpen' : ''}`}>
@@ -50,7 +67,7 @@ export function AdminLayout({ active, onNavigate, onBack, children }: AdminLayou
         </nav>
       </aside>
       {drawerOpen ? <button className="adminDrawerScrim" type="button" aria-label={t('admin.closeMenu')} onClick={() => setDrawerOpen(false)} /> : null}
-      <div className="adminContent">{children}</div>
+      <div className="adminContent" inert={isolateContent ? true : undefined} aria-hidden={isolateContent ? true : undefined}>{children}</div>
     </div>
   );
 }

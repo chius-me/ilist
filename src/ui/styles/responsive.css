@@ -37,7 +37,7 @@
   .previewOverlay { width: 100%; height: 100dvh; border: 0; border-radius: 0; }
   .uploadPanel { right: 0; bottom: 0; width: 100%; border-right: 0; border-bottom: 0; border-left: 0; border-radius: var(--radius-panel) var(--radius-panel) 0 0; }
   .uploadTasks { max-height: min(52vh, 400px); }
-  .operationDialog, .loginDialog { align-self: end; width: 100%; max-height: calc(100dvh - 16px); overflow-y: auto; border-radius: var(--radius-panel) var(--radius-panel) 0 0; }
+  .operationDialog, .loginDialog, .shareDialog { align-self: end; width: 100%; max-height: calc(100dvh - 16px); overflow-y: auto; border-radius: var(--radius-panel) var(--radius-panel) 0 0; }
   .dialogBackdrop { align-items: end; padding: 16px 0 0; }
   .mountFormGrid { grid-template-columns: 1fr; }
   .mountDialog { align-self: end; width: 100%; max-height: calc(100dvh - 8px); border-radius: var(--radius-panel) var(--radius-panel) 0 0; }

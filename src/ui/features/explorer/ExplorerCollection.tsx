@@ -6,7 +6,7 @@ import { FileList } from './FileList';
 import type { EntryHandlers } from './EntryRow';
 
 const MOBILE_QUERY = '(max-width: 760px)';
-const BLOCKED_SHORTCUT_TARGETS = 'input, select, textarea, [role="menu"], [role="dialog"]';
+const BLOCKED_SHORTCUT_TARGETS = 'button, a, input, select, textarea, label, [role="menu"], [role="menuitem"], [role="dialog"]';
 
 interface MarqueeRect {
   left: number;
@@ -105,7 +105,13 @@ export function ExplorerCollection({
       const nextIndex = focusedIndex < 0
         ? (backwards ? entries.length - 1 : 0)
         : Math.max(0, Math.min(entries.length - 1, focusedIndex + (backwards ? -1 : 1)));
-      setFocusedId(entries[nextIndex]?.id ?? null);
+      const nextId = entries[nextIndex]?.id ?? null;
+      setFocusedId(nextId);
+      if (nextId) {
+        requestAnimationFrame(() => {
+          document.getElementById(`explorer-entry-${nextId}`)?.scrollIntoView({ block: 'nearest' });
+        });
+      }
       return;
     }
 
@@ -167,7 +173,7 @@ export function ExplorerCollection({
     <>
       {view === 'list'
         ? <FileList entries={entries} selectedIds={selectedIds} admin={admin} handlers={handlers} interactionProps={interactionProps} focusedId={focusedId} fileUrlFor={fileUrlFor} />
-        : <FileGrid entries={entries} selectedIds={selectedIds} admin={admin} handlers={handlers} interactionProps={interactionProps} focusedId={focusedId} />}
+        : <FileGrid entries={entries} selectedIds={selectedIds} admin={admin} handlers={handlers} interactionProps={interactionProps} focusedId={focusedId} fileUrlFor={fileUrlFor} />}
       {marquee ? <div className="selectionMarquee" aria-hidden="true" style={marqueeStyle(marquee)} /> : null}
     </>
   );

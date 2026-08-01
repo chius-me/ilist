@@ -76,7 +76,7 @@ export function ExplorerApp() {
             onClosePreview={closePreview}
             onRequestLogin={() => openPath('/admin')}
           />}
-      <LoginDialog open={adminRoute && session.status !== 'admin'} busy={loginBusy} error={loginError} onClose={closeLogin} onSubmit={submitLogin} />
+      <LoginDialog open={adminRoute && session.status === 'guest'} busy={loginBusy} error={loginError} onClose={closeLogin} onSubmit={submitLogin} />
     </AppShell>
   );
 }

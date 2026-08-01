@@ -151,6 +151,13 @@ export function ExplorerPage({
     onMenu: (entry, anchor) => setMenu({ entry, anchor: anchor ?? null }),
   };
   const selectedEntries = entries.filter((entry) => selection.selectedIds.has(entry.id) && isEntryMutable(entry));
+  const selectionCapabilities = useMemo(() => ({
+    canMove: selectedEntries.length > 0 && selectedEntries.every((entry) => entry.capabilities.move),
+    canCopy: selectedEntries.length > 0 && selectedEntries.every((entry) => entry.capabilities.copy),
+    canPublish: selectedEntries.length > 0 && selectedEntries.every((entry) => entry.capabilities.changeVisibility),
+    canHide: selectedEntries.length > 0 && selectedEntries.every((entry) => entry.capabilities.changeVisibility),
+    canDelete: selectedEntries.length > 0 && selectedEntries.every((entry) => entry.capabilities.delete),
+  }), [selectedEntries]);
 
   function enqueueFiles(files: File[]) {
     if (directory.data && canUpload) uploads.enqueue(directory.data.current.id, files);
@@ -185,7 +192,11 @@ export function ExplorerPage({
     enqueueFiles(Array.from(event.dataTransfer.files));
   }
 
-  async function runBatch(operation: () => Promise<{ succeeded: string[]; failed: { id: string; code: string; message: string }[] }>) {
+  async function runBatch(
+    operation: () => Promise<{ succeeded: string[]; failed: { id: string; code: string; message: string }[] }>,
+    options?: { errorSurface?: 'toast' | 'throw' },
+  ) {
+    const errorSurface = options?.errorSurface ?? 'toast';
     setOperationPending(true);
     try {
       const result = await operation();
@@ -195,19 +206,20 @@ export function ExplorerPage({
           .slice(0, 3)
           .map((failure) => failure.message || failure.code)
           .join('; ');
-        pushToast('error', t('feedback.batchPartialDetail', {
+        // Defer so move/copy/delete dialogs can release inert before toast chrome mounts.
+        scheduleDeferredFeedback(() => pushToast('error', t('feedback.batchPartialDetail', {
           completed: result.succeeded.length,
           failed: result.failed.length,
           detail,
-        }));
+        })));
       } else {
         selection.clear();
-        pushToast('success', t('feedback.batchComplete', { completed: result.succeeded.length }));
+        scheduleDeferredFeedback(() => pushToast('success', t('feedback.batchComplete', { completed: result.succeeded.length })));
       }
       directory.refresh();
     } catch (error) {
-      pushToast('error', localizedApiError(error, t, 'feedback.operationFailed'));
-      throw error;
+      if (errorSurface === 'throw') throw error;
+      scheduleDeferredFeedback(() => pushToast('error', localizedApiError(error, t, 'feedback.operationFailed')));
     } finally {
       setOperationPending(false);
     }
@@ -229,7 +241,21 @@ export function ExplorerPage({
       <main className="explorerPage" id="file-explorer">
         <div className="explorerBrowser">
           <div className="explorerToolbarSlot">
-            {admin && selectedEntries.length > 0 ? <SelectionToolbar count={selectedEntries.length} pending={operationPending} onMove={() => setDialog({ type: 'move', entries: selectedEntries })} onCopy={() => setDialog({ type: 'copy', entries: selectedEntries })} onPublish={() => void runBatch(() => setVisibility(selectedEntries.map((entry) => entry.id), true))} onHide={() => void runBatch(() => setVisibility(selectedEntries.map((entry) => entry.id), false))} onDelete={() => setDialog({ type: 'delete', entries: selectedEntries })} onClear={selection.clear} /> : <ExplorerToolbar
+            {admin && selectedEntries.length > 0 ? <SelectionToolbar
+              count={selectedEntries.length}
+              pending={operationPending}
+              canMove={selectionCapabilities.canMove}
+              canCopy={selectionCapabilities.canCopy}
+              canPublish={selectionCapabilities.canPublish}
+              canHide={selectionCapabilities.canHide}
+              canDelete={selectionCapabilities.canDelete}
+              onMove={() => setDialog({ type: 'move', entries: selectedEntries.filter((entry) => entry.capabilities.move) })}
+              onCopy={() => setDialog({ type: 'copy', entries: selectedEntries.filter((entry) => entry.capabilities.copy) })}
+              onPublish={() => void runBatch(() => setVisibility(selectedEntries.filter((entry) => entry.capabilities.changeVisibility).map((entry) => entry.id), true))}
+              onHide={() => void runBatch(() => setVisibility(selectedEntries.filter((entry) => entry.capabilities.changeVisibility).map((entry) => entry.id), false))}
+              onDelete={() => setDialog({ type: 'delete', entries: selectedEntries.filter((entry) => entry.capabilities.delete) })}
+              onClear={selection.clear}
+            /> : <ExplorerToolbar
               breadcrumbs={directory.data?.breadcrumbs ?? []}
               query={query}
               sort={sort}
@@ -252,7 +278,7 @@ export function ExplorerPage({
             {directory.error && directory.data ? <div className="retryBanner" role="alert"><AlertCircle aria-hidden="true" size={18} /><span>{directoryErrorHint(directory.error, t)}</span><button type="button" onClick={directory.refresh}><RefreshCw aria-hidden="true" size={15} />{t('action.retry')}</button></div> : null}
             {directory.loading && !directory.data ? <LoadingCollection view={view} label={t('state.loadingFiles')} /> : null}
             {directory.error && !directory.data ? <div className="errorState" role="alert"><AlertCircle aria-hidden="true" size={32} /><strong>{directoryErrorTitle(directory.error, t)}</strong><span>{directoryErrorHint(directory.error, t)}</span><button className="button" type="button" onClick={directory.refresh}><RefreshCw aria-hidden="true" size={16} />{t('action.retry')}</button></div> : null}
-            {directory.data && !directory.loading && !directory.error && entries.length === 0 ? <EmptyState query={query} admin={admin} /> : null}
+            {directory.data && !directory.loading && !directory.error && entries.length === 0 ? <EmptyState query={serverQuery} admin={admin} /> : null}
             {directory.data && entries.length > 0 ? <ExplorerCollection
               view={view}
               entries={entries}
@@ -282,9 +308,9 @@ export function ExplorerPage({
         directory.refresh();
         scheduleDeferredFeedback(() => { pushToast('success', t('feedback.folderCreated')); });
       }} /> : null}
-      {dialog?.type === 'move' ? <FolderPickerDialog entries={dialog.entries} onClose={() => setDialog(null)} onSubmit={(destinationId) => runBatch(() => moveEntries(dialog.entries.map((entry) => entry.id), destinationId))} /> : null}
-      {dialog?.type === 'copy' ? <FolderPickerDialog entries={dialog.entries} onClose={() => setDialog(null)} onSubmit={(destinationId) => runBatch(() => copyEntries(dialog.entries.map((entry) => entry.id), destinationId))} /> : null}
-      {dialog?.type === 'delete' ? <DeleteDialog entries={dialog.entries} onClose={() => setDialog(null)} onSubmit={() => runBatch(() => deleteEntries(dialog.entries.map((entry) => entry.id)))} /> : null}
+      {dialog?.type === 'move' ? <FolderPickerDialog mode="move" entries={dialog.entries} onClose={() => setDialog(null)} onSubmit={(destinationId) => runBatch(() => moveEntries(dialog.entries.map((entry) => entry.id), destinationId), { errorSurface: 'throw' })} /> : null}
+      {dialog?.type === 'copy' ? <FolderPickerDialog mode="copy" entries={dialog.entries} onClose={() => setDialog(null)} onSubmit={(destinationId) => runBatch(() => copyEntries(dialog.entries.map((entry) => entry.id), destinationId), { errorSurface: 'throw' })} /> : null}
+      {dialog?.type === 'delete' ? <DeleteDialog entries={dialog.entries} onClose={() => setDialog(null)} onSubmit={() => runBatch(() => deleteEntries(dialog.entries.map((entry) => entry.id)), { errorSurface: 'throw' })} /> : null}
       {dialog?.type === 'properties' ? <PropertiesDialog entry={dialog.entries[0]} onClose={() => setDialog(null)} onSubmit={async (entryPatch) => {
         await patchEntry(dialog.entries[0].id, entryPatch);
         directory.refresh();

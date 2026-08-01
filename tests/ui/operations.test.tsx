@@ -41,6 +41,9 @@ describe('explorer operations', () => {
     render(<App />);
     fireEvent.click(await screen.findByRole('checkbox', { name: 'Select report.pdf' }));
     expect(screen.getByText('1 selected')).toBeVisible();
+    // Fixture has copy:false — Copy must not appear even while other batch actions do.
+    expect(screen.queryByRole('button', { name: 'Copy to' })).not.toBeInTheDocument();
+    expect(screen.getByRole('button', { name: 'Move' })).toBeVisible();
     fireEvent.click(screen.getByRole('button', { name: 'Hide selected' }));
     await waitFor(() => expect(fetch).toHaveBeenCalledWith(
       '/api/admin/entries/visibility',
@@ -179,6 +182,21 @@ describe('explorer operations', () => {
       '/api/fs/list?path=%2Farchive%2FReports',
       expect.objectContaining({ credentials: 'same-origin' }),
     ));
+  });
+
+  it('labels the folder picker for copy instead of move', async () => {
+    const selected = entry('report', 'report.pdf', 'file');
+    vi.stubGlobal('fetch', vi.fn(async (input: RequestInfo | URL) => {
+      const url = String(input);
+      if (url.includes('/api/fs/list')) return new Response(JSON.stringify(root));
+      throw new Error(`Unexpected fetch: ${url}`);
+    }));
+
+    render(<FolderPickerDialog mode="copy" entries={[selected]} onClose={() => undefined} onSubmit={async () => undefined} />);
+    expect(await screen.findByRole('dialog', { name: 'Copy selected entries' })).toBeVisible();
+    expect(screen.getByRole('heading', { name: 'Copy report.pdf' })).toBeVisible();
+    expect(screen.getByRole('button', { name: 'Copy here' })).toBeVisible();
+    expect(screen.queryByRole('button', { name: 'Move here' })).not.toBeInTheDocument();
   });
 
   it('disables the virtual root as a move destination and enables a writable mount', async () => {

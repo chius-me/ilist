@@ -120,4 +120,10 @@ describe('visual style contracts', () => {
     expect(tokens).toMatch(/--layer-toast:\s*50;/);
     expect(tokens).toContain('--radius: var(--radius-control);');
   });
+
+  it('shows keyboard focus on collection entries and keeps upload panel under menus', () => {
+    expect(explorer).toContain('.entryRow.isFocused');
+    expect(explorer).toContain('.fileCard.isFocused');
+    expect(overlays).toMatch(/\.uploadPanel\s*\{[^}]*z-index:\s*var\(--layer-sticky\);/);
+  });
 });

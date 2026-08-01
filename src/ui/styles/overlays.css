@@ -115,7 +115,8 @@
 .loadingCard span:last-child { height: 10px; margin-top: 9px; background: transparent; }
 .inlineError { display: grid; justify-items: start; gap: 12px; color: var(--color-danger-text); }
 
-.uploadPanel { z-index: calc(var(--layer-overlay) - 1); border-radius: var(--radius-panel); }
+/* Below menus/dialogs so entry action menus are not trapped under the queue. */
+.uploadPanel { z-index: var(--layer-sticky); border-radius: var(--radius-panel); }
 .uploadPanelHeader { height: 44px; min-height: 44px; box-sizing: border-box; }
 .uploadTask { background: var(--color-surface-raised); }
 
@@ -188,7 +189,7 @@
 
 @media (max-width: 760px) {
   .overlayScrim { align-items: end; padding: 16px 0 0; }
-  .operationDialog, .loginDialog { width: 100%; max-height: calc(100dvh - 16px); border-radius: var(--radius-panel) var(--radius-panel) 0 0; }
+  .operationDialog, .loginDialog, .shareDialog { width: 100%; max-height: calc(100dvh - 16px); overflow-y: auto; border-radius: var(--radius-panel) var(--radius-panel) 0 0; }
   .previewBackdrop { place-items: stretch; padding: 0; }
   .previewOverlay { width: 100%; height: 100dvh; border: 0; border-radius: 0; }
   .toastRegion { top: calc(56px + env(safe-area-inset-top)); right: 12px; width: calc(100vw - 24px); }
