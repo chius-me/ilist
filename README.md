@@ -79,14 +79,14 @@ The Worker acts as the control plane and streams or redirects file data where po
 3. **Create D1 and R2 resources.**
 
    ```bash
-   npx wrangler d1 create ilist-db
-   npx wrangler r2 bucket create ilist-files
+   npx wrangler d1 create ilist-d1
+   npx wrangler r2 bucket create ilist-r2
    ```
 
 4. **Configure `wrangler.jsonc`, the custom domain, and D1 migrations.** Copy the D1 `database_id` returned by Wrangler into `wrangler.jsonc`, confirm the database and bucket names, and keep the configured `ilist.chius.cc` custom-domain route only when that hostname is in your Cloudflare zone. Then run:
 
    ```bash
-   npx wrangler d1 migrations apply ilist-db --remote
+   npx wrangler d1 migrations apply ilist-d1 --remote
    ```
 
 5. **Generate the administrator password hash and random keys.**
@@ -144,7 +144,7 @@ For Cloudflare R2 through S3, use:
 Endpoint: https://ACCOUNT_ID.r2.cloudflarestorage.com
 Region: auto
 Addressing mode: path style
-Bucket name: ilist-files
+Bucket name: ilist-r2
 Access key ID: R2 API token access key ID
 Secret access key: R2 API token secret access key
 ```
@@ -181,7 +181,7 @@ Create local secrets from the tracked template:
 
 ```bash
 cp .dev.vars.example .dev.vars
-npx wrangler d1 migrations apply ilist-db --local
+npx wrangler d1 migrations apply ilist-d1 --local
 npm run dev
 ```
 
@@ -216,7 +216,7 @@ Configure these **repository secrets** (Settings → Secrets and variables → A
 | Secret | Purpose |
 | --- | --- |
 | `CLOUDFLARE_API_TOKEN` | API token with permission to edit Workers, Workers Routes / Custom Domains, and D1 for this account |
-| `CLOUDFLARE_ACCOUNT_ID` | Cloudflare account ID that owns the `ilist` Worker, `ilist-db` D1 database, and `ilist-files` R2 bucket |
+| `CLOUDFLARE_ACCOUNT_ID` | Cloudflare account ID that owns the `ilist` Worker, `ilist-d1` D1 database, and `ilist-r2` R2 bucket |
 
 Do not put `ADMIN_PASSWORD_HASH`, `CREDENTIAL_MASTER_KEY`, OAuth client secrets, or other Worker secrets into GitHub. Keep them only as Cloudflare Worker secrets.
 
@@ -257,8 +257,8 @@ Do not put `ADMIN_PASSWORD_HASH`, `CREDENTIAL_MASTER_KEY`, OAuth client secrets,
 Before changing production, export D1 and keep the export outside Git:
 
 ```bash
-npx wrangler d1 export ilist-db --remote --output /tmp/ilist-db-before-multi-mount.sql
-npx wrangler d1 migrations apply ilist-db --remote
+npx wrangler d1 export ilist-d1 --remote --output /tmp/ilist-d1-before-multi-mount.sql
+npx wrangler d1 migrations apply ilist-d1 --remote
 npm run migrate:objects -- --remote
 npm run deploy
 ```

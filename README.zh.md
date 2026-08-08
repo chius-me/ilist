@@ -79,14 +79,14 @@ Worker 作为控制平面，在可能的情况下对文件数据进行流式传�
 3. **创建 D1 和 R2 资源。**
 
    ```bash
-   npx wrangler d1 create ilist-db
-   npx wrangler r2 bucket create ilist-files
+   npx wrangler d1 create ilist-d1
+   npx wrangler r2 bucket create ilist-r2
    ```
 
 4. **配置 `wrangler.jsonc`、自定义域名并应用 D1 迁移。** 将 Wrangler 返回的 D1 `database_id` 复制到 `wrangler.jsonc`，确认数据库和存储桶名称；只有当 `ilist.chius.cc` 位于你的 Cloudflare zone 时，才保留已配置的该自定义域名路由。然后运行：
 
    ```bash
-   npx wrangler d1 migrations apply ilist-db --remote
+   npx wrangler d1 migrations apply ilist-d1 --remote
    ```
 
 5. **生成管理员密码哈希和随机密钥。**
@@ -144,7 +144,7 @@ Worker 作为控制平面，在可能的情况下对文件数据进行流式传�
 Endpoint: https://ACCOUNT_ID.r2.cloudflarestorage.com
 Region: auto
 Addressing mode: path style
-Bucket name: ilist-files
+Bucket name: ilist-r2
 Access key ID: R2 API token access key ID
 Secret access key: R2 API token secret access key
 ```
@@ -181,7 +181,7 @@ Google Docs、Sheets 和 Slides 会在主文件浏览器与受控分享中显示
 
 ```bash
 cp .dev.vars.example .dev.vars
-npx wrangler d1 migrations apply ilist-db --local
+npx wrangler d1 migrations apply ilist-d1 --local
 npm run dev
 ```
 
@@ -216,7 +216,7 @@ npm run dev
 | Secret | 用途 |
 | --- | --- |
 | `CLOUDFLARE_API_TOKEN` | 具备本账户 Workers、Workers Routes / Custom Domains 与 D1 编辑权限的 API token |
-| `CLOUDFLARE_ACCOUNT_ID` | 拥有 `ilist` Worker、`ilist-db` D1 与 `ilist-files` R2 的 Cloudflare 账户 ID |
+| `CLOUDFLARE_ACCOUNT_ID` | 拥有 `ilist` Worker、`ilist-d1` D1 与 `ilist-r2` R2 的 Cloudflare 账户 ID |
 
 不要把 `ADMIN_PASSWORD_HASH`、`CREDENTIAL_MASTER_KEY`、OAuth client secret 或其他 Worker secret 放进 GitHub；它们只应作为 Cloudflare Worker secret 保存。
 
@@ -256,8 +256,8 @@ npm run dev
 修改生产环境前，导出 D1 并将导出文件保存在 Git 之外：
 
 ```bash
-npx wrangler d1 export ilist-db --remote --output /tmp/ilist-db-before-multi-mount.sql
-npx wrangler d1 migrations apply ilist-db --remote
+npx wrangler d1 export ilist-d1 --remote --output /tmp/ilist-d1-before-multi-mount.sql
+npx wrangler d1 migrations apply ilist-d1 --remote
 npm run migrate:objects -- --remote
 npm run deploy
 ```

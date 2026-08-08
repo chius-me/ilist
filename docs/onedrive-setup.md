@@ -49,8 +49,8 @@ Wrangler can also set each value with `npx wrangler secret put NAME`. Do not put
 Export D1 before changing production:
 
 ```bash
-npx wrangler d1 export ilist-db --remote --output /tmp/ilist-db-before-multi-mount.sql
-npx wrangler d1 migrations apply ilist-db --remote
+npx wrangler d1 export ilist-d1 --remote --output /tmp/ilist-d1-before-multi-mount.sql
+npx wrangler d1 migrations apply ilist-d1 --remote
 npm run deploy
 ```
 

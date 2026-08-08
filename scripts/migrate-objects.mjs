@@ -19,7 +19,7 @@ if (flags.length !== 1 || !['--local', '--remote'].includes(flags[0])) {
 const mode = flags[0];
 
 function executeJson(command) {
-  const output = execFileSync('npx', ['wrangler', 'd1', 'execute', 'ilist-db', mode, '--command', command, '--json'], {
+  const output = execFileSync('npx', ['wrangler', 'd1', 'execute', 'ilist-d1', mode, '--command', command, '--json'], {
     encoding: 'utf8',
     stdio: ['ignore', 'pipe', 'inherit'],
   });
@@ -101,7 +101,7 @@ async function waitForReservationsToDrain(owner) {
 
 function executeImport(file) {
   return new Promise((resolve, reject) => {
-    const child = spawn('npx', ['wrangler', 'd1', 'execute', 'ilist-db', mode, '--file', file], { stdio: 'inherit' });
+    const child = spawn('npx', ['wrangler', 'd1', 'execute', 'ilist-d1', mode, '--file', file], { stdio: 'inherit' });
     child.once('error', reject);
     child.once('exit', (code) => {
       if (code === 0) resolve();

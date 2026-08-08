@@ -36,14 +36,14 @@
   "r2_buckets": [
     {
       "binding": "R2_BUCKET",
-      "bucket_name": "ilist-files"
+      "bucket_name": "ilist-r2"
     }
   ],
   "d1_databases": [
     {
       "binding": "DB",
-      "database_name": "ilist-db",
-      "database_id": "67579b31-8e64-4442-af87-b92d024860d0",
+      "database_name": "ilist-d1",
+      "database_id": "a64f3be9-1470-4ad2-9cff-bc653d3ec2d0",
       "migrations_dir": "migrations"
     }
   ],
