@@ -30,6 +30,7 @@ const otherOwnerSessionId = 'upload-service-other-owner';
 const originalOneDriveFactory = driverRegistry.onedrive;
 const originalS3Factory = driverRegistry.s3;
 const originalGoogleFactory = driverRegistry.google;
+const originalDropboxFactory = driverRegistry.dropbox;
 
 const workerEnv = () => env as unknown as Env;
 
@@ -99,7 +100,7 @@ async function insertOwner(id: string): Promise<void> {
     .run();
 }
 
-async function mount(driverType: 'onedrive' | 's3' | 'google' = 'onedrive', name: string = crypto.randomUUID()): Promise<Mount> {
+async function mount(driverType: 'onedrive' | 's3' | 'google' | 'dropbox' = 'onedrive', name: string = crypto.randomUUID()): Promise<Mount> {
   return createMount(workerEnv().DB, {
     name: `Upload ${name}`,
     mountPath: `/upload-${name}`,
@@ -235,6 +236,7 @@ describe('upload lifecycle service', () => {
     driverRegistry.onedrive = originalOneDriveFactory;
     driverRegistry.s3 = originalS3Factory;
     driverRegistry.google = originalGoogleFactory;
+    driverRegistry.dropbox = originalDropboxFactory;
   });
 
   it('uses the common encrypted session service for Google mounts without exposing provider state', async () => {
@@ -246,6 +248,22 @@ describe('upload lifecycle service', () => {
 
     expect(view).toMatchObject({ kind: 'multipart', status: 'active', partSize: UPLOAD_PART_SIZE_BYTES });
     expect(JSON.stringify(view)).not.toMatch(/uploadUrl|uploadId|integrityProof|private/);
+    expect(driver.resumableUpload?.create).toHaveBeenCalledOnce();
+  });
+
+  it('uses the common encrypted session service for Dropbox mounts without exposing provider state', async () => {
+    const mounted = await mount('dropbox');
+    const driver = fakeDriver('dropbox', {
+      create: vi.fn(async () => ({
+        state: { sessionId: 'private-dropbox-session', nextOffset: 0 },
+        expiresAt: Date.now() + 60 * 60_000,
+      })),
+    });
+    driverRegistry.dropbox = () => driver;
+
+    const view = await createResumableUpload(workerEnv(), ownerSessionId, createInput(mounted));
+    expect(view).toMatchObject({ kind: 'multipart', status: 'active', partSize: UPLOAD_PART_SIZE_BYTES });
+    expect(JSON.stringify(view)).not.toMatch(/sessionId|private-dropbox-session/);
     expect(driver.resumableUpload?.create).toHaveBeenCalledOnce();
   });
 

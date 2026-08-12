@@ -11,6 +11,8 @@ export interface Env {
   MICROSOFT_CLIENT_SECRET: string;
   GOOGLE_CLIENT_ID: string;
   GOOGLE_CLIENT_SECRET: string;
+  DROPBOX_CLIENT_ID: string;
+  DROPBOX_CLIENT_SECRET: string;
   PUBLIC_ORIGIN: string;
 }
 
@@ -208,7 +210,7 @@ export interface BatchResult {
   failed: BatchFailure[];
 }
 
-export type MountDriverType = 's3' | 'onedrive' | 'google' | 'native-r2';
+export type MountDriverType = 's3' | 'onedrive' | 'google' | 'dropbox' | 'native-r2';
 
 export interface MountRow {
   id: string;

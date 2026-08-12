@@ -1,6 +1,6 @@
 import { CirclePower, Cloud, Link, Link2Off, MoreHorizontal, Pencil, Plus, RefreshCw, Trash2 } from 'lucide-react';
 import { useCallback, useEffect, useRef, useState, type MouseEvent } from 'react';
-import { createMount, disconnectMount, googleDriveConnectUrl, listMounts, oneDriveConnectUrl, removeMount, testMount, updateMount } from '../../api/mounts';
+import { createMount, disconnectMount, dropboxConnectUrl, googleDriveConnectUrl, listMounts, oneDriveConnectUrl, removeMount, testMount, updateMount } from '../../api/mounts';
 import { useI18n } from '../../i18n/I18nProvider';
 import type { Mount, MountInput } from '../../types/mounts';
 import { MountDialog } from './MountDialog';
@@ -16,6 +16,7 @@ interface MountManagerProps {
 function providerName(mount: Mount, t: ReturnType<typeof useI18n>['t']): string {
   if (mount.driverType === 'onedrive') return t('mount.providerOneDrive');
   if (mount.driverType === 'google') return t('mount.providerGoogleDrive');
+  if (mount.driverType === 'dropbox') return t('mount.providerDropbox');
   if (mount.provider === 'cloudflare-r2') return 'Cloudflare R2';
   if (mount.provider === 'aws-s3') return 'AWS S3';
   if (mount.provider === 'backblaze-b2') return 'Backblaze B2';
@@ -23,11 +24,13 @@ function providerName(mount: Mount, t: ReturnType<typeof useI18n>['t']): string 
 }
 
 function isOAuthMount(mount: Mount): boolean {
-  return mount.driverType === 'onedrive' || mount.driverType === 'google';
+  return mount.driverType === 'onedrive' || mount.driverType === 'google' || mount.driverType === 'dropbox';
 }
 
 function connectUrl(mount: Pick<Mount, 'id' | 'driverType'>): string {
-  return mount.driverType === 'google' ? googleDriveConnectUrl(mount.id) : oneDriveConnectUrl(mount.id);
+  if (mount.driverType === 'google') return googleDriveConnectUrl(mount.id);
+  if (mount.driverType === 'dropbox') return dropboxConnectUrl(mount.id);
+  return oneDriveConnectUrl(mount.id);
 }
 
 function MountConfirmation({ label, message, confirmLabel, busy, onClose, onConfirm }: {
@@ -116,10 +119,13 @@ export function MountManager(props: MountManagerProps) {
     const search = new URL(window.location.href).searchParams;
     const oneDrive = search.get('onedrive');
     const google = search.get('google');
+    const dropbox = search.get('dropbox');
     if (oneDrive === 'connected') setNotice(t('mount.oneDriveConnected'));
     if (oneDrive === 'error') setNotice(t('mount.oneDriveConnectionFailed'));
     if (google === 'connected') setNotice(t('mount.googleDriveConnected'));
     if (google === 'error') setNotice(t('mount.googleDriveConnectionFailed'));
+    if (dropbox === 'connected') setNotice(t('mount.dropboxConnected'));
+    if (dropbox === 'error') setNotice(t('mount.dropboxConnectionFailed'));
   }, [t]);
 
   async function save(input: MountInput) {
@@ -129,7 +135,7 @@ export function MountManager(props: MountManagerProps) {
       if (editing) await updateMount(editing.id, input);
       else {
         const created = await createMount(input);
-        if (input.driverType === 'onedrive' || input.driverType === 'google') {
+        if (input.driverType === 'onedrive' || input.driverType === 'google' || input.driverType === 'dropbox') {
           navigate(connectUrl(created));
           return;
         }
@@ -202,7 +208,7 @@ export function MountManager(props: MountManagerProps) {
     try {
       await disconnectMount(disconnecting.id);
       setDisconnecting(null);
-      setNotice(t(disconnecting.driverType === 'google' ? 'mount.googleDriveDisconnected' : 'mount.oneDriveDisconnected'));
+      setNotice(t(disconnecting.driverType === 'google' ? 'mount.googleDriveDisconnected' : disconnecting.driverType === 'dropbox' ? 'mount.dropboxDisconnected' : 'mount.oneDriveDisconnected'));
       await refresh();
     } catch (cause) {
       setNotice(localizedApiError(cause, t, 'mount.disconnectFailed'));
@@ -246,6 +252,6 @@ export function MountManager(props: MountManagerProps) {
     {editing !== undefined ? <MountDialog mount={editing} active={!pendingPublication} busy={busy} error={error} submitButtonRef={mountSubmitButton} onClose={() => { setEditing(undefined); setPendingPublication(null); setError(null); }} onSubmit={submitMount} /> : null}
     {pendingPublication ? <PublishMountDialog busy={busy} restoreFocus={mountSubmitButton.current} onCancel={() => setPendingPublication(null)} onConfirm={() => void confirmPublication()} /> : null}
     {deleting ? <MountConfirmation label={t('mount.deleteDialogTitle')} message={t('mount.deleteDialogMessage', { name: deleting.name })} confirmLabel={t('mount.deleteConfirm')} busy={busy} onClose={() => setDeleting(null)} onConfirm={() => void confirmDelete()} /> : null}
-    {disconnecting ? <MountConfirmation label={t(disconnecting.driverType === 'google' ? 'mount.disconnectGoogleDialogTitle' : 'mount.disconnectDialogTitle')} message={t(disconnecting.driverType === 'google' ? 'mount.disconnectGoogleDialogMessage' : 'mount.disconnectDialogMessage', { name: disconnecting.name })} confirmLabel={t('mount.disconnectConfirm')} busy={busy} onClose={() => setDisconnecting(null)} onConfirm={() => void confirmDisconnect()} /> : null}
+    {disconnecting ? <MountConfirmation label={t(disconnecting.driverType === 'google' ? 'mount.disconnectGoogleDialogTitle' : disconnecting.driverType === 'dropbox' ? 'mount.disconnectDropboxDialogTitle' : 'mount.disconnectDialogTitle')} message={t(disconnecting.driverType === 'google' ? 'mount.disconnectGoogleDialogMessage' : disconnecting.driverType === 'dropbox' ? 'mount.disconnectDropboxDialogMessage' : 'mount.disconnectDialogMessage', { name: disconnecting.name })} confirmLabel={t('mount.disconnectConfirm')} busy={busy} onClose={() => setDisconnecting(null)} onConfirm={() => void confirmDisconnect()} /> : null}
   </main>;
 }

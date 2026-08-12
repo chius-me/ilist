@@ -313,7 +313,7 @@ export async function installApiFixtures(page: Page, options: ApiFixtureOptions 
       const input = route.request().postDataJSON() as Record<string, unknown>;
       const created = {
         ...input,
-        id: 'google-e2e',
+        id: `${String(input.driverType ?? 'mount')}-e2e`,
         connected: false,
         createdAt: '2026-07-18T00:00:00.000Z',
         updatedAt: '2026-07-18T00:00:00.000Z',
@@ -328,6 +328,11 @@ export async function installApiFixtures(page: Page, options: ApiFixtureOptions 
     status: 200,
     contentType: 'text/html',
     body: '<!doctype html><title>Google OAuth</title>',
+  }));
+  await page.route('**/api/admin/oauth/dropbox/start**', (route) => route.fulfill({
+    status: 200,
+    contentType: 'text/html',
+    body: '<!doctype html><title>Dropbox OAuth</title>',
   }));
   await page.route('**/api/admin/entries/**', (route) => json(route, { ok: true, data: { succeeded: ['report'], failed: [] } }));
   await page.route('**/api/admin/uploads/sessions**', async (route) => {

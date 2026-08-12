@@ -17,6 +17,8 @@ export default defineConfig({
           MICROSOFT_CLIENT_SECRET: 'test-client-secret',
           GOOGLE_CLIENT_ID: 'test-google-client-id',
           GOOGLE_CLIENT_SECRET: 'test-google-client-secret',
+          DROPBOX_CLIENT_ID: 'test-dropbox-client-id',
+          DROPBOX_CLIENT_SECRET: 'test-dropbox-client-secret',
           PUBLIC_ORIGIN: 'https://ilist.example',
         },
       },

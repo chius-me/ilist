@@ -13,6 +13,13 @@ import {
   oneDriveCallbackUrl,
   requestOneDriveTokens,
 } from './drivers/onedrive/oauth';
+import {
+  consumeDropboxOAuthState,
+  createDropboxAuthorization,
+  DROPBOX_SCOPES,
+  dropboxCallbackUrl,
+  requestDropboxTokens,
+} from './drivers/dropbox/oauth';
 import { HttpError } from './http';
 import { getMount } from './mounts';
 import { publicOrigin } from './oauth-core';
@@ -25,6 +32,43 @@ function assertConfiguredOrigin(request: Request, env: Env): void {
 }
 
 export async function handleOAuthRoutes(request: Request, env: Env, url: URL): Promise<Response | null> {
+  if (url.pathname === '/api/admin/oauth/dropbox/start') {
+    if (request.method !== 'GET') throw new HttpError(405, 'Method not allowed');
+    assertConfiguredOrigin(request, env);
+    const mountId = url.searchParams.get('mountId') ?? '';
+    const mount = await getMount(env.DB, mountId);
+    if (!mount || mount.driverType !== 'dropbox') throw new HttpError(404, 'MOUNT_NOT_FOUND', 'Dropbox mount not found');
+    return Response.redirect(await createDropboxAuthorization(env, mount.id), 302);
+  }
+
+  if (url.pathname === '/api/admin/oauth/dropbox/callback') {
+    if (request.method !== 'GET') throw new HttpError(405, 'Method not allowed');
+    assertConfiguredOrigin(request, env);
+    const pending = await consumeDropboxOAuthState(env, url.searchParams.get('state') ?? '');
+    if (url.searchParams.has('error')) {
+      return Response.redirect(`${publicOrigin(env)}/admin/storages?dropbox=error`, 302);
+    }
+    const code = url.searchParams.get('code') ?? '';
+    if (!code) throw new HttpError(400, 'OAUTH_CODE_MISSING', 'OAuth authorization code is missing');
+    const mount = await getMount(env.DB, pending.mountId);
+    if (!mount || mount.driverType !== 'dropbox') throw new HttpError(404, 'MOUNT_NOT_FOUND', 'Dropbox mount not found');
+    const token = await requestDropboxTokens(env, {
+      grant_type: 'authorization_code',
+      code,
+      redirect_uri: dropboxCallbackUrl(env),
+      code_verifier: pending.verifier,
+    });
+    if (!token.refreshToken) throw new HttpError(502, 'DROPBOX_TOKEN_EXCHANGE_FAILED', 'Dropbox did not return a refresh token');
+    await putCredentials(env, mount.id, {
+      accessToken: token.accessToken,
+      refreshToken: token.refreshToken,
+      tokenType: token.tokenType,
+      expiresAt: Date.now() + token.expiresIn * 1000,
+      scope: token.scope ?? DROPBOX_SCOPES,
+    });
+    return Response.redirect(`${publicOrigin(env)}/admin/storages?dropbox=connected`, 302);
+  }
+
   if (url.pathname === '/api/admin/oauth/google/start') {
     if (request.method !== 'GET') throw new HttpError(405, 'Method not allowed');
     assertConfiguredOrigin(request, env);

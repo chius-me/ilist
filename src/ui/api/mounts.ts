@@ -33,3 +33,7 @@ export function oneDriveConnectUrl(id: string): string {
 export function googleDriveConnectUrl(id: string): string {
   return `/api/admin/oauth/google/start?mountId=${encodeURIComponent(id)}`;
 }
+
+export function dropboxConnectUrl(id: string): string {
+  return `/api/admin/oauth/dropbox/start?mountId=${encodeURIComponent(id)}`;
+}

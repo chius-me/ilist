@@ -22,6 +22,7 @@ Self-hosted file index and manager for Cloudflare Workers.
 - OneDrive Personal OAuth authorization with PKCE and encrypted refresh tokens
 - Multiple OneDrive accounts, each mounted at a custom top-level path
 - Multiple Google My Drive accounts or roots, each independently authorized and mounted at a custom top-level path
+- Multiple Dropbox accounts or roots with PKCE OAuth and encrypted refresh tokens
 - S3-compatible mounts with AWS Signature Version 4
 - Cloudflare R2 through either S3 credentials or the built-in Worker binding
 - Public directory browsing, stable file links, downloads, and common file previews
@@ -30,7 +31,7 @@ Self-hosted file index and manager for Cloudflare Workers.
 - List and grid views, breadcrumbs, sorting, search, keyboard selection, and responsive layout
 - Responsive storage and appearance administration for desktop, tablet, and mobile screens
 - Administrator login, upload, folder creation, rename, move, delete, and visibility controls
-- Resumable OneDrive uploads and multipart S3 uploads with pause, resume, retry, cancel, and progress controls
+- Resumable OneDrive, Google Drive, and Dropbox uploads plus multipart S3 uploads with pause, resume, retry, cancel, and progress controls
 - D1 migrations and compatibility support for legacy R2 object links
 - Streamed provider responses without buffering complete files in Worker memory
 
@@ -40,6 +41,7 @@ Self-hosted file index and manager for Cloudflare Workers.
 | --- | ---: | ---: | ---: | ---: | --- |
 | OneDrive Personal | ✓ | ✓ | ✓ | ✓ | Resumable upload; personal Microsoft accounts only |
 | Google My Drive | ✓ | ✓ | ✓ | ✓ | Range downloads, resumable upload, and Docs/Sheets/Slides export |
+| Dropbox | ✓ | ✓ | ✓ | ✓ | Range downloads, resumable upload, folder copy, and exportable cloud files |
 | Cloudflare R2 binding | ✓ | ✓ | ✓ | ✓ | Built-in compatibility mount; single-request upload only |
 | Cloudflare R2 through S3 | ✓ | ✓ | ✓ | ✓ | Multipart upload with the R2 S3 endpoint and scoped credentials |
 | Other S3-compatible storage | ✓ | ✓ | ✓ | ✓ | Multipart compatibility depends on the provider's S3 implementation |
@@ -58,6 +60,7 @@ Browser
         +-- Virtual filesystem and storage driver registry
         +-- OneDrive Personal driver -> Microsoft Graph
         +-- Google Drive driver -> Google Drive API v3
+        +-- Dropbox driver -> Dropbox API v2
         +-- S3 driver -> R2 or another S3-compatible provider
         +-- D1 -> mounts, encrypted credentials, entries, sessions, shares
         +-- R2 binding -> built-in compatibility storage
@@ -67,7 +70,7 @@ The Worker acts as the control plane and streams or redirects file data where po
 
 ## Quick Start
 
-1. **Prerequisites.** Install Node.js 22.12 or newer and npm 10 or newer. Have a Cloudflare account with Workers, D1, and R2 enabled, Wrangler authenticated with `npx wrangler login`, a Microsoft Entra application for OneDrive Personal, and a Google Cloud OAuth application for Google Drive.
+1. **Prerequisites.** Install Node.js 22.12 or newer and npm 10 or newer. Have a Cloudflare account with Workers, D1, and R2 enabled, Wrangler authenticated with `npx wrangler login`, and OAuth applications for the cloud providers you intend to use.
 2. **Clone and install.**
 
    ```bash
@@ -106,7 +109,7 @@ The Worker acts as the control plane and streams or redirects file data where po
    npx wrangler secret put ADMIN_PASSWORD_HASH
    ```
 
-6. **Store all eight required Worker secrets.** Use the generated values and the provider application values with `npx wrangler secret put`:
+6. **Store all ten required Worker secrets.** Use the generated values and the provider application values with `npx wrangler secret put`:
 
    ```bash
    npx wrangler secret put ADMIN_PASSWORD_HASH
@@ -116,6 +119,8 @@ The Worker acts as the control plane and streams or redirects file data where po
    npx wrangler secret put MICROSOFT_CLIENT_SECRET
    npx wrangler secret put GOOGLE_CLIENT_ID
    npx wrangler secret put GOOGLE_CLIENT_SECRET
+   npx wrangler secret put DROPBOX_CLIENT_ID
+   npx wrangler secret put DROPBOX_CLIENT_SECRET
    npx wrangler secret put PUBLIC_ORIGIN
    ```
 
@@ -138,6 +143,8 @@ For OneDrive Personal, follow [docs/onedrive-setup.md](docs/onedrive-setup.md). 
 
 For Google Drive, follow [docs/google-drive-setup.md](docs/google-drive-setup.md). Enable Google Drive API, create a Web OAuth client with redirect URI `https://ilist.chius.cc/api/admin/oauth/google/callback`, and configure `GOOGLE_CLIENT_ID` and `GOOGLE_CLIENT_SECRET`. Retain the existing `https://ilist.chius.workers.dev/api/admin/oauth/google/callback` URI until the custom-domain authorization flow is verified. ilist requests `https://www.googleapis.com/auth/drive`; keep a development consent screen in testing with explicit test users, or complete Google's production verification requirements before serving other users.
 
+For Dropbox, follow [docs/dropbox-setup.md](docs/dropbox-setup.md). Create a scoped Dropbox app, register `https://ilist.chius.cc/api/admin/oauth/dropbox/callback`, enable the four file metadata/content read/write scopes, and configure `DROPBOX_CLIENT_ID` and `DROPBOX_CLIENT_SECRET`.
+
 For Cloudflare R2 through S3, use:
 
 ```text
@@ -154,10 +161,10 @@ Use a bucket-scoped R2 API token with only the permissions ilist requires.
 ## Upload Behavior
 
 - Files smaller than `10 MiB` use the existing single-request upload path.
-- Files of exactly `10 MiB` or larger use resumable upload when the current OneDrive, Google Drive, or S3 mount advertises multipart support.
+- Files of exactly `10 MiB` or larger use resumable upload when the current OneDrive, Google Drive, Dropbox, or S3 mount advertises multipart support.
 - Parts are uploaded sequentially in `10 MiB` chunks. The queue runs at most two files concurrently.
 - Pause, resume, and retry preserve the opaque ilist upload session and server-confirmed parts while the page remains open. After a full page reload, unfinished multipart sessions reappear in the upload queue and require re-selecting the original local file before parts continue (browsers cannot silently re-read disk files).
-- Provider upload URLs, OneDrive session proofs, Google resumable session URLs, and S3 upload IDs remain encrypted or server-side and are never returned to the browser.
+- Provider upload URLs, OneDrive session proofs, Google resumable session URLs, Dropbox session IDs, and S3 upload IDs remain encrypted or server-side and are never returned to the browser.
 - The built-in `R2` Worker binding remains compatible with existing deployments but does not implement resumable upload; use an S3-configured R2 mount for multipart uploads.
 - Configure an incomplete multipart upload lifecycle rule on S3-compatible buckets so abandoned provider uploads are removed if Worker cleanup cannot reach them.
 
@@ -235,13 +242,14 @@ Do not put `ADMIN_PASSWORD_HASH`, `CREDENTIAL_MASTER_KEY`, OAuth client secrets,
 - New mounts are private by default. Publishing a mount requires explicit administrator confirmation because unauthenticated visitors can browse it.
 - Share item handles are checked against the live share root on every access. Moving an item outside the shared folder revokes its old handle immediately.
 - Failed administrator attempts are limited before PBKDF2 by both a five-per-minute IP-wide budget and a five-per-minute IP-plus-normalized-username budget. Share-password attempts remain limited to ten per minute per IP and share. Do not put a caching rule in front of share responses.
-- OneDrive and Google Drive share ancestry is checked live, but a provider-side move concurrent with a metadata or download request leaves a narrow unavoidable TOCTOU window. Restrict provider write access for sensitive public shares and disable a share when immediate revocation is required.
+- OneDrive, Google Drive, and Dropbox share ancestry is checked live, but a provider-side move concurrent with a metadata or download request leaves a narrow unavoidable TOCTOU window. Restrict provider write access for sensitive public shares and disable a share when immediate revocation is required.
 
 ## Limitations
 
 - Single administrator; no registration or multi-user permission model
 - OneDrive Personal only; work and school tenants are not yet supported
 - Google support is limited to My Drive. Shared Drives, Shared with me, and shortcut traversal are not implemented.
+- Dropbox Business team impersonation and explicit team-space namespace selection are not implemented.
 - No WebDAV, FTP, SFTP, SMB, or local filesystem drivers
 - Upload resume after reload requires re-binding the original local file; silent recovery without re-selection is not possible in browsers
 - Built-in R2 binding uploads remain single-request below `10 MiB` and reject larger single-request uploads with a stable error; use an S3-configured R2 mount for multipart uploads
@@ -277,6 +285,7 @@ src/
     drivers/
       onedrive/               Microsoft Graph driver and OAuth tokens
       google/                 Google Drive API driver and OAuth tokens
+      dropbox/                Dropbox API v2 driver and OAuth tokens
       s3/                     S3-compatible driver and SigV4 client
 migrations/                   D1 schema migrations
 tests/worker/                 Worker runtime tests

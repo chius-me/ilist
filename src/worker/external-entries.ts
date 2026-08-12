@@ -12,8 +12,8 @@ function canCopyItem(driver: StorageDriver, item: StorageItem, mount: Mount): bo
   if (!driver.capabilities.has('copy') || item.id === driver.rootId) return false;
   // Google Workspace-native files only export; they are not binary-copyable.
   if (item.exportOptions?.length) return false;
-  // OneDrive/Google implement file copy only; S3 supports folder trees.
-  if (item.kind === 'folder') return mount.driverType === 's3';
+  // OneDrive/Google implement file copy only; S3 and Dropbox support folder trees.
+  if (item.kind === 'folder') return mount.driverType === 's3' || mount.driverType === 'dropbox';
   return item.kind === 'file';
 }
 

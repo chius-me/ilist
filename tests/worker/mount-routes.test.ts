@@ -65,6 +65,7 @@ describe('mount administration API', () => {
     delete driverRegistry.s3;
     delete driverRegistry.onedrive;
     delete driverRegistry.google;
+    delete driverRegistry.dropbox;
     delete driverRegistry['native-r2'];
     await workerEnv().DB.prepare('DELETE FROM storage_credentials').run();
     await workerEnv().DB.prepare('DELETE FROM mounts').run();
@@ -105,6 +106,7 @@ describe('mount administration API', () => {
 
   it.each([
     ['OneDrive', 'onedrive', 'microsoft-onedrive-personal'],
+    ['Dropbox', 'dropbox', 'dropbox'],
     ['native R2', 'native-r2', 'cloudflare-r2'],
   ] as const)('creates %s mounts as private when the HTTP request omits isPublic', async (name, driverType, provider) => {
     const response = await adminFetch('/api/admin/mounts', {
