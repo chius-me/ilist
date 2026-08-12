@@ -10,6 +10,7 @@ const origin = 'https://ilist.example';
 const originalOneDriveFactory = driverRegistry.onedrive;
 const originalS3Factory = driverRegistry.s3;
 const originalGoogleFactory = driverRegistry.google;
+const originalDropboxFactory = driverRegistry.dropbox;
 
 function item(input: Partial<StorageItem> & Pick<StorageItem, 'id' | 'name' | 'kind'>): StorageItem {
   return {
@@ -87,9 +88,32 @@ afterEach(() => {
   driverRegistry.onedrive = originalOneDriveFactory;
   driverRegistry.s3 = originalS3Factory;
   driverRegistry.google = originalGoogleFactory;
+  driverRegistry.dropbox = originalDropboxFactory;
 });
 
 describe('multi-mount filesystem integration', () => {
+  it('isolates identical Dropbox provider item IDs across independent mounts', async () => {
+    const db = (env as unknown as Env).DB;
+    await db.prepare("DELETE FROM mounts WHERE id <> 'native-r2'").run();
+    const first = await createMount(db, {
+      name: 'Dropbox First', mountPath: '/dropbox-first', driverType: 'dropbox', provider: 'dropbox', isPublic: true,
+    });
+    const second = await createMount(db, {
+      name: 'Dropbox Second', mountPath: '/dropbox-second', driverType: 'dropbox', provider: 'dropbox', isPublic: true,
+    });
+    const drivers = new Map([[first.id, fakeDriver('dropbox-first')], [second.id, fakeDriver('dropbox-second')]]);
+    driverRegistry.dropbox = (_env, mount) => drivers.get(mount.id)!;
+
+    const firstResponse = await SELF.fetch(`${origin}/api/fs/list?path=/dropbox-first/Docs`);
+    const secondResponse = await SELF.fetch(`${origin}/api/fs/list?path=/dropbox-second/Docs`);
+    const firstEntry = (await firstResponse.json() as { data: { items: Array<{ id: string; name: string }> } }).data.items[0];
+    const secondEntry = (await secondResponse.json() as { data: { items: Array<{ id: string; name: string }> } }).data.items[0];
+    expect(firstEntry.name).toBe('dropbox-first.txt');
+    expect(secondEntry.name).toBe('dropbox-second.txt');
+    expect(decodeExternalId(firstEntry.id)).toEqual({ mountId: first.id, itemId: 'same-provider-id' });
+    expect(decodeExternalId(secondEntry.id)).toEqual({ mountId: second.id, itemId: 'same-provider-id' });
+  });
+
   it('isolates identical Google provider item IDs across independent mounts', async () => {
     const db = (env as unknown as Env).DB;
     await db.prepare("DELETE FROM mounts WHERE id <> 'native-r2'").run();

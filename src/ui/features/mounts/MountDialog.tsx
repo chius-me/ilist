@@ -23,10 +23,10 @@ function r2Account(endpoint: string): string {
   try { return new URL(endpoint).hostname.split('.')[0] ?? ''; } catch { return ''; }
 }
 
-type StorageType = 's3' | 'onedrive' | 'google';
+type StorageType = 's3' | 'onedrive' | 'google' | 'dropbox';
 
 function initialStorageType(mount: Mount | null): StorageType {
-  if (mount?.driverType === 'onedrive' || mount?.driverType === 'google') return mount.driverType;
+  if (mount?.driverType === 'onedrive' || mount?.driverType === 'google' || mount?.driverType === 'dropbox') return mount.driverType;
   return 's3';
 }
 
@@ -68,6 +68,15 @@ export function MountDialog({ mount, active = true, busy, error, onClose, onSubm
       });
       return;
     }
+    if (storageType === 'dropbox') {
+      void onSubmit({
+        name, mountPath, driverType: 'dropbox', provider: 'dropbox',
+        enabled, isPublic, sortOrder: mount?.sortOrder ?? 0,
+        rootItemId: rootItemId.trim() || null,
+        config: {},
+      });
+      return;
+    }
     if (storageType === 'onedrive') {
       void onSubmit({
         name, mountPath, driverType: 'onedrive', provider: 'microsoft-onedrive-personal',
@@ -86,10 +95,10 @@ export function MountDialog({ mount, active = true, busy, error, onClose, onSubm
 
   return <div ref={backdrop} className="dialogBackdrop overlayScrim" role="presentation" onMouseDown={onClose}>
     <section className="mountDialog overlaySurface" role="dialog" aria-modal="true" aria-labelledby="mount-dialog-title" onMouseDown={(event) => event.stopPropagation()}>
-      <header className="overlayHeader"><div><h2 id="mount-dialog-title">{mount ? t('mount.editStorage') : t('admin.addStorage')}</h2><p>{storageType === 'onedrive' ? t('mount.oneDriveMount') : storageType === 'google' ? t('mount.googleDriveMount') : t('mount.s3Mount')}</p></div><button className="iconButton" type="button" onClick={onClose} aria-label={t('common.close')} title={t('common.close')}><X aria-hidden="true" size={18} /></button></header>
+      <header className="overlayHeader"><div><h2 id="mount-dialog-title">{mount ? t('mount.editStorage') : t('admin.addStorage')}</h2><p>{storageType === 'onedrive' ? t('mount.oneDriveMount') : storageType === 'google' ? t('mount.googleDriveMount') : storageType === 'dropbox' ? t('mount.dropboxMount') : t('mount.s3Mount')}</p></div><button className="iconButton" type="button" onClick={onClose} aria-label={t('common.close')} title={t('common.close')}><X aria-hidden="true" size={18} /></button></header>
       <form onSubmit={submit}>
         <div className="mountFormGrid">
-          <label>{t('mount.storageType')}<select value={storageType} disabled={Boolean(mount)} onChange={(event) => setStorageType(event.target.value as StorageType)}><option value="s3">{t('mount.s3Compatible')}</option><option value="onedrive">{t('mount.providerOneDrive')}</option><option value="google">{t('mount.providerGoogleDrive')}</option></select></label>
+          <label>{t('mount.storageType')}<select value={storageType} disabled={Boolean(mount)} onChange={(event) => setStorageType(event.target.value as StorageType)}><option value="s3">{t('mount.s3Compatible')}</option><option value="onedrive">{t('mount.providerOneDrive')}</option><option value="google">{t('mount.providerGoogleDrive')}</option><option value="dropbox">{t('mount.providerDropbox')}</option></select></label>
           <label>{t('mount.displayName')}<input ref={nameInput} value={name} onChange={(event) => setName(event.target.value)} required /></label>
           <label>{t('mount.mountPath')}<input value={mountPath} onChange={(event) => setMountPath(event.target.value)} placeholder="/archive" required /></label>
           {storageType === 's3' ? <>
@@ -102,8 +111,8 @@ export function MountDialog({ mount, active = true, busy, error, onClose, onSubm
             <label>{t('mount.accessKeyId')}<input autoComplete="off" value={accessKeyId} onChange={(event) => setAccessKeyId(event.target.value)} required={!mount} /></label>
             <label>{t('mount.secretAccessKey')}<input type="password" autoComplete="new-password" value={secretAccessKey} onChange={(event) => setSecretAccessKey(event.target.value)} required={!mount} placeholder={mount ? t('mount.keepExistingSecret') : ''} /></label>
           </> : <>
-            {storageType === 'google' ? <label>{t('mount.rootFolderId')}<input value={rootItemId} onChange={(event) => setRootItemId(event.target.value)} /></label> : null}
-            <div className="oneDriveConnectNote">{storageType === 'google' ? t('mount.googleDriveAuthorizationHint') : t('mount.oneDriveAuthorizationHint')}</div>
+            {storageType === 'google' || storageType === 'dropbox' ? <label>{t('mount.rootFolderId')}<input value={rootItemId} onChange={(event) => setRootItemId(event.target.value)} /></label> : null}
+            <div className="oneDriveConnectNote">{storageType === 'google' ? t('mount.googleDriveAuthorizationHint') : storageType === 'dropbox' ? t('mount.dropboxAuthorizationHint') : t('mount.oneDriveAuthorizationHint')}</div>
           </>}
         </div>
         <div className="mountSwitches"><label><input type="checkbox" checked={enabled} onChange={(event) => setEnabled(event.target.checked)} />{t('common.enabled')}</label><label><input type="checkbox" checked={isPublic} onChange={(event) => setIsPublic(event.target.checked)} />{t('mount.visibleToGuests')}</label></div>

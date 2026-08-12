@@ -1,4 +1,4 @@
-export type MountDriverType = 's3' | 'onedrive' | 'google' | 'native-r2';
+export type MountDriverType = 's3' | 'onedrive' | 'google' | 'dropbox' | 'native-r2';
 
 export interface S3MountConfig {
   endpoint: string;
@@ -52,4 +52,10 @@ export interface GoogleMountInput extends BaseMountInput {
   config: Record<string, never>;
 }
 
-export type MountInput = S3MountInput | OneDriveMountInput | GoogleMountInput;
+export interface DropboxMountInput extends BaseMountInput {
+  driverType: 'dropbox';
+  provider: 'dropbox';
+  config: Record<string, never>;
+}
+
+export type MountInput = S3MountInput | OneDriveMountInput | GoogleMountInput | DropboxMountInput;

@@ -22,6 +22,10 @@ const googleMount = {
   ...savedMount, id: 'google-1', name: 'Google projects', mountPath: '/google-projects', driverType: 'google',
   provider: 'google', rootItemId: 'folder-root-id', connected: false, config: {},
 };
+const dropboxMount = {
+  ...savedMount, id: 'dropbox-1', name: 'Dropbox projects', mountPath: '/dropbox-projects', driverType: 'dropbox',
+  provider: 'dropbox', rootItemId: 'id:folder-root', connected: false, config: {},
+};
 
 async function chooseAction(mountName: string, actionName: string) {
   await userEvent.click(await screen.findByRole('button', { name: `Actions for ${mountName}` }));
@@ -307,6 +311,30 @@ describe('MountManager', () => {
     });
   });
 
+  it('creates a named Dropbox mount with an optional root folder before starting OAuth', async () => {
+    const navigate = vi.fn();
+    let submitted: Record<string, unknown> | null = null;
+    vi.stubGlobal('fetch', vi.fn(async (_input: RequestInfo | URL, init?: RequestInit) => {
+      if (!init?.method) return Response.json({ ok: true, data: [] });
+      submitted = JSON.parse(String(init.body));
+      return Response.json({ ok: true, data: dropboxMount });
+    }));
+
+    render(<AppProviders><MountManager onBack={vi.fn()} navigate={navigate} /></AppProviders>);
+    await userEvent.click(await screen.findByRole('button', { name: 'Add storage' }));
+    await userEvent.selectOptions(screen.getByLabelText('Storage type'), 'dropbox');
+    await userEvent.type(screen.getByLabelText('Display name'), 'Dropbox projects');
+    await userEvent.type(screen.getByLabelText('Mount path'), '/dropbox-projects');
+    await userEvent.type(screen.getByLabelText('Root folder ID'), 'id:folder-root');
+    await userEvent.click(screen.getByRole('button', { name: 'Create and connect' }));
+
+    await waitFor(() => expect(navigate).toHaveBeenCalledWith('/api/admin/oauth/dropbox/start?mountId=dropbox-1'));
+    expect(submitted).toMatchObject({
+      name: 'Dropbox projects', mountPath: '/dropbox-projects', driverType: 'dropbox', provider: 'dropbox',
+      rootItemId: 'id:folder-root', config: {},
+    });
+  });
+
   it('shows connection state and confirms disconnecting OneDrive', async () => {
     const connected = { ...oneDriveMount, connected: true };
     const requests: string[] = [];
@@ -345,6 +373,26 @@ describe('MountManager', () => {
     expect(screen.getByRole('dialog', { name: 'Disconnect Google Drive' })).toBeVisible();
     await userEvent.click(screen.getByRole('button', { name: 'Disconnect account' }));
     await waitFor(() => expect(requests).toContain('POST /api/admin/mounts/google-1/disconnect'));
+  });
+
+  it('shows Dropbox callback state and confirms disconnecting Dropbox', async () => {
+    history.replaceState(null, '', '/admin/storages?dropbox=connected');
+    const connected = { ...dropboxMount, connected: true };
+    const requests: string[] = [];
+    vi.stubGlobal('fetch', vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
+      const url = String(input);
+      if (!init?.method) return Response.json({ ok: true, data: [connected] });
+      requests.push(`${init.method} ${url}`);
+      return Response.json({ ok: true, data: { ...connected, connected: false } });
+    }));
+
+    render(<AppProviders><MountManager onBack={vi.fn()} navigate={vi.fn()} /></AppProviders>);
+    expect(await screen.findByText('Dropbox connected')).toBeVisible();
+    await userEvent.click(screen.getByRole('button', { name: 'Actions for Dropbox projects' }));
+    await userEvent.click(screen.getByRole('button', { name: 'Disconnect' }));
+    expect(screen.getByRole('dialog', { name: 'Disconnect Dropbox' })).toBeVisible();
+    await userEvent.click(screen.getByRole('button', { name: 'Disconnect account' }));
+    await waitFor(() => expect(requests).toContain('POST /api/admin/mounts/dropbox-1/disconnect'));
   });
 
   it('focuses mount confirmations, closes on Escape, and restores the invoking action', async () => {

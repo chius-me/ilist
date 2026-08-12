@@ -22,6 +22,7 @@
 - 支持通过 PKCE 进行 OneDrive Personal OAuth 授权，并加密保存刷新令牌
 - 支持多个 OneDrive 账户，每个账户都可挂载到自定义的顶层路径
 - 支持多个 Google My Drive 账户或根目录，每个挂载独立授权并使用自定义顶层路径
+- 支持多个 Dropbox 账户或根目录，并使用 PKCE OAuth 和加密刷新令牌
 - 支持使用 AWS Signature Version 4 的 S3 兼容挂载
 - 支持通过 S3 凭据或内置 Worker 绑定使用 Cloudflare R2
 - 支持公开目录浏览、稳定文件链接、下载和常见文件预览
@@ -30,7 +31,7 @@
 - 支持列表和网格视图、面包屑、排序、搜索、键盘选择及响应式布局
 - 支持适配桌面、平板和移动屏幕的存储与外观管理界面
 - 支持管理员登录、上传、新建文件夹、重命名、移动、删除及可见性控制
-- 支持 OneDrive 可续传上传和 S3 multipart 上传，并提供暂停、继续、重试、取消及进度控制
+- 支持 OneDrive、Google Drive、Dropbox 可续传上传和 S3 multipart 上传，并提供暂停、继续、重试、取消及进度控制
 - 支持 D1 迁移以及旧版 R2 对象链接的兼容
 - 支持流式传输提供商响应，不会将完整文件缓冲在 Worker 内存中
 
@@ -40,6 +41,7 @@
 | --- | ---: | ---: | ---: | ---: | --- |
 | OneDrive Personal | ✓ | ✓ | ✓ | ✓ | 支持可续传上传；仅支持个人 Microsoft 账户 |
 | Google My Drive | ✓ | ✓ | ✓ | ✓ | 支持 Range 下载、可续传上传以及 Docs/Sheets/Slides 导出 |
+| Dropbox | ✓ | ✓ | ✓ | ✓ | 支持 Range 下载、可续传上传、文件夹复制和云端文件导出 |
 | Cloudflare R2 绑定 | ✓ | ✓ | ✓ | ✓ | 内置兼容挂载；仅支持单请求上传 |
 | 通过 S3 接入 Cloudflare R2 | ✓ | ✓ | ✓ | ✓ | 使用 R2 S3 端点和限定范围凭据进行 multipart 上传 |
 | 其他 S3 兼容存储 | ✓ | ✓ | ✓ | ✓ | multipart 兼容性取决于提供商的 S3 实现 |
@@ -58,6 +60,7 @@
         +-- 虚拟文件系统与存储驱动注册表
         +-- OneDrive Personal 驱动 -> Microsoft Graph
         +-- Google Drive 驱动 -> Google Drive API v3
+        +-- Dropbox 驱动 -> Dropbox API v2
         +-- S3 驱动 -> R2 或其他 S3 兼容提供商
         +-- D1 -> 挂载、加密凭据、文件条目、会话和分享
         +-- R2 绑定 -> 内置兼容存储
@@ -67,7 +70,7 @@ Worker 作为控制平面，在可能的情况下对文件数据进行流式传�
 
 ## 快速开始
 
-1. **前置条件。** 安装 Node.js 22.12 或更高版本以及 npm 10 或更高版本。准备好已启用 Workers、D1 和 R2 的 Cloudflare 账户，使用 `npx wrangler login` 完成 Wrangler 身份验证，并准备 OneDrive Personal 所需的 Microsoft Entra 应用及 Google Drive 所需的 Google Cloud OAuth 应用。
+1. **前置条件。** 安装 Node.js 22.12 或更高版本以及 npm 10 或更高版本。准备好已启用 Workers、D1 和 R2 的 Cloudflare 账户，使用 `npx wrangler login` 完成 Wrangler 身份验证，并为计划使用的云存储准备 OAuth 应用。
 2. **克隆并安装。**
 
    ```bash
@@ -106,7 +109,7 @@ Worker 作为控制平面，在可能的情况下对文件数据进行流式传�
    npx wrangler secret put ADMIN_PASSWORD_HASH
    ```
 
-6. **存储全部八个必需的 Worker secret。** 使用生成的值和提供商应用值，通过 `npx wrangler secret put` 写入：
+6. **存储全部十个必需的 Worker secret。** 使用生成的值和提供商应用值，通过 `npx wrangler secret put` 写入：
 
    ```bash
    npx wrangler secret put ADMIN_PASSWORD_HASH
@@ -116,6 +119,8 @@ Worker 作为控制平面，在可能的情况下对文件数据进行流式传�
    npx wrangler secret put MICROSOFT_CLIENT_SECRET
    npx wrangler secret put GOOGLE_CLIENT_ID
    npx wrangler secret put GOOGLE_CLIENT_SECRET
+   npx wrangler secret put DROPBOX_CLIENT_ID
+   npx wrangler secret put DROPBOX_CLIENT_SECRET
    npx wrangler secret put PUBLIC_ORIGIN
    ```
 
@@ -138,6 +143,8 @@ Worker 作为控制平面，在可能的情况下对文件数据进行流式传�
 
 对于 Google Drive，请遵循 [docs/google-drive-setup.md](docs/google-drive-setup.md)。启用 Google Drive API，创建 Web OAuth 客户端，将重定向 URI 设置为 `https://ilist.chius.cc/api/admin/oauth/google/callback`，并配置 `GOOGLE_CLIENT_ID` 与 `GOOGLE_CLIENT_SECRET`。在确认自定义域名授权流程正常前，请保留现有的 `https://ilist.chius.workers.dev/api/admin/oauth/google/callback` URI。ilist 请求 `https://www.googleapis.com/auth/drive`；开发阶段应让 OAuth consent screen 保持 Testing 并明确添加测试用户，对外提供服务前需完成 Google 要求的生产验证。
 
+对于 Dropbox，请遵循 [docs/dropbox-setup.md](docs/dropbox-setup.md)。创建 scoped Dropbox 应用，注册 `https://ilist.chius.cc/api/admin/oauth/dropbox/callback`，启用文件 metadata/content 的读写四项 scope，并配置 `DROPBOX_CLIENT_ID` 与 `DROPBOX_CLIENT_SECRET`。
+
 对于通过 S3 使用 Cloudflare R2 的情况，请使用：
 
 ```text
@@ -154,10 +161,10 @@ Secret access key: R2 API token secret access key
 ## 上传行为
 
 - 小于 `10 MiB` 的文件继续使用原有的单请求上传路径。
-- 等于或大于 `10 MiB` 的文件，在当前 OneDrive、Google Drive 或 S3 挂载声明支持 multipart 时使用可续传上传。
+- 等于或大于 `10 MiB` 的文件，在当前 OneDrive、Google Drive、Dropbox 或 S3 挂载声明支持 multipart 时使用可续传上传。
 - 分片按顺序以 `10 MiB` 大小上传，队列最多同时处理两个文件。
 - 页面保持打开时，暂停、继续和重试会保留不透明的 ilist 会话 ID 以及服务端已确认分片。完整刷新后，未完成的 multipart 会话会重新出现在上传队列中，并要求重新选择本地原文件后才能继续分片（浏览器无法静默读取磁盘文件）。
-- 提供商上传 URL、OneDrive 会话证明、Google 可续传会话 URL 和 S3 Upload ID 只保存在加密状态或服务端，绝不会返回浏览器。
+- 提供商上传 URL、OneDrive 会话证明、Google 可续传会话 URL、Dropbox 会话 ID 和 S3 Upload ID 只保存在加密状态或服务端，绝不会返回浏览器。
 - 内置 `R2` Worker 绑定继续兼容已有部署，但不支持可续传上传；需要 multipart 上传时，请将 R2 配置为 S3 挂载。
 - 建议为 S3 兼容存储桶配置未完成 multipart 上传生命周期规则，以便在 Worker 无法完成清理时自动删除遗留上传。
 
@@ -234,13 +241,14 @@ npm run dev
 - 新挂载默认私有。公开挂载必须由管理员显式确认，因为未登录访客可以浏览该挂载。
 - 每次访问分享条目都会根据实时分享根目录校验句柄；将文件移出被分享文件夹会立即使旧句柄失效。
 - 管理员失败尝试会在执行 PBKDF2 前同时受两个限制：每 IP 每分钟最多五次，以及每 IP 加规范化用户名每分钟最多五次。分享密码仍限制为每 IP 加分享每分钟最多十次。请勿在分享响应前配置覆盖其缓存策略的规则。
-- OneDrive 和 Google Drive 分享会实时校验祖先目录，但提供商侧移动与元数据或下载请求并发时，仍有一个无法完全消除的短暂 TOCTOU 窗口。敏感公开分享应限制提供商写入权限；需要立即撤销时请禁用分享。
+- OneDrive、Google Drive 和 Dropbox 分享会实时校验祖先目录，但提供商侧移动与元数据或下载请求并发时，仍有一个无法完全消除的短暂 TOCTOU 窗口。敏感公开分享应限制提供商写入权限；需要立即撤销时请禁用分享。
 
 ## 限制
 
 - 单个管理员；不支持注册或多用户权限模型
 - 仅支持 OneDrive Personal；暂不支持工作和学校租户
 - Google 支持当前仅限 My Drive，尚未实现 Shared Drives、Shared with me 和快捷方式遍历
+- 尚未实现 Dropbox Business 团队代理和显式 Team Space namespace 选择
 - 不支持 WebDAV、FTP、SFTP、SMB 或本地文件系统驱动
 - 刷新后续传需要重新绑定本地原文件；浏览器无法在无用户确认时静默恢复上传
 - 内置 R2 绑定仍使用小于 `10 MiB` 的单请求上传，更大单请求上传会返回稳定错误；大文件请将 R2 配置为 S3 挂载
@@ -276,6 +284,7 @@ src/
     drivers/
       onedrive/               Microsoft Graph 驱动和 OAuth 令牌
       google/                 Google Drive API 驱动和 OAuth 令牌
+      dropbox/                Dropbox API v2 驱动和 OAuth 令牌
       s3/                     S3 兼容驱动和 SigV4 客户端
 migrations/                   D1 数据库结构迁移
 tests/worker/                 Worker 运行时测试

@@ -132,6 +132,13 @@ const SAFE_PROVIDER_ERRORS: Record<string, SafeProviderError> = {
   },
   GOOGLE_UPLOAD_SESSION_FAILED: { status: 502, message: 'Google upload session request failed' },
   GOOGLE_UPLOAD_SESSION_INVALID: { status: 502, message: 'Google upload session is invalid' },
+  DROPBOX_AUTH_FAILED: { status: 401, message: 'Dropbox authentication failed' },
+  DROPBOX_ACCESS_DENIED: { status: 403, message: 'Dropbox access was denied' },
+  DROPBOX_RATE_LIMITED: { status: 503, message: 'Dropbox is temporarily rate limited', retryable: true },
+  DROPBOX_UPSTREAM_FAILED: { status: 502, message: 'Dropbox request failed' },
+  DROPBOX_UPLOAD_SESSION_EXPIRED: { status: 410, message: 'Dropbox upload session has expired' },
+  DROPBOX_UPLOAD_SESSION_INVALID_RANGE: { status: 409, message: 'Dropbox upload part range is invalid' },
+  DROPBOX_UPLOAD_SESSION_INVALID: { status: 502, message: 'Dropbox upload session is invalid' },
   STORAGE_ITEM_NOT_FOUND: { status: 404, message: 'Storage item was not found' },
   STORAGE_CONFLICT: { status: 409, message: 'Storage item conflicts with an existing item' },
   INVALID_ENTRY_NAME: { status: 400, message: 'Storage item name is invalid' },
@@ -237,7 +244,7 @@ async function ownedSession(env: Env, ownerSessionId: string, id: string): Promi
 
 async function sessionDriver(env: Env, record: UploadSessionRecord): Promise<SessionDriver> {
   const mount = await getMount(env.DB, record.mountId);
-  if (!mount || !['onedrive', 's3', 'google'].includes(mount.driverType)) throw uploadUnsupported();
+  if (!mount || !['onedrive', 's3', 'google', 'dropbox'].includes(mount.driverType)) throw uploadUnsupported();
   const driver = await createDriver(env, mount);
   if (!requireResumableUploadAdapter(driver)) throw uploadUnsupported();
   return { mount, driver };
@@ -307,7 +314,7 @@ export async function createResumableUpload(
   if (
     !external
     || external.item.kind !== 'folder'
-    || !['onedrive', 's3', 'google'].includes(external.mount.driverType)
+    || !['onedrive', 's3', 'google', 'dropbox'].includes(external.mount.driverType)
     || !requireResumableUploadAdapter(external.driver)
   ) {
     throw uploadUnsupported();

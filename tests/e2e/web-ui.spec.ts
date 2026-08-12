@@ -252,6 +252,20 @@ test('creates a Google Drive mount and enters its OAuth flow', async ({ page }) 
   await expect(page).toHaveURL(/\/api\/admin\/oauth\/google\/start\?mountId=google-e2e$/);
 });
 
+test('creates a Dropbox mount and enters its OAuth flow', async ({ page }) => {
+  await installApiFixtures(page, { admin: true });
+  await page.goto('/');
+  await page.getByRole('button', { name: 'Storage settings' }).click();
+  await page.getByRole('button', { name: 'Add storage' }).click();
+  await page.getByLabel('Storage type').selectOption('dropbox');
+  await page.getByLabel('Display name').fill('Dropbox projects');
+  await page.getByLabel('Mount path').fill('/dropbox-projects');
+  await page.getByLabel('Root folder ID').fill('id:folder-root');
+  await page.getByRole('button', { name: 'Create and connect' }).click();
+
+  await expect(page).toHaveURL(/\/api\/admin\/oauth\/dropbox\/start\?mountId=dropbox-e2e$/);
+});
+
 test('storage management publishes a new mount only after confirmation', async ({ page }) => {
   await installApiFixtures(page, { admin: true });
   await page.route('**/api/admin/mounts', async (route) => {
