@@ -25,7 +25,7 @@ import {
 } from './mounts';
 import type { Env, Mount, MountDriverType } from './types';
 import { oauthApplicationSource, type OAuthDriverType } from './oauth-credentials';
-import { authenticatePikPak, generatePikPakDeviceId } from './drivers/pikpak/auth';
+import { authenticatePikPak } from './drivers/pikpak/auth';
 
 interface MountRequestBody {
   name?: unknown;
@@ -197,7 +197,7 @@ async function credentialStatus(env: Env, mount: Mount): Promise<CredentialStatu
   const auth = authorizationSecrets(credentials);
   const configured = typeof auth.refreshToken === 'string' && Boolean(auth.refreshToken);
   return { appConfigured: configured, connected: configured, source: configured ? 'mount' : 'none', fields: {
-    refreshTokenConfigured: configured, usernameConfigured: typeof provider.username === 'string', deviceConfigured: typeof provider.deviceId === 'string',
+    refreshTokenConfigured: configured, usernameConfigured: typeof provider.username === 'string',
   } };
 }
 
@@ -283,22 +283,20 @@ async function credentialsForUpdate(
       if (value !== undefined && typeof value !== 'string') invalidRequest('INVALID_MOUNT_CREDENTIALS', 'PikPak credentials are invalid');
       if (typeof value === 'string' && value.length > 8192) invalidRequest('INVALID_MOUNT_CREDENTIALS', 'PikPak credentials are too large');
     }
-    const existingProvider = providerSecrets(prior);
-    const deviceId = typeof rawCredentials.deviceId === 'string' && rawCredentials.deviceId
-      ? rawCredentials.deviceId
-      : typeof existingProvider.deviceId === 'string' ? existingProvider.deviceId : generatePikPakDeviceId();
+    const existingProvider = { ...providerSecrets(prior) };
+    // Remove state left by the previous .com/CAPTCHA protocol. The .net protocol does not use it.
+    delete existingProvider.deviceId;
+    delete existingProvider.captchaToken;
+    delete existingProvider.captchaExpiresAt;
     const username = typeof rawCredentials.username === 'string' ? rawCredentials.username.trim() : '';
     const password = typeof rawCredentials.password === 'string' ? rawCredentials.password : '';
     const refreshToken = typeof rawCredentials.refreshToken === 'string' ? rawCredentials.refreshToken.trim() : '';
     if (username || password) {
       if (!username || !password) invalidRequest('INVALID_MOUNT_CREDENTIALS', 'PikPak username and password must be provided together');
-      const authenticated = await authenticatePikPak(username, password, deviceId);
-      return { ...(prior ?? {}), auth: authenticated.auth, provider: {
-        ...existingProvider, deviceId: authenticated.deviceId, username: authenticated.username,
-        captchaToken: authenticated.captchaToken, captchaExpiresAt: authenticated.captchaExpiresAt,
-      } };
+      const authenticated = await authenticatePikPak(username, password);
+      return { ...(prior ?? {}), auth: authenticated.auth, provider: { ...existingProvider, username: authenticated.username } };
     }
-    if (refreshToken) return { ...(prior ?? {}), auth: { refreshToken, expiresAt: 0 }, provider: { ...existingProvider, deviceId } };
+    if (refreshToken) return { ...(prior ?? {}), auth: { refreshToken, expiresAt: 0 }, provider: existingProvider };
     if (prior) return prior;
     invalidRequest('INVALID_MOUNT_CREDENTIALS', 'PikPak credentials are incomplete');
   }

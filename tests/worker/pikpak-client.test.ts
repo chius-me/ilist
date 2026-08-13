@@ -58,33 +58,76 @@ describe('PikPak client downloads', () => {
 });
 
 describe('PikPak client API requests', () => {
-  it('refreshes an invalid captcha token once and retries the request', async () => {
+  it('uses the OpenList Worker compatible .net list protocol', async () => {
     const mountId = await createPikPakMount();
     await putCredentials(workerEnv(), mountId, {
       auth: {
         accessToken: 'access-token', refreshToken: 'refresh-token', tokenType: 'Bearer',
-        expiresAt: Date.now() + 3_600_000, userId: 'user-id',
-      },
-      provider: {
-        deviceId: 'device-id', captchaToken: 'signin-captcha', captchaExpiresAt: Date.now() + 300_000,
+        expiresAt: Date.now() + 3_600_000,
       },
     });
-    const fetcher = vi.fn()
-      .mockResolvedValueOnce(Response.json({ error: 'captcha_invalid' }, { status: 400 }))
-      .mockResolvedValueOnce(Response.json({ captcha_token: 'drive-captcha', expires_in: 300 }))
-      .mockResolvedValueOnce(Response.json({ files: [], next_page_token: '' }));
+    const fetcher = vi.fn(async (_input: RequestInfo | URL, _init?: RequestInit) => Response.json({ files: [], next_page_token: '' }));
     const client = new PikPakClient(workerEnv(), mountId, fetcher);
 
     await expect(client.list('root')).resolves.toEqual({ files: [], next_page_token: '' });
 
-    expect(fetcher).toHaveBeenCalledTimes(3);
+    expect(fetcher).toHaveBeenCalledTimes(1);
     const initialListUrl = new URL(String(fetcher.mock.calls[0]![0]));
+    expect(initialListUrl.hostname).toBe('api-drive.mypikpak.net');
+    expect(initialListUrl.searchParams.get('parent_id')).toBe('');
     expect(initialListUrl.searchParams.has('page_token')).toBe(true);
     expect(initialListUrl.searchParams.get('page_token')).toBe('');
-    const captchaInit = JSON.parse(String(fetcher.mock.calls[1]![1]?.body));
-    expect(captchaInit).toMatchObject({
-      action: 'GET:/drive/v1/files', captcha_token: '', device_id: 'device-id', meta: { user_id: 'user-id' },
+    expect(initialListUrl.searchParams.get('with_audit')).toBe('false');
+    expect(initialListUrl.searchParams.has('limit')).toBe(false);
+    const headers = new Headers(fetcher.mock.calls[0]![1]?.headers);
+    expect(headers.get('authorization')).toBe('Bearer access-token');
+    expect(headers.get('x-captcha-token')).toBeNull();
+    expect(headers.get('x-device-id')).toBeNull();
+    expect(headers.get('x-client-id')).toBeNull();
+  });
+
+  it('requests fetch-ready metadata before an original download', async () => {
+    const mountId = await createPikPakMount();
+    await putCredentials(workerEnv(), mountId, {
+      auth: {
+        accessToken: 'access-token', refreshToken: 'refresh-token', tokenType: 'Bearer',
+        expiresAt: Date.now() + 3_600_000,
+      },
     });
-    expect(new Headers(fetcher.mock.calls[2]![1]?.headers).get('x-captcha-token')).toBe('drive-captcha');
+    const fetcher = vi.fn(async (_input: RequestInfo | URL, _init?: RequestInit) => Response.json({
+      id: 'file-id', parent_id: '', name: 'file.bin', kind: 'drive#file', web_content_link: 'https://download.example/file.bin',
+    }));
+    const client = new PikPakClient(workerEnv(), mountId, fetcher);
+
+    await expect(client.downloadInfo('file-id')).resolves.toMatchObject({ id: 'file-id' });
+
+    const url = new URL(String(fetcher.mock.calls[0]![0]));
+    expect(url.origin).toBe('https://api-drive.mypikpak.net');
+    expect(url.pathname).toBe('/drive/v1/files/file-id');
+    expect(url.searchParams.get('_magic')).toBe('2021');
+    expect(url.searchParams.get('usage')).toBe('FETCH');
+    expect(url.searchParams.get('thumbnail_size')).toBe('SIZE_LARGE');
+  });
+
+  it('returns only stable upstream diagnostics and omits provider descriptions', async () => {
+    const mountId = await createPikPakMount();
+    await putCredentials(workerEnv(), mountId, {
+      auth: {
+        accessToken: 'access-token', refreshToken: 'refresh-token', tokenType: 'Bearer',
+        expiresAt: Date.now() + 3_600_000,
+      },
+    });
+    const fetcher = vi.fn(async () => Response.json({
+      error: 'invalid_request', error_code: 4003, error_description: 'private provider detail',
+    }, { status: 400 }));
+    const client = new PikPakClient(workerEnv(), mountId, fetcher);
+
+    const error = await client.list('root').catch((cause: unknown) => cause);
+
+    expect(error).toMatchObject({
+      code: 'PIKPAK_UPSTREAM_FAILED',
+      details: { upstreamStatus: 400, upstreamReason: 'invalid_request', upstreamCode: 4003 },
+    });
+    expect(JSON.stringify(error)).not.toContain('private provider detail');
   });
 });

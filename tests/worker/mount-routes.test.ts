@@ -215,11 +215,9 @@ describe('mount administration API', () => {
 
   it('creates a PikPak mount without retaining the plaintext password', async () => {
     const cookie = await login();
-    const providerFetch = vi.fn(async (input: RequestInfo | URL) => String(input).includes('/shield/captcha/init')
-      ? Response.json({ captcha_token: 'captcha-token', expires_in: 300 })
-      : Response.json({
-          token_type: 'Bearer', access_token: 'pikpak-access', refresh_token: 'pikpak-refresh', expires_in: 3600, sub: 'pikpak-user',
-        }));
+    const providerFetch = vi.fn(async (_input: RequestInfo | URL, _init?: RequestInit) => Response.json({
+      token_type: 'Bearer', access_token: 'pikpak-access', refresh_token: 'pikpak-refresh', expires_in: 3600, sub: 'pikpak-user',
+    }));
     vi.stubGlobal('fetch', providerFetch);
     try {
       const response = await SELF.fetch(`${origin}/api/admin/mounts`, {
@@ -239,6 +237,8 @@ describe('mount administration API', () => {
       });
       expect(JSON.stringify(credentials)).not.toContain('temporary-password');
       expect(JSON.stringify(responseBody)).not.toContain('pikpak-refresh');
+      expect(providerFetch).toHaveBeenCalledTimes(1);
+      expect(String(providerFetch.mock.calls[0]![0])).toBe('https://user.mypikpak.net/v1/auth/signin');
       const mount = await getMount(workerEnv().DB, data.id);
       expect(JSON.stringify(mount?.config)).not.toContain('temporary-password');
     } finally {
