@@ -1,7 +1,7 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { SELF, env } from 'cloudflare:test';
 import { createMount } from '../../src/worker/mounts';
-import { getCredentials } from '../../src/worker/credentials';
+import { getCredentials, putCredentials } from '../../src/worker/credentials';
 import type { Env } from '../../src/worker/types';
 
 const origin = 'https://ilist.example';
@@ -39,6 +39,7 @@ describe('OneDrive OAuth routes', () => {
 
   it('builds a consumers PKCE authorization URL with exact scopes and a fixed callback origin', async () => {
     const mountId = await createOneDriveMount();
+    await putCredentials(workerEnv(), mountId, { app: { clientId: 'per-mount-microsoft-id', clientSecret: 'per-mount-microsoft-secret' } });
     const response = await start(mountId);
 
     expect(response.status).toBe(302);
@@ -48,6 +49,7 @@ describe('OneDrive OAuth routes', () => {
     expect(authorization.searchParams.get('redirect_uri')).toBe(`${origin}/api/admin/oauth/onedrive/callback`);
     expect(authorization.searchParams.get('code_challenge_method')).toBe('S256');
     expect(authorization.searchParams.get('code_challenge')).toMatch(/^[A-Za-z0-9_-]{43}$/);
+    expect(authorization.searchParams.get('client_id')).toBe('per-mount-microsoft-id');
 
     const state = authorization.searchParams.get('state')!;
     const row = await workerEnv().DB.prepare('SELECT state_hash, verifier_ciphertext FROM oauth_states WHERE mount_id = ?')
@@ -59,9 +61,10 @@ describe('OneDrive OAuth routes', () => {
 
   it('consumes state once, encrypts tokens, and redirects to the configured public origin', async () => {
     const mountId = await createOneDriveMount();
+    await putCredentials(workerEnv(), mountId, { app: { clientId: 'callback-microsoft-id', clientSecret: 'callback-microsoft-secret' } });
     const authorization = new URL((await start(mountId)).headers.get('location')!);
     const state = authorization.searchParams.get('state')!;
-    const tokenFetch = vi.fn(async () => Response.json({
+    const tokenFetch = vi.fn(async (_input: RequestInfo | URL, _init?: RequestInit) => Response.json({
         token_type: 'Bearer', access_token: 'access-token', refresh_token: 'refresh-token', expires_in: 3600,
         scope: 'offline_access User.Read Files.ReadWrite',
       }));
@@ -73,9 +76,9 @@ describe('OneDrive OAuth routes', () => {
     });
     expect(callback.status).toBe(302);
     expect(callback.headers.get('location')).toBe(`${origin}/admin/storages?onedrive=connected`);
-    await expect(getCredentials(workerEnv(), mountId)).resolves.toMatchObject({
+    await expect(getCredentials(workerEnv(), mountId)).resolves.toMatchObject({ auth: {
       accessToken: 'access-token', refreshToken: 'refresh-token', tokenType: 'Bearer',
-    });
+    } });
     const stored = await workerEnv().DB.prepare('SELECT ciphertext FROM storage_credentials WHERE mount_id = ?')
       .bind(mountId).first<{ ciphertext: string }>();
     expect(stored!.ciphertext).not.toContain('refresh-token');
@@ -86,6 +89,8 @@ describe('OneDrive OAuth routes', () => {
     expect(replay.status).toBe(400);
     expect((await replay.json() as { error: { code: string } }).error.code).toBe('OAUTH_STATE_INVALID');
     expect(tokenFetch).toHaveBeenCalledOnce();
+    expect(String((tokenFetch.mock.calls[0]![1] as RequestInit).body)).toContain('client_id=callback-microsoft-id');
+    expect(String((tokenFetch.mock.calls[0]![1] as RequestInit).body)).toContain('client_secret=callback-microsoft-secret');
   });
 
   it('rejects expired state before contacting Microsoft', async () => {

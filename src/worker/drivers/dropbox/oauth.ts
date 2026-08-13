@@ -1,6 +1,7 @@
 import { HttpError } from '../../http';
 import { consumeOAuthState, createOAuthState, publicOrigin } from '../../oauth-core';
 import type { Env } from '../../types';
+import { resolveOAuthApplication } from '../../oauth-credentials';
 
 export const DROPBOX_SCOPES = 'files.metadata.read files.metadata.write files.content.read files.content.write';
 export const DROPBOX_AUTHORIZE_URL = 'https://www.dropbox.com/oauth2/authorize';
@@ -19,9 +20,10 @@ export function dropboxCallbackUrl(env: Env): string {
 }
 
 export async function createDropboxAuthorization(env: Env, mountId: string, now = Date.now()): Promise<string> {
+  const application = await resolveOAuthApplication(env, mountId, 'dropbox');
   const { state, challenge } = await createOAuthState(env, mountId, now);
   const authorization = new URL(DROPBOX_AUTHORIZE_URL);
-  authorization.searchParams.set('client_id', env.DROPBOX_CLIENT_ID);
+  authorization.searchParams.set('client_id', application.clientId);
   authorization.searchParams.set('response_type', 'code');
   authorization.searchParams.set('redirect_uri', dropboxCallbackUrl(env));
   authorization.searchParams.set('scope', DROPBOX_SCOPES);
@@ -42,12 +44,14 @@ export function consumeDropboxOAuthState(
 
 export async function requestDropboxTokens(
   env: Env,
+  mountId: string,
   parameters: Record<string, string>,
   fetcher: typeof fetch = fetch,
 ): Promise<DropboxTokenResponse> {
+  const application = await resolveOAuthApplication(env, mountId, 'dropbox');
   const body = new URLSearchParams({
-    client_id: env.DROPBOX_CLIENT_ID,
-    client_secret: env.DROPBOX_CLIENT_SECRET,
+    client_id: application.clientId,
+    client_secret: application.clientSecret,
     ...parameters,
   });
   let response: Response;

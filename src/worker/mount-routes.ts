@@ -1,8 +1,12 @@
 import {
+  authorizationSecrets,
   deleteCredentials,
   getCredentials,
+  oauthApplicationCredentials,
+  patchCredentials,
   prepareDeleteCredentials,
   preparePutCredentials,
+  providerSecrets,
   putCredentials,
   type StorageCredentials,
 } from './credentials';
@@ -20,6 +24,8 @@ import {
   type UpdateMountInput,
 } from './mounts';
 import type { Env, Mount, MountDriverType } from './types';
+import { oauthApplicationSource, type OAuthDriverType } from './oauth-credentials';
+import { authenticatePikPak, generatePikPakDeviceId } from './drivers/pikpak/auth';
 
 interface MountRequestBody {
   name?: unknown;
@@ -47,7 +53,8 @@ interface S3Credentials extends StorageCredentials {
   secretAccessKey: string;
 }
 
-const MOUNT_DRIVER_TYPES = new Set<MountDriverType>(['s3', 'onedrive', 'google', 'dropbox', 'native-r2']);
+const MOUNT_DRIVER_TYPES = new Set<MountDriverType>(['s3', 'onedrive', 'google', 'dropbox', 'pikpak', 'native-r2']);
+const OAUTH_DRIVERS = new Set<MountDriverType>(['onedrive', 'google', 'dropbox']);
 
 function methodNotAllowed(): Response {
   return fail(405, 'Method not allowed');
@@ -62,7 +69,7 @@ function isRecord(value: unknown): value is Record<string, unknown> {
 }
 
 function requiredString(value: unknown, code: string): string {
-  if (typeof value !== 'string' || !value.trim()) invalidRequest(code);
+  if (typeof value !== 'string' || !value.trim() || value.length > 8192) invalidRequest(code);
   return value;
 }
 
@@ -132,6 +139,14 @@ function validateS3Config(value: unknown): S3Config {
 
 function validateConfig(driver: MountDriverType, value: unknown): Record<string, unknown> {
   if (driver === 's3') return validateS3Config(value);
+  if (driver === 'pikpak') {
+    if (!isRecord(value)) invalidRequest('INVALID_MOUNT_CONFIG', 'PikPak configuration is invalid');
+    assertOnlyKeys(value, ['useTrash'], 'INVALID_MOUNT_CONFIG');
+    if (value.useTrash !== undefined && typeof value.useTrash !== 'boolean') {
+      invalidRequest('INVALID_MOUNT_CONFIG', 'PikPak configuration is invalid');
+    }
+    return { useTrash: value.useTrash !== false };
+  }
   if (!isRecord(value) || Object.keys(value).length !== 0) {
     invalidRequest('INVALID_MOUNT_CONFIG', 'Mount configuration is invalid');
   }
@@ -139,6 +154,9 @@ function validateConfig(driver: MountDriverType, value: unknown): Record<string,
 }
 
 function sanitizedConfig(mount: Mount): Record<string, unknown> {
+  if (mount.driverType === 'pikpak' && isRecord(mount.config)) {
+    return { useTrash: mount.config.useTrash !== false };
+  }
   if (mount.driverType !== 's3' || !isRecord(mount.config)) return {};
   const config = mount.config;
   const result: Record<string, unknown> = {};
@@ -148,18 +166,50 @@ function sanitizedConfig(mount: Mount): Record<string, unknown> {
   return result;
 }
 
-function mountToApi(mount: Mount, connected = mount.driverType === 'native-r2'): Omit<Mount, 'config'> & { config: Record<string, unknown>; connected: boolean } {
-  return { ...mount, config: sanitizedConfig(mount), connected };
+interface CredentialStatus {
+  appConfigured: boolean;
+  connected: boolean;
+  source: 'mount' | 'legacy' | 'none';
+  fields: Record<string, boolean>;
 }
 
-async function connectedMountIds(env: Env): Promise<Set<string>> {
-  const result = await env.DB.prepare('SELECT mount_id FROM storage_credentials').all<{ mount_id: string }>();
-  return new Set(result.results.map((row) => row.mount_id));
+async function credentialStatus(env: Env, mount: Mount): Promise<CredentialStatus> {
+  if (mount.driverType === 'native-r2') return { appConfigured: true, connected: true, source: 'mount', fields: {} };
+  const credentials = await getCredentials(env, mount.id);
+  if (OAUTH_DRIVERS.has(mount.driverType)) {
+    const app = oauthApplicationCredentials(credentials);
+    const auth = authorizationSecrets(credentials);
+    const source = await oauthApplicationSource(env, mount.id, mount.driverType as OAuthDriverType);
+    return {
+      appConfigured: source !== 'missing',
+      connected: typeof auth.refreshToken === 'string' && Boolean(auth.refreshToken),
+      source: source === 'missing' ? 'none' : source,
+      fields: { clientIdConfigured: Boolean(app?.clientId), clientSecretConfigured: Boolean(app?.clientSecret) },
+    };
+  }
+  const provider = providerSecrets(credentials);
+  if (mount.driverType === 's3') {
+    const configured = typeof provider.accessKeyId === 'string' && typeof provider.secretAccessKey === 'string';
+    return { appConfigured: configured, connected: configured, source: configured ? 'mount' : 'none', fields: {
+      accessKeyConfigured: typeof provider.accessKeyId === 'string', secretKeyConfigured: typeof provider.secretAccessKey === 'string',
+    } };
+  }
+  const auth = authorizationSecrets(credentials);
+  const configured = typeof auth.refreshToken === 'string' && Boolean(auth.refreshToken);
+  return { appConfigured: configured, connected: configured, source: configured ? 'mount' : 'none', fields: {
+    refreshTokenConfigured: configured, usernameConfigured: typeof provider.username === 'string', deviceConfigured: typeof provider.deviceId === 'string',
+  } };
+}
+
+async function mountToApi(env: Env, mount: Mount): Promise<Omit<Mount, 'config'> & { config: Record<string, unknown>; connected: boolean; credentialStatus: CredentialStatus }> {
+  const status = await credentialStatus(env, mount);
+  return { ...mount, config: sanitizedConfig(mount), connected: status.connected, credentialStatus: status };
 }
 
 function existingS3Credentials(value: StorageCredentials | null): S3Credentials | null {
-  if (!value || typeof value.accessKeyId !== 'string' || typeof value.secretAccessKey !== 'string') return null;
-  return { accessKeyId: value.accessKeyId, secretAccessKey: value.secretAccessKey };
+  const provider = providerSecrets(value);
+  if (typeof provider.accessKeyId !== 'string' || typeof provider.secretAccessKey !== 'string') return null;
+  return { accessKeyId: provider.accessKeyId, secretAccessKey: provider.secretAccessKey };
 }
 
 function mergeS3Credentials(value: unknown, existing: StorageCredentials | null): S3Credentials {
@@ -171,6 +221,10 @@ function mergeS3Credentials(value: unknown, existing: StorageCredentials | null)
   if (value.secretAccessKey !== undefined && typeof value.secretAccessKey !== 'string') {
     invalidRequest('INVALID_MOUNT_CREDENTIALS', 'S3 secret key is invalid');
   }
+  if ((typeof value.accessKeyId === 'string' && value.accessKeyId.length > 8192)
+    || (typeof value.secretAccessKey === 'string' && value.secretAccessKey.length > 8192)) {
+    invalidRequest('INVALID_MOUNT_CREDENTIALS', 'S3 credentials are too large');
+  }
 
   const prior = existingS3Credentials(existing);
   const accessKeyId = value.accessKeyId ?? prior?.accessKeyId;
@@ -181,17 +235,74 @@ function mergeS3Credentials(value: unknown, existing: StorageCredentials | null)
   return { accessKeyId, secretAccessKey };
 }
 
+function mergeOAuthCredentials(value: unknown, existing: StorageCredentials | null): StorageCredentials {
+  if (!isRecord(value)) invalidRequest('INVALID_MOUNT_CREDENTIALS', 'OAuth application credentials are invalid');
+  assertOnlyKeys(value, ['clientId', 'clientSecret'], 'INVALID_MOUNT_CREDENTIALS');
+  const prior = oauthApplicationCredentials(existing);
+  const clientId = value.clientId === '' ? prior?.clientId : value.clientId ?? prior?.clientId;
+  const clientSecret = value.clientSecret === '' ? prior?.clientSecret : value.clientSecret ?? prior?.clientSecret;
+  if ((typeof clientId === 'string' && clientId.length > 8192) || (typeof clientSecret === 'string' && clientSecret.length > 8192)) {
+    invalidRequest('INVALID_MOUNT_CREDENTIALS', 'OAuth application credentials are too large');
+  }
+  if (typeof clientId !== 'string' || !clientId.trim() || typeof clientSecret !== 'string' || !clientSecret) {
+    invalidRequest('INVALID_MOUNT_CREDENTIALS', 'OAuth application credentials are incomplete');
+  }
+  const next: StorageCredentials = { ...(existing ?? {}), app: { clientId: clientId.trim(), clientSecret } };
+  const auth = authorizationSecrets(existing);
+  if (Object.keys(auth).length > 0) next.auth = auth;
+  delete next.accessToken;
+  delete next.refreshToken;
+  delete next.tokenType;
+  delete next.expiresAt;
+  return next;
+}
+
 async function credentialsForUpdate(
+  env: Env,
   driver: MountDriverType,
   rawCredentials: unknown,
   existing: StorageCredentials | null,
   driverChanged: boolean,
 ): Promise<StorageCredentials | null | undefined> {
-  if (rawCredentials === undefined) return driverChanged ? null : undefined;
-  if (driver !== 's3') {
-    invalidRequest('INVALID_MOUNT_CREDENTIALS', 'Credentials are managed by the provider connection flow');
+  if (rawCredentials === undefined) {
+    if (driver === 'pikpak' && !existing) invalidRequest('INVALID_MOUNT_CREDENTIALS', 'PikPak credentials are incomplete');
+    return driverChanged ? null : undefined;
   }
-  return mergeS3Credentials(rawCredentials, driverChanged ? null : existing);
+  const prior = driverChanged ? null : existing;
+  if (driver === 's3') {
+    const next: StorageCredentials = { ...(prior ?? {}), provider: mergeS3Credentials(rawCredentials, prior) };
+    delete next.accessKeyId;
+    delete next.secretAccessKey;
+    return next;
+  }
+  if (OAUTH_DRIVERS.has(driver)) return mergeOAuthCredentials(rawCredentials, prior);
+  if (driver === 'pikpak') {
+    if (!isRecord(rawCredentials)) invalidRequest('INVALID_MOUNT_CREDENTIALS', 'PikPak credentials are invalid');
+    assertOnlyKeys(rawCredentials, ['username', 'password', 'refreshToken', 'deviceId'], 'INVALID_MOUNT_CREDENTIALS');
+    for (const value of Object.values(rawCredentials)) {
+      if (value !== undefined && typeof value !== 'string') invalidRequest('INVALID_MOUNT_CREDENTIALS', 'PikPak credentials are invalid');
+      if (typeof value === 'string' && value.length > 8192) invalidRequest('INVALID_MOUNT_CREDENTIALS', 'PikPak credentials are too large');
+    }
+    const existingProvider = providerSecrets(prior);
+    const deviceId = typeof rawCredentials.deviceId === 'string' && rawCredentials.deviceId
+      ? rawCredentials.deviceId
+      : typeof existingProvider.deviceId === 'string' ? existingProvider.deviceId : generatePikPakDeviceId();
+    const username = typeof rawCredentials.username === 'string' ? rawCredentials.username.trim() : '';
+    const password = typeof rawCredentials.password === 'string' ? rawCredentials.password : '';
+    const refreshToken = typeof rawCredentials.refreshToken === 'string' ? rawCredentials.refreshToken.trim() : '';
+    if (username || password) {
+      if (!username || !password) invalidRequest('INVALID_MOUNT_CREDENTIALS', 'PikPak username and password must be provided together');
+      const authenticated = await authenticatePikPak(username, password, deviceId);
+      return { ...(prior ?? {}), auth: authenticated.auth, provider: {
+        ...existingProvider, deviceId: authenticated.deviceId, username: authenticated.username,
+        captchaToken: authenticated.captchaToken, captchaExpiresAt: authenticated.captchaExpiresAt,
+      } };
+    }
+    if (refreshToken) return { ...(prior ?? {}), auth: { refreshToken, expiresAt: 0 }, provider: { ...existingProvider, deviceId } };
+    if (prior) return prior;
+    invalidRequest('INVALID_MOUNT_CREDENTIALS', 'PikPak credentials are incomplete');
+  }
+  invalidRequest('INVALID_MOUNT_CREDENTIALS', 'Credentials are not supported by this provider');
 }
 
 function createInput(body: MountRequestBody): CreateMountInput {
@@ -227,6 +338,10 @@ function updateInput(body: MountRequestBody, current: Mount): UpdateMountInput {
 
 function requestBody(body: unknown): MountRequestBody {
   if (!isRecord(body)) invalidRequest();
+  assertOnlyKeys(body, [
+    'name', 'mountPath', 'driverType', 'provider', 'enabled', 'isPublic', 'sortOrder',
+    'rootItemId', 'config', 'credentials',
+  ], 'INVALID_REQUEST');
   return body;
 }
 
@@ -249,14 +364,13 @@ async function requireMount(env: Env, id: string): Promise<Mount> {
 export async function handleMountRoutes(request: Request, env: Env, url: URL): Promise<Response | null> {
   if (url.pathname === '/api/admin/mounts') {
     if (request.method === 'GET') {
-      const connected = await connectedMountIds(env);
-      return ok((await listMounts(env.DB)).map((mount) => mountToApi(mount, mount.driverType === 'native-r2' || connected.has(mount.id))));
+      return ok(await Promise.all((await listMounts(env.DB)).map((mount) => mountToApi(env, mount))));
     }
     if (request.method !== 'POST') return methodNotAllowed();
 
     const body = requestBody(await readJson<unknown>(request));
     const input = createInput(body);
-    const credentials = await credentialsForUpdate(input.driverType, body.credentials, null, false);
+    const credentials = await credentialsForUpdate(env, input.driverType, body.credentials, null, false);
     const mount = await createMount(env.DB, input);
     try {
       if (credentials) await putCredentials(env, mount.id, credentials);
@@ -264,15 +378,20 @@ export async function handleMountRoutes(request: Request, env: Env, url: URL): P
       await deleteMount(env.DB, mount.id);
       throw error;
     }
-    return ok(mountToApi(mount, Boolean(credentials)));
+    return ok(await mountToApi(env, mount));
   }
 
   const disconnectId = mountIdFromPath(url.pathname, '/disconnect');
   if (disconnectId !== null) {
     if (request.method !== 'POST') return methodNotAllowed();
     const mount = await requireMount(env, disconnectId);
-    await deleteCredentials(env, mount.id);
-    return ok(mountToApi(mount, false));
+    if (OAUTH_DRIVERS.has(mount.driverType) || mount.driverType === 'pikpak') {
+      await patchCredentials(env, mount.id, {
+        auth: null,
+        accessToken: null, refreshToken: null, tokenType: null, expiresAt: null, scope: null,
+      });
+    } else await deleteCredentials(env, mount.id);
+    return ok(await mountToApi(env, mount));
   }
 
   const testId = mountIdFromPath(url.pathname, '/test');
@@ -301,6 +420,7 @@ export async function handleMountRoutes(request: Request, env: Env, url: URL): P
   const input = updateInput(body, current);
   const selectedDriver = input.driverType ?? current.driverType;
   const credentials = await credentialsForUpdate(
+    env,
     selectedDriver,
     body.credentials,
     await getCredentials(env, current.id),
@@ -320,5 +440,5 @@ export async function handleMountRoutes(request: Request, env: Env, url: URL): P
   }
   const mount = await getMount(env.DB, update.id);
   if (!mount) throw new HttpError(404, 'MOUNT_NOT_FOUND', 'Mount not found');
-  return ok(mountToApi(mount, mount.driverType === 'native-r2' || Boolean(await getCredentials(env, mount.id))));
+  return ok(await mountToApi(env, mount));
 }

@@ -1,4 +1,4 @@
-import { getCredentials, putCredentials } from '../../credentials';
+import { authorizationSecrets, getCredentials, patchCredentials } from '../../credentials';
 import { HttpError } from '../../http';
 import type { Env } from '../../types';
 import { DROPBOX_SCOPES, requestDropboxTokens } from './oauth';
@@ -15,6 +15,7 @@ const REFRESH_SKEW_MS = 60_000;
 const REFRESH_LEASE_MS = 30_000;
 
 function validCredentials(value: Record<string, unknown> | null): DropboxCredentials {
+  value = authorizationSecrets(value);
   if (
     !value
     || typeof value.accessToken !== 'string'
@@ -28,6 +29,12 @@ function validCredentials(value: Record<string, unknown> | null): DropboxCredent
     expiresAt: value.expiresAt,
     scope: typeof value.scope === 'string' ? value.scope : DROPBOX_SCOPES,
   };
+}
+
+async function saveAuthorization(env: Env, mountId: string, next: DropboxCredentials): Promise<void> {
+  await patchCredentials(env, mountId, {
+    auth: next, accessToken: null, refreshToken: null, tokenType: null, expiresAt: null, scope: null,
+  });
 }
 
 async function acquireLease(env: Env, mountId: string, owner: string, now: number): Promise<boolean> {
@@ -66,7 +73,7 @@ async function refreshAccessToken(
     if (rejectedAccessToken ? credentials.accessToken !== rejectedAccessToken : credentials.expiresAt > Date.now() + REFRESH_SKEW_MS) {
       return credentials.accessToken;
     }
-    const token = await requestDropboxTokens(env, {
+    const token = await requestDropboxTokens(env, mountId, {
       grant_type: 'refresh_token',
       refresh_token: credentials.refreshToken,
     }, fetcher);
@@ -77,7 +84,7 @@ async function refreshAccessToken(
       expiresAt: Date.now() + token.expiresIn * 1000,
       scope: token.scope ?? credentials.scope,
     };
-    await putCredentials(env, mountId, next);
+    await saveAuthorization(env, mountId, next);
     return next.accessToken;
   } finally {
     await env.DB.prepare('DELETE FROM oauth_refresh_leases WHERE mount_id = ? AND owner = ?').bind(mountId, owner).run();

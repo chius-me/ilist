@@ -1,6 +1,7 @@
 import { HttpError } from '../../http';
 import { consumeOAuthState, createOAuthState, publicOrigin } from '../../oauth-core';
 import type { Env } from '../../types';
+import { resolveOAuthApplication } from '../../oauth-credentials';
 
 export const GOOGLE_DRIVE_SCOPES = 'https://www.googleapis.com/auth/drive';
 export const GOOGLE_AUTHORIZE_URL = 'https://accounts.google.com/o/oauth2/v2/auth';
@@ -19,9 +20,10 @@ export function googleDriveCallbackUrl(env: Env): string {
 }
 
 export async function createGoogleAuthorization(env: Env, mountId: string, now = Date.now()): Promise<string> {
+  const application = await resolveOAuthApplication(env, mountId, 'google');
   const { state, challenge } = await createOAuthState(env, mountId, now);
   const authorization = new URL(GOOGLE_AUTHORIZE_URL);
-  authorization.searchParams.set('client_id', env.GOOGLE_CLIENT_ID);
+  authorization.searchParams.set('client_id', application.clientId);
   authorization.searchParams.set('response_type', 'code');
   authorization.searchParams.set('redirect_uri', googleDriveCallbackUrl(env));
   authorization.searchParams.set('scope', GOOGLE_DRIVE_SCOPES);
@@ -44,12 +46,14 @@ export function consumeGoogleOAuthState(
 
 export async function requestGoogleTokens(
   env: Env,
+  mountId: string,
   parameters: Record<string, string>,
   fetcher: typeof fetch = fetch,
 ): Promise<GoogleTokenResponse> {
+  const application = await resolveOAuthApplication(env, mountId, 'google');
   const body = new URLSearchParams({
-    client_id: env.GOOGLE_CLIENT_ID,
-    client_secret: env.GOOGLE_CLIENT_SECRET,
+    client_id: application.clientId,
+    client_secret: application.clientSecret,
     ...parameters,
   });
   let response: Response;

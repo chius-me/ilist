@@ -1,4 +1,4 @@
-import { putCredentials } from './credentials';
+import { patchCredentials } from './credentials';
 import {
   consumeGoogleOAuthState,
   createGoogleAuthorization,
@@ -52,20 +52,17 @@ export async function handleOAuthRoutes(request: Request, env: Env, url: URL): P
     if (!code) throw new HttpError(400, 'OAUTH_CODE_MISSING', 'OAuth authorization code is missing');
     const mount = await getMount(env.DB, pending.mountId);
     if (!mount || mount.driverType !== 'dropbox') throw new HttpError(404, 'MOUNT_NOT_FOUND', 'Dropbox mount not found');
-    const token = await requestDropboxTokens(env, {
+    const token = await requestDropboxTokens(env, mount.id, {
       grant_type: 'authorization_code',
       code,
       redirect_uri: dropboxCallbackUrl(env),
       code_verifier: pending.verifier,
     });
     if (!token.refreshToken) throw new HttpError(502, 'DROPBOX_TOKEN_EXCHANGE_FAILED', 'Dropbox did not return a refresh token');
-    await putCredentials(env, mount.id, {
-      accessToken: token.accessToken,
-      refreshToken: token.refreshToken,
-      tokenType: token.tokenType,
-      expiresAt: Date.now() + token.expiresIn * 1000,
-      scope: token.scope ?? DROPBOX_SCOPES,
-    });
+    await patchCredentials(env, mount.id, { auth: {
+      accessToken: token.accessToken, refreshToken: token.refreshToken, tokenType: token.tokenType,
+      expiresAt: Date.now() + token.expiresIn * 1000, scope: token.scope ?? DROPBOX_SCOPES,
+    }, accessToken: null, refreshToken: null, tokenType: null, expiresAt: null, scope: null });
     return Response.redirect(`${publicOrigin(env)}/admin/storages?dropbox=connected`, 302);
   }
 
@@ -89,20 +86,17 @@ export async function handleOAuthRoutes(request: Request, env: Env, url: URL): P
     if (!code) throw new HttpError(400, 'OAUTH_CODE_MISSING', 'OAuth authorization code is missing');
     const mount = await getMount(env.DB, pending.mountId);
     if (!mount || mount.driverType !== 'google') throw new HttpError(404, 'MOUNT_NOT_FOUND', 'Google Drive mount not found');
-    const token = await requestGoogleTokens(env, {
+    const token = await requestGoogleTokens(env, mount.id, {
       grant_type: 'authorization_code',
       code,
       redirect_uri: googleDriveCallbackUrl(env),
       code_verifier: pending.verifier,
     });
     if (!token.refreshToken) throw new HttpError(502, 'GOOGLE_TOKEN_EXCHANGE_FAILED', 'Google did not return a refresh token');
-    await putCredentials(env, mount.id, {
-      accessToken: token.accessToken,
-      refreshToken: token.refreshToken,
-      tokenType: token.tokenType,
-      expiresAt: Date.now() + token.expiresIn * 1000,
-      scope: token.scope ?? GOOGLE_DRIVE_SCOPES,
-    });
+    await patchCredentials(env, mount.id, { auth: {
+      accessToken: token.accessToken, refreshToken: token.refreshToken, tokenType: token.tokenType,
+      expiresAt: Date.now() + token.expiresIn * 1000, scope: token.scope ?? GOOGLE_DRIVE_SCOPES,
+    }, accessToken: null, refreshToken: null, tokenType: null, expiresAt: null, scope: null });
     return Response.redirect(`${publicOrigin(env)}/admin/storages?google=connected`, 302);
   }
 
@@ -127,7 +121,7 @@ export async function handleOAuthRoutes(request: Request, env: Env, url: URL): P
     if (!code) throw new HttpError(400, 'OAUTH_CODE_MISSING', 'OAuth authorization code is missing');
     const mount = await getMount(env.DB, pending.mountId);
     if (!mount || mount.driverType !== 'onedrive') throw new HttpError(404, 'MOUNT_NOT_FOUND', 'OneDrive mount not found');
-    const token = await requestOneDriveTokens(env, {
+    const token = await requestOneDriveTokens(env, mount.id, {
       grant_type: 'authorization_code',
       code,
       redirect_uri: oneDriveCallbackUrl(env),
@@ -135,13 +129,10 @@ export async function handleOAuthRoutes(request: Request, env: Env, url: URL): P
       scope: ONEDRIVE_SCOPES,
     });
     if (!token.refreshToken) throw new HttpError(502, 'ONEDRIVE_TOKEN_EXCHANGE_FAILED', 'Microsoft did not return a refresh token');
-    await putCredentials(env, mount.id, {
-      accessToken: token.accessToken,
-      refreshToken: token.refreshToken,
-      tokenType: token.tokenType,
-      expiresAt: Date.now() + token.expiresIn * 1000,
-      scope: token.scope ?? ONEDRIVE_SCOPES,
-    });
+    await patchCredentials(env, mount.id, { auth: {
+      accessToken: token.accessToken, refreshToken: token.refreshToken, tokenType: token.tokenType,
+      expiresAt: Date.now() + token.expiresIn * 1000, scope: token.scope ?? ONEDRIVE_SCOPES,
+    }, accessToken: null, refreshToken: null, tokenType: null, expiresAt: null, scope: null });
     return Response.redirect(`${publicOrigin(env)}/admin/storages?onedrive=connected`, 302);
   }
   return null;

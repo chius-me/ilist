@@ -66,6 +66,7 @@ describe('mount administration API', () => {
     delete driverRegistry.onedrive;
     delete driverRegistry.google;
     delete driverRegistry.dropbox;
+    delete driverRegistry.pikpak;
     delete driverRegistry['native-r2'];
     await workerEnv().DB.prepare('DELETE FROM storage_credentials').run();
     await workerEnv().DB.prepare('DELETE FROM mounts').run();
@@ -155,24 +156,42 @@ describe('mount administration API', () => {
     await expect(getMount(workerEnv().DB, mount.id)).resolves.toMatchObject({ driverType: 'google' });
   });
 
-  it('rejects browser-supplied credentials and non-empty config for Google mounts', async () => {
-    for (const body of [
-      { config: {}, credentials: { refreshToken: 'browser-secret' } },
-      { config: { clientSecret: 'browser-secret' } },
-    ]) {
-      const response = await adminFetch('/api/admin/mounts', {
-        method: 'POST',
-        headers: { 'content-type': 'application/json' },
-        body: JSON.stringify({
-          name: `Invalid Google ${crypto.randomUUID()}`,
-          mountPath: `/invalid-google-${crypto.randomUUID()}`,
-          driverType: 'google',
-          provider: 'google',
-          ...body,
-        }),
-      });
-      expect(response.status).toBe(400);
-    }
+  it('encrypts mount-specific OAuth app credentials and never returns them', async () => {
+    const response = await adminFetch('/api/admin/mounts', {
+      method: 'POST', headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({
+        name: 'Independent Google', mountPath: '/independent-google', driverType: 'google', provider: 'google',
+        config: {}, credentials: { clientId: 'mount-google-id', clientSecret: 'mount-google-secret' },
+      }),
+    });
+    expect(response.status).toBe(200);
+    const data = (await response.json() as { data: { id: string; credentialStatus: unknown } }).data;
+    await expect(getCredentials(workerEnv(), data.id)).resolves.toMatchObject({
+      app: { clientId: 'mount-google-id', clientSecret: 'mount-google-secret' },
+    });
+    expect(JSON.stringify(data)).not.toContain('mount-google');
+    const row = await workerEnv().DB.prepare('SELECT ciphertext FROM storage_credentials WHERE mount_id = ?').bind(data.id).first<{ ciphertext: string }>();
+    expect(row?.ciphertext).not.toContain('mount-google-secret');
+  });
+
+  it('disconnects OAuth account tokens while preserving application credentials', async () => {
+    const created = await adminFetch('/api/admin/mounts', {
+      method: 'POST', headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({
+        name: 'Dropbox app', mountPath: '/dropbox-app', driverType: 'dropbox', provider: 'dropbox', config: {},
+        credentials: { clientId: 'dropbox-id', clientSecret: 'dropbox-secret' },
+      }),
+    });
+    const mountId = (await created.json() as { data: { id: string } }).data.id;
+    await putCredentials(workerEnv(), mountId, {
+      app: { clientId: 'dropbox-id', clientSecret: 'dropbox-secret' },
+      auth: { accessToken: 'access', refreshToken: 'refresh', expiresAt: Date.now() + 60_000 },
+    });
+    const response = await adminFetch(`/api/admin/mounts/${mountId}/disconnect`, { method: 'POST' });
+    expect(response.status).toBe(200);
+    await expect(getCredentials(workerEnv(), mountId)).resolves.toEqual({
+      app: { clientId: 'dropbox-id', clientSecret: 'dropbox-secret' },
+    });
   });
 
   it('creates an S3 mount and preserves a blank secret on update', async () => {
@@ -188,11 +207,43 @@ describe('mount administration API', () => {
     });
 
     expect(response.status).toBe(200);
-    expect(await getCredentials(workerEnv(), mountId)).toEqual({
-      accessKeyId: 'updated-key',
-      secretAccessKey: 'initial-secret',
-    });
+    expect(await getCredentials(workerEnv(), mountId)).toEqual({ provider: {
+      accessKeyId: 'updated-key', secretAccessKey: 'initial-secret',
+    } });
     expect(JSON.stringify(await response.json())).not.toContain('secretAccessKey');
+  });
+
+  it('creates a PikPak mount without retaining the plaintext password', async () => {
+    const cookie = await login();
+    const providerFetch = vi.fn(async (input: RequestInfo | URL) => String(input).includes('/shield/captcha/init')
+      ? Response.json({ captcha_token: 'captcha-token', expires_in: 300 })
+      : Response.json({
+          token_type: 'Bearer', access_token: 'pikpak-access', refresh_token: 'pikpak-refresh', expires_in: 3600, sub: 'pikpak-user',
+        }));
+    vi.stubGlobal('fetch', providerFetch);
+    try {
+      const response = await SELF.fetch(`${origin}/api/admin/mounts`, {
+        method: 'POST', headers: { 'content-type': 'application/json', cookie, origin },
+        body: JSON.stringify({
+          name: 'PikPak files', mountPath: '/pikpak-files', driverType: 'pikpak', provider: 'pikpak',
+          rootItemId: 'root', config: { useTrash: true },
+          credentials: { username: 'user@example.com', password: 'temporary-password' },
+        }),
+      });
+      expect(response.status, await response.clone().text()).toBe(200);
+      const responseBody = await response.json() as { data: { id: string } };
+      const data = responseBody.data;
+      const credentials = await getCredentials(workerEnv(), data.id);
+      expect(credentials).toMatchObject({
+        auth: { refreshToken: 'pikpak-refresh' }, provider: { username: 'user@example.com' },
+      });
+      expect(JSON.stringify(credentials)).not.toContain('temporary-password');
+      expect(JSON.stringify(responseBody)).not.toContain('pikpak-refresh');
+      const mount = await getMount(workerEnv().DB, data.id);
+      expect(JSON.stringify(mount?.config)).not.toContain('temporary-password');
+    } finally {
+      vi.unstubAllGlobals();
+    }
   });
 
   it('validates S3 configuration and returns mount path conflicts', async () => {
@@ -288,10 +339,9 @@ describe('mount administration API', () => {
 
     expect(response.status).toBe(500);
     await expect(getMount(workerEnv().DB, mountId)).resolves.toMatchObject({ config: s3Config });
-    await expect(getCredentials(workerEnv(), mountId)).resolves.toEqual({
-      accessKeyId: 'initial-key',
-      secretAccessKey: 'initial-secret',
-    });
+    await expect(getCredentials(workerEnv(), mountId)).resolves.toEqual({ provider: {
+      accessKeyId: 'initial-key', secretAccessKey: 'initial-secret',
+    } });
   });
 
   it('rolls back driver and configuration changes when credential deletion fails', async () => {
@@ -309,10 +359,9 @@ describe('mount administration API', () => {
 
     expect(response.status).toBe(500);
     await expect(getMount(workerEnv().DB, mountId)).resolves.toMatchObject({ driverType: 's3', config: s3Config });
-    await expect(getCredentials(workerEnv(), mountId)).resolves.toEqual({
-      accessKeyId: 'initial-key',
-      secretAccessKey: 'initial-secret',
-    });
+    await expect(getCredentials(workerEnv(), mountId)).resolves.toEqual({ provider: {
+      accessKeyId: 'initial-key', secretAccessKey: 'initial-secret',
+    } });
   });
 
   it('leaves both local records unchanged when mount deletion fails', async () => {
@@ -326,9 +375,8 @@ describe('mount administration API', () => {
 
     expect(response.status).toBe(500);
     await expect(getMount(workerEnv().DB, mountId)).resolves.not.toBeNull();
-    await expect(getCredentials(workerEnv(), mountId)).resolves.toEqual({
-      accessKeyId: 'initial-key',
-      secretAccessKey: 'initial-secret',
-    });
+    await expect(getCredentials(workerEnv(), mountId)).resolves.toEqual({ provider: {
+      accessKeyId: 'initial-key', secretAccessKey: 'initial-secret',
+    } });
   });
 });

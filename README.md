@@ -23,6 +23,8 @@ Self-hosted file index and manager for Cloudflare Workers.
 - Multiple OneDrive accounts, each mounted at a custom top-level path
 - Multiple Google My Drive accounts or roots, each independently authorized and mounted at a custom top-level path
 - Multiple Dropbox accounts or roots with PKCE OAuth and encrypted refresh tokens
+- Per-mount OAuth application credentials managed from `/admin/storages`, with legacy Worker-secret fallback
+- PikPak mounts with encrypted session state, browsing, original downloads, and file management
 - S3-compatible mounts with AWS Signature Version 4
 - Cloudflare R2 through either S3 credentials or the built-in Worker binding
 - Public directory browsing, stable file links, downloads, and common file previews
@@ -42,6 +44,7 @@ Self-hosted file index and manager for Cloudflare Workers.
 | OneDrive Personal | ✓ | ✓ | ✓ | ✓ | Resumable upload; personal Microsoft accounts only |
 | Google My Drive | ✓ | ✓ | ✓ | ✓ | Range downloads, resumable upload, and Docs/Sheets/Slides export |
 | Dropbox | ✓ | ✓ | ✓ | ✓ | Range downloads, resumable upload, folder copy, and exportable cloud files |
+| PikPak | ✓ | — | ✓ | ✓ | Proxied original downloads; upload and copy are intentionally not advertised yet |
 | Cloudflare R2 binding | ✓ | ✓ | ✓ | ✓ | Built-in compatibility mount; single-request upload only |
 | Cloudflare R2 through S3 | ✓ | ✓ | ✓ | ✓ | Multipart upload with the R2 S3 endpoint and scoped credentials |
 | Other S3-compatible storage | ✓ | ✓ | ✓ | ✓ | Multipart compatibility depends on the provider's S3 implementation |
@@ -109,18 +112,12 @@ The Worker acts as the control plane and streams or redirects file data where po
    npx wrangler secret put ADMIN_PASSWORD_HASH
    ```
 
-6. **Store all ten required Worker secrets.** Use the generated values and the provider application values with `npx wrangler secret put`:
+6. **Store the four required infrastructure Worker secrets.** Provider credentials are entered per mount in `/admin/storages`:
 
    ```bash
    npx wrangler secret put ADMIN_PASSWORD_HASH
    npx wrangler secret put CREDENTIAL_MASTER_KEY
    npx wrangler secret put SESSION_SECRET
-   npx wrangler secret put MICROSOFT_CLIENT_ID
-   npx wrangler secret put MICROSOFT_CLIENT_SECRET
-   npx wrangler secret put GOOGLE_CLIENT_ID
-   npx wrangler secret put GOOGLE_CLIENT_SECRET
-   npx wrangler secret put DROPBOX_CLIENT_ID
-   npx wrangler secret put DROPBOX_CLIENT_SECRET
    npx wrangler secret put PUBLIC_ORIGIN
    ```
 
@@ -137,13 +134,15 @@ The Worker acts as the control plane and streams or redirects file data where po
 
 ## Storage Setup
 
-Open `/admin/storages` after signing in. Each mount has its own display name, top-level mount path, provider and encrypted credentials, public or private visibility, enabled state, and optional provider root. Deleting or disconnecting a mount removes only ilist configuration and credentials; it does not delete the provider account, bucket, drive, or stored objects.
+Open `/admin/storages` after signing in. Each mount has its own display name, top-level mount path, provider and encrypted credentials, public or private visibility, enabled state, and optional provider root. Disconnecting removes account authorization while preserving reusable application/provider configuration; deleting removes the ilist mount and all of its stored credentials. Neither operation deletes the provider account, bucket, drive, or stored objects.
 
-For OneDrive Personal, follow [docs/onedrive-setup.md](docs/onedrive-setup.md). Use a Microsoft Entra application configured for personal Microsoft accounts only, with the Web redirect URI `https://ilist.chius.cc/api/admin/oauth/onedrive/callback` and delegated Graph permissions `User.Read` and `Files.ReadWrite`. Retain the existing `https://ilist.chius.workers.dev/api/admin/oauth/onedrive/callback` URI until the custom-domain authorization flow is verified.
+For OneDrive Personal, follow [docs/onedrive-setup.md](docs/onedrive-setup.md). Use a Microsoft Entra application configured for personal Microsoft accounts only, with the Web redirect URI `https://ilist.chius.cc/api/admin/oauth/onedrive/callback` and delegated Graph permissions `User.Read` and `Files.ReadWrite`, then enter its credentials in `/admin/storages`.
 
-For Google Drive, follow [docs/google-drive-setup.md](docs/google-drive-setup.md). Enable Google Drive API, create a Web OAuth client with redirect URI `https://ilist.chius.cc/api/admin/oauth/google/callback`, and configure `GOOGLE_CLIENT_ID` and `GOOGLE_CLIENT_SECRET`. Retain the existing `https://ilist.chius.workers.dev/api/admin/oauth/google/callback` URI until the custom-domain authorization flow is verified. ilist requests `https://www.googleapis.com/auth/drive`; keep a development consent screen in testing with explicit test users, or complete Google's production verification requirements before serving other users.
+For Google Drive, follow [docs/google-drive-setup.md](docs/google-drive-setup.md). Enable Google Drive API, create a Web OAuth client with redirect URI `https://ilist.chius.cc/api/admin/oauth/google/callback`, and enter its client ID and secret in `/admin/storages`. ilist requests `https://www.googleapis.com/auth/drive`.
 
-For Dropbox, follow [docs/dropbox-setup.md](docs/dropbox-setup.md). Create a scoped Dropbox app, register `https://ilist.chius.cc/api/admin/oauth/dropbox/callback`, enable the four file metadata/content read/write scopes, and configure `DROPBOX_CLIENT_ID` and `DROPBOX_CLIENT_SECRET`.
+For Dropbox, follow [docs/dropbox-setup.md](docs/dropbox-setup.md). Create a scoped Dropbox app, register `https://ilist.chius.cc/api/admin/oauth/dropbox/callback`, enable the four file metadata/content read/write scopes, and enter its app key and secret in `/admin/storages`.
+
+For PikPak, follow [docs/pikpak-setup.md](docs/pikpak-setup.md). Account/session state is encrypted per mount; passwords are not retained.
 
 For Cloudflare R2 through S3, use:
 
@@ -225,7 +224,7 @@ Configure these **repository secrets** (Settings → Secrets and variables → A
 | `CLOUDFLARE_API_TOKEN` | API token with permission to edit Workers, Workers Routes / Custom Domains, and D1 for this account |
 | `CLOUDFLARE_ACCOUNT_ID` | Cloudflare account ID that owns the `ilist` Worker, `ilist-d1` D1 database, and `ilist-r2` R2 bucket |
 
-Do not put `ADMIN_PASSWORD_HASH`, `CREDENTIAL_MASTER_KEY`, OAuth client secrets, or other Worker secrets into GitHub. Keep them only as Cloudflare Worker secrets.
+Do not put `ADMIN_PASSWORD_HASH`, `CREDENTIAL_MASTER_KEY`, OAuth client secrets, or other secrets into GitHub. Keep infrastructure secrets in Cloudflare Worker secrets; provider credentials entered in the WebUI are encrypted in D1.
 
 ## Security
 
@@ -286,6 +285,7 @@ src/
       onedrive/               Microsoft Graph driver and OAuth tokens
       google/                 Google Drive API driver and OAuth tokens
       dropbox/                Dropbox API v2 driver and OAuth tokens
+      pikpak/                 PikPak driver, session tokens, and download proxy
       s3/                     S3-compatible driver and SigV4 client
 migrations/                   D1 schema migrations
 tests/worker/                 Worker runtime tests

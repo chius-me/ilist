@@ -41,9 +41,9 @@ describe('Google Drive token lifecycle', () => {
     })));
 
     await expect(getGoogleAccessToken(workerEnv(), mountId)).resolves.toBe('google-access-2');
-    await expect(getCredentials(workerEnv(), mountId)).resolves.toMatchObject({
+    await expect(getCredentials(workerEnv(), mountId)).resolves.toMatchObject({ auth: {
       accessToken: 'google-access-2', refreshToken: 'google-refresh-2', tokenType: 'Bearer',
-    });
+    } });
   });
 
   it('retains the current refresh token when Google omits a replacement', async () => {
@@ -53,7 +53,7 @@ describe('Google Drive token lifecycle', () => {
     })));
 
     await expect(getGoogleAccessToken(workerEnv(), mountId)).resolves.toBe('google-access-2');
-    await expect(getCredentials(workerEnv(), mountId)).resolves.toMatchObject({ refreshToken: 'google-refresh-1' });
+    await expect(getCredentials(workerEnv(), mountId)).resolves.toMatchObject({ auth: { refreshToken: 'google-refresh-1' } });
   });
 
   it('coalesces concurrent refreshes and releases its D1 lease', async () => {

@@ -19,7 +19,7 @@ ilist uses the Microsoft identity platform authorization-code flow with PKCE and
 
 The redirect URI must use the same origin as `PUBLIC_ORIGIN`, including scheme and hostname. `PUBLIC_ORIGIN` must not contain a path or trailing slash.
 
-## 2. Configure Worker secrets
+## 2. Configure ilist infrastructure secrets
 
 Generate secrets locally and keep the output outside Git:
 
@@ -36,13 +36,11 @@ Configure these values under **Workers & Pages > ilist > Settings > Variables an
 | `ADMIN_PASSWORD_HASH` | Output from `npm run hash-password` |
 | `CREDENTIAL_MASTER_KEY` | 32 random bytes encoded as base64 |
 | `SESSION_SECRET` | At least 32 random characters |
-| `MICROSOFT_CLIENT_ID` | Application (client) ID |
-| `MICROSOFT_CLIENT_SECRET` | Microsoft client secret value |
 | `PUBLIC_ORIGIN` | Exact deployed HTTPS origin, without trailing slash |
 
 Wrangler can also set each value with `npx wrangler secret put NAME`. Do not put production values in `.dev.vars`, `wrangler.jsonc`, shell history, or screenshots.
 
-`CREDENTIAL_MASTER_KEY` encrypts S3 credentials, OneDrive refresh tokens, and pending OAuth verifiers in D1. Back it up in a password manager and do not rotate it without a credential re-encryption migration.
+`CREDENTIAL_MASTER_KEY` encrypts provider application credentials, refresh tokens, and pending OAuth verifiers in D1. Back it up in a password manager and do not rotate it without a credential re-encryption migration. `MICROSOFT_CLIENT_ID` and `MICROSOFT_CLIENT_SECRET` remain optional migration fallbacks for existing mounts only.
 
 ## 3. Apply migrations and deploy
 
@@ -59,12 +57,12 @@ Migrations `0008` through `0014` add mounts, encrypted credentials, the native R
 ## 4. Connect drives
 
 1. Sign in to ilist and open `/admin/storages`.
-2. Select **Add storage**, choose **OneDrive Personal**, and enter a unique display name and mount path.
+2. Select **Add storage**, choose **OneDrive Personal**, and enter a unique display name, mount path, application client ID, and client secret.
 3. Select **Create and connect**, sign in to Microsoft, and grant the requested access.
 4. Return to storage settings and run the connection test.
 5. Repeat with a different name and path to mount another personal account.
 
-Disconnecting deletes only the encrypted OAuth credentials from ilist. Deleting a mount removes its configuration and credentials; neither action deletes OneDrive files.
+Disconnecting deletes only account access/refresh tokens and preserves the mount's encrypted application credentials. Deleting a mount removes all its configuration and encrypted credentials; neither action deletes OneDrive files.
 
 ## 5. Verification and rollback
 
