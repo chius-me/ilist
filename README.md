@@ -6,7 +6,7 @@
 
 Self-hosted file index and manager for Cloudflare Workers.
 
-[![Release](https://img.shields.io/badge/release-v0.1.9-2ea44f?logo=github)](https://github.com/chius-me/ilist/blob/main/docs/releases/v0.1.9.md)
+[![Release](https://img.shields.io/badge/release-v0.2.0-2ea44f?logo=github)](https://github.com/chius-me/ilist/blob/main/docs/releases/v0.2.0.md)
 [![License](https://img.shields.io/badge/license-GPL--3.0--only-blue)](https://github.com/chius-me/ilist/blob/main/LICENSE)
 ![Cloudflare Workers](https://img.shields.io/badge/Cloudflare-Workers-f38020?logo=cloudflare&logoColor=white)
 ![TypeScript](https://img.shields.io/badge/TypeScript-5.8-3178c6?logo=typescript&logoColor=white)
@@ -14,7 +14,7 @@ Self-hosted file index and manager for Cloudflare Workers.
 
 </div>
 
-> [v0.1.9](docs/releases/v0.1.9.md) adds upload resume after reload, share download limits and token rotation, server-side folder search, same-mount copy, and sandboxed PDF preview. Read the [release guide](docs/releases/v0.1.9.md) before upgrading. v0.1.8 security hardening remains required; see [v0.1.8](docs/releases/v0.1.8.md).
+> [v0.2.0](docs/releases/v0.2.0.md) adds a complete Dropbox storage backend, a refreshed frontend design system, and a broad set of explorer and overlay reliability fixes. Read the [release guide](docs/releases/v0.2.0.md) before upgrading. v0.1.8 security hardening remains required; see [v0.1.8](docs/releases/v0.1.8.md).
 
 ## Features
 

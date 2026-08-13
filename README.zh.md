@@ -6,7 +6,7 @@
 
 面向 Cloudflare Workers 的自托管文件索引与管理器。
 
-[![Release](https://img.shields.io/badge/release-v0.1.9-2ea44f?logo=github)](https://github.com/chius-me/ilist/blob/main/docs/releases/v0.1.9.md)
+[![Release](https://img.shields.io/badge/release-v0.2.0-2ea44f?logo=github)](https://github.com/chius-me/ilist/blob/main/docs/releases/v0.2.0.md)
 [![License](https://img.shields.io/badge/license-GPL--3.0--only-blue)](https://github.com/chius-me/ilist/blob/main/LICENSE)
 ![Cloudflare Workers](https://img.shields.io/badge/Cloudflare-Workers-f38020?logo=cloudflare&logoColor=white)
 ![TypeScript](https://img.shields.io/badge/TypeScript-5.8-3178c6?logo=typescript&logoColor=white)
@@ -14,7 +14,7 @@
 
 </div>
 
-> [v0.1.9](docs/releases/v0.1.9.md) 增加刷新后续传上传、分享下载次数限制与链接轮换、服务端目录搜索、同挂载复制以及沙箱 PDF 预览。升级前请阅读[发布指南](docs/releases/v0.1.9.md)。v0.1.8 安全加固仍然必需，见 [v0.1.8](docs/releases/v0.1.8.md)。
+> [v0.2.0](docs/releases/v0.2.0.md) 增加完整的 Dropbox 存储后端、焕新的前端设计系统，以及一系列文件浏览器与浮层稳定性修复。升级前请阅读[发布指南](docs/releases/v0.2.0.md)。v0.1.8 安全加固仍然必需，见 [v0.1.8](docs/releases/v0.1.8.md)。
 
 ## 功能
 
