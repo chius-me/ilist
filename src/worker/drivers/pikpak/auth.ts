@@ -87,6 +87,7 @@ export async function requestPikPakCaptcha(
   deviceId: string,
   identity: { username?: string; userId?: string },
   fetcher: typeof fetch = fetch,
+  previousToken = '',
 ): Promise<{ token: string; expiresAt: number; verificationUrl?: string }> {
   const meta: Record<string, string> = {};
   if (action === 'POST:/v1/auth/signin' && identity.username) meta.username = identity.username;
@@ -101,7 +102,13 @@ export async function requestPikPakCaptcha(
   const response = await fetcher(PIKPAK_CAPTCHA_URL, {
     method: 'POST',
     headers: { 'content-type': 'application/json', 'user-agent': PIKPAK_USER_AGENT },
-    body: JSON.stringify({ action, client_id: PIKPAK_CLIENT_ID, device_id: deviceId, meta }),
+    body: JSON.stringify({
+      action,
+      captcha_token: previousToken,
+      client_id: PIKPAK_CLIENT_ID,
+      device_id: deviceId,
+      meta,
+    }),
   });
   const payload = await safeJson(response) as PikPakCaptchaResponse | null;
   if (!response.ok || !payload?.captcha_token) throw authenticationError(payload as Record<string, unknown> | null);
