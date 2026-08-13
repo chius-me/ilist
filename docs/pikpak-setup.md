@@ -10,7 +10,7 @@ PikPak mounts are configured entirely in `/admin/storages`. No PikPak deployment
 4. Optionally enter a root folder ID. Blank means the PikPak root.
 5. Save and run **Test connection**.
 
-The password is used only to obtain provider session tokens and is discarded. Refresh/access tokens, device state, and CAPTCHA session state are encrypted in D1. If PikPak requires interactive CAPTCHA or account verification, ilist does not bypass it; complete verification through PikPak and retry, or configure a refresh token.
+The password is used only to obtain provider session tokens and is discarded. Refresh/access tokens are encrypted in D1. The Worker-compatible authentication and drive endpoints follow the protocol used by [OpenList-Worker](https://github.com/OpenListTeam/OpenList-Worker). If password authentication is rejected because the account needs verification, complete verification through PikPak and retry, or configure a refresh token.
 
 ## Supported behavior
 

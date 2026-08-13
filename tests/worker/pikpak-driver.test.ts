@@ -43,7 +43,7 @@ describe('PikPak driver', () => {
   it('proxies original downloads and forwards Range', async () => {
     const upstream = new Response('part', { status: 206, headers: { 'content-range': 'bytes 0-3/10' } });
     const client = {
-      stat: vi.fn(async (id: string) => ({
+      downloadInfo: vi.fn(async (id: string) => ({
         id, parent_id: 'mounted-root', name: 'movie.bin', kind: 'drive#file' as const, size: '10',
         links: { 'application/octet-stream': { url: 'https://download.example/movie.bin' } },
       })),
@@ -52,6 +52,7 @@ describe('PikPak driver', () => {
     const driver = new PikPakDriver(mount, client as never);
     const request = new Request('https://ilist.example/file', { headers: { range: 'bytes=0-3' } });
     await expect(driver.getDownload('file-1', request)).resolves.toEqual({ kind: 'stream', response: upstream });
+    expect(client.downloadInfo).toHaveBeenCalledWith('file-1');
     expect(client.download).toHaveBeenCalledWith(expect.objectContaining({ id: 'file-1' }), request);
   });
 

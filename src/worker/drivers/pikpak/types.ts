@@ -14,6 +14,7 @@ export interface PikPakFile {
   phase?: string;
   web_content_link?: string;
   links?: { 'application/octet-stream'?: PikPakLink };
+  medias?: Array<{ link?: PikPakLink }>;
 }
 
 export interface PikPakFileList {
@@ -32,10 +33,4 @@ export interface PikPakTokenResponse {
   refresh_token?: string;
   expires_in?: number;
   sub?: string;
-}
-
-export interface PikPakCaptchaResponse {
-  captcha_token?: string;
-  expires_in?: number;
-  url?: string;
 }

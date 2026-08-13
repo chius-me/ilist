@@ -59,7 +59,7 @@ export class PikPakDriver implements StorageDriver {
   isWithin(itemId: string, ancestorId: string): Promise<boolean> { return this.within(itemId, ancestorId); }
 
   async getDownload(itemId: string, request: Request): Promise<DownloadResult> {
-    const item = await this.client.stat(itemId);
+    const item = await this.client.downloadInfo(itemId);
     await this.assertInScope(itemId, item);
     if (item.kind !== 'drive#file') throw new HttpError(400, 'INVALID_STORAGE_OPERATION', 'Folders cannot be downloaded');
     return { kind: 'stream', response: await this.client.download(item, request) };
