@@ -290,29 +290,26 @@ describe('MountManager', () => {
     });
   });
 
-  it('switches to the PikPak form and submits session input without retaining it in config', async () => {
-    let submitted: Record<string, unknown> | null = null;
+  it('omits PikPak from new mounts and leaves legacy rows delete-only', async () => {
+    const retiredMount = {
+      ...savedMount, id: 'retired-1', name: 'Legacy cloud', mountPath: '/legacy-cloud', driverType: 'pikpak',
+      provider: 'pikpak', enabled: false, isPublic: false, connected: false, config: {},
+    };
     vi.stubGlobal('fetch', vi.fn(async (_input: RequestInfo | URL, init?: RequestInit) => {
-      if (!init?.method) return Response.json({ ok: true, data: [] });
-      submitted = JSON.parse(String(init.body));
-      return Response.json({ ok: true, data: { ...savedMount, id: 'pikpak-1', driverType: 'pikpak', provider: 'pikpak', config: { useTrash: true } } });
+      if (!init?.method) return Response.json({ ok: true, data: [retiredMount] });
+      return new Response(null, { status: 204 });
     }));
 
     render(<AppProviders><MountManager onBack={vi.fn()} /></AppProviders>);
-    await userEvent.click(await screen.findByRole('button', { name: 'Add storage' }));
-    await userEvent.selectOptions(screen.getByLabelText('Storage type'), 'pikpak');
-    await userEvent.type(screen.getByLabelText('Display name'), 'PikPak files');
-    await userEvent.type(screen.getByLabelText('Mount path'), '/pikpak');
-    await userEvent.type(screen.getByLabelText('Username / email / phone'), 'user@example.com');
-    await userEvent.type(screen.getByLabelText('Password'), 'temporary-password');
-    await userEvent.click(screen.getByRole('button', { name: 'Create mount' }));
+    expect(await screen.findByText('PikPak (driver removed)')).toBeVisible();
+    await userEvent.click(screen.getByRole('button', { name: 'Actions for Legacy cloud' }));
+    expect(screen.getByRole('button', { name: 'Delete' })).toBeVisible();
+    expect(screen.queryByRole('button', { name: 'Test connection' })).not.toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: 'Enable' })).not.toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: 'Edit' })).not.toBeInTheDocument();
 
-    await waitFor(() => expect(submitted).not.toBeNull());
-    expect(submitted).toMatchObject({
-      driverType: 'pikpak', provider: 'pikpak', config: { useTrash: true },
-      credentials: { username: 'user@example.com', password: 'temporary-password' },
-    });
-    expect((submitted! as { config: Record<string, unknown> }).config).not.toHaveProperty('password');
+    await userEvent.click(screen.getByRole('button', { name: 'Add storage' }));
+    expect(screen.queryByRole('option', { name: 'PikPak' })).not.toBeInTheDocument();
   });
 
   it('creates a named Google mount with an optional root folder before starting OAuth', async () => {

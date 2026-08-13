@@ -25,7 +25,6 @@ import {
 } from './mounts';
 import type { Env, Mount, MountDriverType } from './types';
 import { oauthApplicationSource, type OAuthDriverType } from './oauth-credentials';
-import { authenticatePikPak } from './drivers/pikpak/auth';
 
 interface MountRequestBody {
   name?: unknown;
@@ -53,7 +52,7 @@ interface S3Credentials extends StorageCredentials {
   secretAccessKey: string;
 }
 
-const MOUNT_DRIVER_TYPES = new Set<MountDriverType>(['s3', 'onedrive', 'google', 'dropbox', 'pikpak', 'native-r2']);
+const MOUNT_DRIVER_TYPES = new Set<MountDriverType>(['s3', 'onedrive', 'google', 'dropbox', 'native-r2']);
 const OAUTH_DRIVERS = new Set<MountDriverType>(['onedrive', 'google', 'dropbox']);
 
 function methodNotAllowed(): Response {
@@ -139,14 +138,6 @@ function validateS3Config(value: unknown): S3Config {
 
 function validateConfig(driver: MountDriverType, value: unknown): Record<string, unknown> {
   if (driver === 's3') return validateS3Config(value);
-  if (driver === 'pikpak') {
-    if (!isRecord(value)) invalidRequest('INVALID_MOUNT_CONFIG', 'PikPak configuration is invalid');
-    assertOnlyKeys(value, ['useTrash'], 'INVALID_MOUNT_CONFIG');
-    if (value.useTrash !== undefined && typeof value.useTrash !== 'boolean') {
-      invalidRequest('INVALID_MOUNT_CONFIG', 'PikPak configuration is invalid');
-    }
-    return { useTrash: value.useTrash !== false };
-  }
   if (!isRecord(value) || Object.keys(value).length !== 0) {
     invalidRequest('INVALID_MOUNT_CONFIG', 'Mount configuration is invalid');
   }
@@ -154,9 +145,6 @@ function validateConfig(driver: MountDriverType, value: unknown): Record<string,
 }
 
 function sanitizedConfig(mount: Mount): Record<string, unknown> {
-  if (mount.driverType === 'pikpak' && isRecord(mount.config)) {
-    return { useTrash: mount.config.useTrash !== false };
-  }
   if (mount.driverType !== 's3' || !isRecord(mount.config)) return {};
   const config = mount.config;
   const result: Record<string, unknown> = {};
@@ -175,6 +163,7 @@ interface CredentialStatus {
 
 async function credentialStatus(env: Env, mount: Mount): Promise<CredentialStatus> {
   if (mount.driverType === 'native-r2') return { appConfigured: true, connected: true, source: 'mount', fields: {} };
+  if (mount.driverType === 'pikpak') return { appConfigured: false, connected: false, source: 'none', fields: {} };
   const credentials = await getCredentials(env, mount.id);
   if (OAUTH_DRIVERS.has(mount.driverType)) {
     const app = oauthApplicationCredentials(credentials);
@@ -194,11 +183,7 @@ async function credentialStatus(env: Env, mount: Mount): Promise<CredentialStatu
       accessKeyConfigured: typeof provider.accessKeyId === 'string', secretKeyConfigured: typeof provider.secretAccessKey === 'string',
     } };
   }
-  const auth = authorizationSecrets(credentials);
-  const configured = typeof auth.refreshToken === 'string' && Boolean(auth.refreshToken);
-  return { appConfigured: configured, connected: configured, source: configured ? 'mount' : 'none', fields: {
-    refreshTokenConfigured: configured, usernameConfigured: typeof provider.username === 'string',
-  } };
+  return { appConfigured: false, connected: false, source: 'none', fields: {} };
 }
 
 async function mountToApi(env: Env, mount: Mount): Promise<Omit<Mount, 'config'> & { config: Record<string, unknown>; connected: boolean; credentialStatus: CredentialStatus }> {
@@ -265,7 +250,6 @@ async function credentialsForUpdate(
   driverChanged: boolean,
 ): Promise<StorageCredentials | null | undefined> {
   if (rawCredentials === undefined) {
-    if (driver === 'pikpak' && !existing) invalidRequest('INVALID_MOUNT_CREDENTIALS', 'PikPak credentials are incomplete');
     return driverChanged ? null : undefined;
   }
   const prior = driverChanged ? null : existing;
@@ -276,30 +260,6 @@ async function credentialsForUpdate(
     return next;
   }
   if (OAUTH_DRIVERS.has(driver)) return mergeOAuthCredentials(rawCredentials, prior);
-  if (driver === 'pikpak') {
-    if (!isRecord(rawCredentials)) invalidRequest('INVALID_MOUNT_CREDENTIALS', 'PikPak credentials are invalid');
-    assertOnlyKeys(rawCredentials, ['username', 'password', 'refreshToken', 'deviceId'], 'INVALID_MOUNT_CREDENTIALS');
-    for (const value of Object.values(rawCredentials)) {
-      if (value !== undefined && typeof value !== 'string') invalidRequest('INVALID_MOUNT_CREDENTIALS', 'PikPak credentials are invalid');
-      if (typeof value === 'string' && value.length > 8192) invalidRequest('INVALID_MOUNT_CREDENTIALS', 'PikPak credentials are too large');
-    }
-    const existingProvider = { ...providerSecrets(prior) };
-    // Remove state left by the previous .com/CAPTCHA protocol. The .net protocol does not use it.
-    delete existingProvider.deviceId;
-    delete existingProvider.captchaToken;
-    delete existingProvider.captchaExpiresAt;
-    const username = typeof rawCredentials.username === 'string' ? rawCredentials.username.trim() : '';
-    const password = typeof rawCredentials.password === 'string' ? rawCredentials.password : '';
-    const refreshToken = typeof rawCredentials.refreshToken === 'string' ? rawCredentials.refreshToken.trim() : '';
-    if (username || password) {
-      if (!username || !password) invalidRequest('INVALID_MOUNT_CREDENTIALS', 'PikPak username and password must be provided together');
-      const authenticated = await authenticatePikPak(username, password);
-      return { ...(prior ?? {}), auth: authenticated.auth, provider: { ...existingProvider, username: authenticated.username } };
-    }
-    if (refreshToken) return { ...(prior ?? {}), auth: { refreshToken, expiresAt: 0 }, provider: existingProvider };
-    if (prior) return prior;
-    invalidRequest('INVALID_MOUNT_CREDENTIALS', 'PikPak credentials are incomplete');
-  }
   invalidRequest('INVALID_MOUNT_CREDENTIALS', 'Credentials are not supported by this provider');
 }
 
@@ -383,7 +343,7 @@ export async function handleMountRoutes(request: Request, env: Env, url: URL): P
   if (disconnectId !== null) {
     if (request.method !== 'POST') return methodNotAllowed();
     const mount = await requireMount(env, disconnectId);
-    if (OAUTH_DRIVERS.has(mount.driverType) || mount.driverType === 'pikpak') {
+    if (OAUTH_DRIVERS.has(mount.driverType)) {
       await patchCredentials(env, mount.id, {
         auth: null,
         accessToken: null, refreshToken: null, tokenType: null, expiresAt: null, scope: null,

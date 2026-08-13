@@ -1,4 +1,4 @@
-import { Folder, Languages, LogIn, LogOut, Moon, Settings, Sun } from 'lucide-react';
+import { Folder, Github, Languages, LogIn, LogOut, Moon, Settings, Sun } from 'lucide-react';
 import { useI18n } from '../i18n/I18nProvider';
 import { usePreferences } from '../preferences/PreferencesProvider';
 
@@ -41,6 +41,9 @@ export function AppHeader({ admin, username, onHome, onStorage, onSignIn, onSign
           <span>ilist</span>
         </button>
         <div className="headerControls">
+          <a className="headerControl" href="https://github.com/chius-me/ilist" target="_blank" rel="noreferrer" aria-label={t('shell.openGitHub')} title={t('shell.openGitHub')}>
+            <Github aria-hidden="true" size={17} />
+          </a>
           <button className="headerControl languageControl" type="button" onClick={changeLanguage} aria-label={t('shell.changeLanguage')} title={t('shell.changeLanguage')}>
             <Languages aria-hidden="true" size={17} />
             <span>{t('shell.localeLabel')}</span>

@@ -55,6 +55,8 @@ it('renders stable language, theme, and account controls', async () => {
   render(<App />);
   expect(await screen.findByRole('banner')).toBeVisible();
   expect(screen.getByRole('button', { name: 'Open ilist root' })).toBeVisible();
+  expect(screen.getByRole('link', { name: 'Open ilist on GitHub' })).toHaveAttribute('href', 'https://github.com/chius-me/ilist');
+  expect(screen.getByRole('link', { name: 'Open ilist on GitHub' })).toHaveAttribute('target', '_blank');
   expect(screen.getByRole('button', { name: 'Change language' })).toBeVisible();
   expect(screen.getByRole('button', { name: 'Change theme' })).toBeVisible();
   expect(screen.getByRole('button', { name: 'Admin sign in' })).toBeVisible();
@@ -84,6 +86,7 @@ it('localizes shell controls after changing language', async () => {
 
   expect(await screen.findByRole('link', { name: '跳转到内容' })).toBeVisible();
   expect(screen.getByRole('button', { name: '打开 ilist 根目录' })).toBeVisible();
+  expect(screen.getByRole('link', { name: '在 GitHub 上打开 ilist' })).toBeVisible();
   expect(screen.getByRole('button', { name: '切换语言' })).toBeVisible();
   expect(screen.getByRole('button', { name: '切换主题' })).toBeVisible();
   expect(screen.getByRole('button', { name: '管理员登录' })).toBeVisible();

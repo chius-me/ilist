@@ -1,3 +1,4 @@
+// `pikpak` is retained only for displaying and deleting legacy rows after the driver removal.
 export type MountDriverType = 's3' | 'onedrive' | 'google' | 'dropbox' | 'pikpak' | 'native-r2';
 
 export interface MountCredentialStatus {
@@ -69,11 +70,4 @@ export interface DropboxMountInput extends BaseMountInput {
   credentials?: { clientId?: string; clientSecret?: string };
 }
 
-export interface PikPakMountInput extends BaseMountInput {
-  driverType: 'pikpak';
-  provider: 'pikpak';
-  config: { useTrash: boolean };
-  credentials?: { username?: string; password?: string; refreshToken?: string };
-}
-
-export type MountInput = S3MountInput | OneDriveMountInput | GoogleMountInput | DropboxMountInput | PikPakMountInput;
+export type MountInput = S3MountInput | OneDriveMountInput | GoogleMountInput | DropboxMountInput;
