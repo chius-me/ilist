@@ -23,6 +23,18 @@ function providerError(status: number, payload: unknown): HttpError {
   return new HttpError(502, 'PIKPAK_UPSTREAM_FAILED', 'PikPak request failed');
 }
 
+function isInvalidCaptcha(payload: unknown): boolean {
+  if (!isRecord(payload)) return false;
+  const reason = typeof payload.error === 'string'
+    ? payload.error
+    : typeof payload.reason === 'string' ? payload.reason : '';
+  return reason === 'captcha_invalid';
+}
+
+async function parsedResponse(response: Response): Promise<unknown> {
+  try { return await response.clone().json(); } catch { return null; }
+}
+
 async function responseJson<T>(response: Response): Promise<T> {
   let value: unknown;
   try { value = await response.json(); } catch { value = null; }
@@ -104,13 +116,24 @@ export class PikPakClient {
       return provider.captchaToken;
     }
     const session = await getPikPakSession(this.env, this.mountId, false, this.fetcher);
-    const captcha = await requestPikPakCaptcha(action, session.deviceId, { userId: userId ?? session.userId }, this.fetcher);
+    const previousToken = typeof provider.captchaToken === 'string' ? provider.captchaToken : '';
+    const captcha = await requestPikPakCaptcha(
+      action,
+      session.deviceId,
+      { userId: userId ?? session.userId },
+      this.fetcher,
+      previousToken,
+    );
     await patchCredentials(this.env, this.mountId, { provider: { captchaToken: captcha.token, captchaExpiresAt: captcha.expiresAt } });
     return captcha.token;
   }
 
-  private async requestJson<T>(url: URL, init: RequestInit, retried = false): Promise<T> {
-    const session = await getPikPakSession(this.env, this.mountId, retried, this.fetcher);
+  private async requestJson<T>(
+    url: URL,
+    init: RequestInit,
+    retry: { auth?: boolean; captcha?: boolean } = {},
+  ): Promise<T> {
+    const session = await getPikPakSession(this.env, this.mountId, retry.auth === true, this.fetcher);
     const action = `${(init.method ?? 'GET').toUpperCase()}:${url.pathname}`;
     const headers = new Headers(init.headers);
     headers.set('authorization', `${session.tokenType} ${session.accessToken}`);
@@ -124,7 +147,13 @@ export class PikPakClient {
     let response: Response;
     try { response = await this.fetcher(url, { ...init, headers }); }
     catch { throw new HttpError(502, 'PIKPAK_UPSTREAM_FAILED', 'PikPak request failed'); }
-    if (response.status === 401 && !retried) return this.requestJson<T>(url, init, true);
+    if (response.status === 401 && !retry.auth) return this.requestJson<T>(url, init, { ...retry, auth: true });
+    if (!response.ok && !retry.captcha && isInvalidCaptcha(await parsedResponse(response))) {
+      await patchCredentials(this.env, this.mountId, {
+        provider: { captchaToken: null, captchaExpiresAt: null },
+      });
+      return this.requestJson<T>(url, init, { ...retry, captcha: true });
+    }
     return responseJson<T>(response);
   }
 }

@@ -1,5 +1,5 @@
 import { describe, expect, it, vi } from 'vitest';
-import { authenticatePikPak, refreshPikPakToken } from '../../src/worker/drivers/pikpak/auth';
+import { authenticatePikPak, refreshPikPakToken, requestPikPakCaptcha } from '../../src/worker/drivers/pikpak/auth';
 
 describe('PikPak authentication', () => {
   it('exchanges a password for tokens without returning the password', async () => {
@@ -18,6 +18,28 @@ describe('PikPak authentication', () => {
     const fetcher = vi.fn(async () => Response.json({ token_type: 'Bearer', access_token: 'next-access', expires_in: 3600 }));
     await expect(refreshPikPakToken('current-refresh', 'device-id', fetcher)).resolves.toMatchObject({
       accessToken: 'next-access', refreshToken: 'current-refresh',
+    });
+  });
+
+  it('sends the previous captcha token when refreshing it', async () => {
+    const fetcher = vi.fn(async (_input: RequestInfo | URL, _init?: RequestInit) => (
+      Response.json({ captcha_token: 'next-captcha', expires_in: 300 })
+    ));
+
+    await requestPikPakCaptcha(
+      'GET:/drive/v1/files',
+      'device-id',
+      { userId: 'user-id' },
+      fetcher,
+      'previous-captcha',
+    );
+
+    const [, init] = fetcher.mock.calls[0]!;
+    expect(JSON.parse(String(init?.body))).toMatchObject({
+      action: 'GET:/drive/v1/files',
+      captcha_token: 'previous-captcha',
+      device_id: 'device-id',
+      meta: { user_id: 'user-id' },
     });
   });
 
