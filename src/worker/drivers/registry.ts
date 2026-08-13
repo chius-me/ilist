@@ -7,8 +7,6 @@ import { OneDriveClient } from './onedrive/client';
 import { OneDriveDriver } from './onedrive/driver';
 import { createGoogleDriveDriver } from './google/driver';
 import { createDropboxDriver } from './dropbox/driver';
-import { PikPakClient } from './pikpak/client';
-import { PikPakDriver } from './pikpak/driver';
 import type { DriverRegistry, StorageDriver } from './types';
 
 export const driverRegistry: DriverRegistry = {
@@ -37,7 +35,6 @@ export const driverRegistry: DriverRegistry = {
   onedrive: (env, mount) => new OneDriveDriver(mount, new OneDriveClient(env, mount.id)),
   google: (env, mount) => createGoogleDriveDriver(env, mount),
   dropbox: (env, mount) => createDropboxDriver(env, mount),
-  pikpak: (env, mount) => new PikPakDriver(mount, new PikPakClient(env, mount.id)),
 };
 
 export async function createDriver(env: Env, mount: Mount, registry: DriverRegistry = driverRegistry): Promise<StorageDriver> {

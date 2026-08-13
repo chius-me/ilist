@@ -2,7 +2,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { SELF, env } from 'cloudflare:test';
 import { getCredentials, putCredentials } from '../../src/worker/credentials';
 import { driverRegistry } from '../../src/worker/drivers/registry';
-import { getMount } from '../../src/worker/mounts';
+import { createMount, getMount } from '../../src/worker/mounts';
 import type { StorageDriver } from '../../src/worker/drivers/types';
 import type { Env } from '../../src/worker/types';
 
@@ -66,7 +66,6 @@ describe('mount administration API', () => {
     delete driverRegistry.onedrive;
     delete driverRegistry.google;
     delete driverRegistry.dropbox;
-    delete driverRegistry.pikpak;
     delete driverRegistry['native-r2'];
     await workerEnv().DB.prepare('DELETE FROM storage_credentials').run();
     await workerEnv().DB.prepare('DELETE FROM mounts').run();
@@ -213,37 +212,35 @@ describe('mount administration API', () => {
     expect(JSON.stringify(await response.json())).not.toContain('secretAccessKey');
   });
 
-  it('creates a PikPak mount without retaining the plaintext password', async () => {
-    const cookie = await login();
-    const providerFetch = vi.fn(async (_input: RequestInfo | URL, _init?: RequestInit) => Response.json({
-      token_type: 'Bearer', access_token: 'pikpak-access', refresh_token: 'pikpak-refresh', expires_in: 3600, sub: 'pikpak-user',
-    }));
-    vi.stubGlobal('fetch', providerFetch);
-    try {
-      const response = await SELF.fetch(`${origin}/api/admin/mounts`, {
-        method: 'POST', headers: { 'content-type': 'application/json', cookie, origin },
-        body: JSON.stringify({
-          name: 'PikPak files', mountPath: '/pikpak-files', driverType: 'pikpak', provider: 'pikpak',
-          rootItemId: 'root', config: { useTrash: true },
-          credentials: { username: 'user@example.com', password: 'temporary-password' },
-        }),
-      });
-      expect(response.status, await response.clone().text()).toBe(200);
-      const responseBody = await response.json() as { data: { id: string } };
-      const data = responseBody.data;
-      const credentials = await getCredentials(workerEnv(), data.id);
-      expect(credentials).toMatchObject({
-        auth: { refreshToken: 'pikpak-refresh' }, provider: { username: 'user@example.com' },
-      });
-      expect(JSON.stringify(credentials)).not.toContain('temporary-password');
-      expect(JSON.stringify(responseBody)).not.toContain('pikpak-refresh');
-      expect(providerFetch).toHaveBeenCalledTimes(1);
-      expect(String(providerFetch.mock.calls[0]![0])).toBe('https://user.mypikpak.net/v1/auth/signin');
-      const mount = await getMount(workerEnv().DB, data.id);
-      expect(JSON.stringify(mount?.config)).not.toContain('temporary-password');
-    } finally {
-      vi.unstubAllGlobals();
-    }
+  it('rejects creation of the retired PikPak driver', async () => {
+    const response = await adminFetch('/api/admin/mounts', {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({
+        name: 'Retired storage', mountPath: '/retired-storage', driverType: 'pikpak', provider: 'pikpak', config: {},
+      }),
+    });
+
+    expect(response.status).toBe(400);
+    await expect(response.json()).resolves.toMatchObject({ error: { code: 'INVALID_MOUNT_DRIVER' } });
+  });
+
+  it('lists legacy PikPak mounts as disconnected and still allows their deletion', async () => {
+    const mount = await createMount(workerEnv().DB, {
+      name: 'Legacy PikPak', mountPath: '/legacy-pikpak', driverType: 'pikpak', provider: 'pikpak',
+      enabled: false, isPublic: false, rootItemId: 'root', config: { useTrash: true },
+    });
+    await putCredentials(workerEnv(), mount.id, { auth: { refreshToken: 'retired-refresh-token' } });
+
+    const listResponse = await adminFetch('/api/admin/mounts');
+    const listed = (await listResponse.json() as { data: Array<Record<string, unknown>> }).data
+      .find((candidate) => candidate.id === mount.id);
+    expect(listed).toMatchObject({ connected: false, config: {} });
+
+    const deleteResponse = await adminFetch(`/api/admin/mounts/${mount.id}`, { method: 'DELETE' });
+    expect(deleteResponse.status).toBe(204);
+    await expect(getMount(workerEnv().DB, mount.id)).resolves.toBeNull();
+    await expect(getCredentials(workerEnv(), mount.id)).resolves.toBeNull();
   });
 
   it('validates S3 configuration and returns mount path conflicts', async () => {

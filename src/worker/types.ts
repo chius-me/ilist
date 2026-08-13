@@ -211,6 +211,7 @@ export interface BatchResult {
   failed: BatchFailure[];
 }
 
+// `pikpak` remains only so legacy database rows can be listed and deleted safely.
 export type MountDriverType = 's3' | 'onedrive' | 'google' | 'dropbox' | 'pikpak' | 'native-r2';
 
 export interface MountRow {

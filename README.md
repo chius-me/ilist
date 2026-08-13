@@ -24,7 +24,6 @@ Self-hosted file index and manager for Cloudflare Workers.
 - Multiple Google My Drive accounts or roots, each independently authorized and mounted at a custom top-level path
 - Multiple Dropbox accounts or roots with PKCE OAuth and encrypted refresh tokens
 - Per-mount OAuth application credentials managed from `/admin/storages`, with legacy Worker-secret fallback
-- PikPak mounts with encrypted session state, browsing, original downloads, and file management
 - S3-compatible mounts with AWS Signature Version 4
 - Cloudflare R2 through either S3 credentials or the built-in Worker binding
 - Public directory browsing, stable file links, downloads, and common file previews
@@ -44,7 +43,6 @@ Self-hosted file index and manager for Cloudflare Workers.
 | OneDrive Personal | ✓ | ✓ | ✓ | ✓ | Resumable upload; personal Microsoft accounts only |
 | Google My Drive | ✓ | ✓ | ✓ | ✓ | Range downloads, resumable upload, and Docs/Sheets/Slides export |
 | Dropbox | ✓ | ✓ | ✓ | ✓ | Range downloads, resumable upload, folder copy, and exportable cloud files |
-| PikPak | ✓ | — | ✓ | ✓ | Proxied original downloads; upload and copy are intentionally not advertised yet |
 | Cloudflare R2 binding | ✓ | ✓ | ✓ | ✓ | Built-in compatibility mount; single-request upload only |
 | Cloudflare R2 through S3 | ✓ | ✓ | ✓ | ✓ | Multipart upload with the R2 S3 endpoint and scoped credentials |
 | Other S3-compatible storage | ✓ | ✓ | ✓ | ✓ | Multipart compatibility depends on the provider's S3 implementation |
@@ -141,8 +139,6 @@ For OneDrive Personal, follow [docs/onedrive-setup.md](docs/onedrive-setup.md). 
 For Google Drive, follow [docs/google-drive-setup.md](docs/google-drive-setup.md). Enable Google Drive API, create a Web OAuth client with redirect URI `https://ilist.chius.cc/api/admin/oauth/google/callback`, and enter its client ID and secret in `/admin/storages`. ilist requests `https://www.googleapis.com/auth/drive`.
 
 For Dropbox, follow [docs/dropbox-setup.md](docs/dropbox-setup.md). Create a scoped Dropbox app, register `https://ilist.chius.cc/api/admin/oauth/dropbox/callback`, enable the four file metadata/content read/write scopes, and enter its app key and secret in `/admin/storages`.
-
-For PikPak, follow [docs/pikpak-setup.md](docs/pikpak-setup.md). Account/session state is encrypted per mount; passwords are not retained.
 
 For Cloudflare R2 through S3, use:
 
@@ -285,7 +281,6 @@ src/
       onedrive/               Microsoft Graph driver and OAuth tokens
       google/                 Google Drive API driver and OAuth tokens
       dropbox/                Dropbox API v2 driver and OAuth tokens
-      pikpak/                 PikPak driver, session tokens, and download proxy
       s3/                     S3-compatible driver and SigV4 client
 migrations/                   D1 schema migrations
 tests/worker/                 Worker runtime tests
