@@ -78,6 +78,9 @@ describe('PikPak client API requests', () => {
     await expect(client.list('root')).resolves.toEqual({ files: [], next_page_token: '' });
 
     expect(fetcher).toHaveBeenCalledTimes(3);
+    const initialListUrl = new URL(String(fetcher.mock.calls[0]![0]));
+    expect(initialListUrl.searchParams.has('page_token')).toBe(true);
+    expect(initialListUrl.searchParams.get('page_token')).toBe('');
     const captchaInit = JSON.parse(String(fetcher.mock.calls[1]![1]?.body));
     expect(captchaInit).toMatchObject({
       action: 'GET:/drive/v1/files', captcha_token: '', device_id: 'device-id', meta: { user_id: 'user-id' },
