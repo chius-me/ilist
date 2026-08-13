@@ -26,15 +26,9 @@ https://www.googleapis.com/auth/drive
 
 The full Drive scope is required for an OpenList-style browser that can list and manage existing files. A public application may need Google verification before accounts outside its configured test users can authorize it.
 
-## 2. Configure Worker secrets
+## 2. Configure ilist
 
-Store production values as encrypted Worker secrets:
-
-```bash
-npx wrangler secret put GOOGLE_CLIENT_ID
-npx wrangler secret put GOOGLE_CLIENT_SECRET
-npx wrangler secret put PUBLIC_ORIGIN
-```
+Keep `PUBLIC_ORIGIN` as an infrastructure Worker secret. Enter the Google client ID and client secret in `/admin/storages`; ilist encrypts them per mount in D1. `GOOGLE_CLIENT_ID` and `GOOGLE_CLIENT_SECRET` are optional migration fallbacks for existing mounts.
 
 `CREDENTIAL_MASTER_KEY` must also remain configured and stable because it encrypts refresh tokens and one-time OAuth state in D1. Do not put production client secrets, tokens, or encryption keys in `.dev.vars`, `wrangler.jsonc`, shell history, screenshots, or Git.
 
@@ -42,12 +36,12 @@ npx wrangler secret put PUBLIC_ORIGIN
 
 1. Sign in to ilist and open `/admin/storages`.
 2. Select **Add storage**, then choose **Google Drive**.
-3. Enter a unique display name and mount path.
+3. Enter a unique display name, mount path, OAuth client ID, and client secret.
 4. Optionally enter a root folder ID to expose only that folder. The ID is the segment after `/folders/` in a Google Drive folder URL.
 5. Select **Create and connect**, sign in to Google, and approve access.
 6. Repeat with another name and path to authorize another Google account or root.
 
-Disconnecting removes only the encrypted Google credentials from ilist. Deleting a mount removes its ilist configuration and credentials. Neither operation deletes Google Drive files.
+Disconnecting removes account authorization tokens but preserves the encrypted OAuth application credentials. Deleting a mount removes all ilist configuration and credentials. Neither operation deletes Google Drive files.
 
 ## 4. Supported behavior
 

@@ -3,10 +3,12 @@
 ADMIN_PASSWORD_HASH=pbkdf2-sha256:600000:replace_with_32_character_salt_hex:replace_with_64_character_hash_hex
 CREDENTIAL_MASTER_KEY=replace-with-32-byte-base64-key
 SESSION_SECRET=replace-with-at-least-32-random-characters
-MICROSOFT_CLIENT_ID=replace-with-application-client-id
-MICROSOFT_CLIENT_SECRET=replace-with-application-client-secret
-GOOGLE_CLIENT_ID=replace-with-google-oauth-client-id
-GOOGLE_CLIENT_SECRET=replace-with-google-oauth-client-secret
-DROPBOX_CLIENT_ID=replace-with-dropbox-app-key
-DROPBOX_CLIENT_SECRET=replace-with-dropbox-app-secret
 PUBLIC_ORIGIN=https://ilist.example.com
+
+# Optional migration-only fallbacks. New OAuth mounts configure these in /admin/storages.
+# MICROSOFT_CLIENT_ID=replace-with-legacy-application-client-id
+# MICROSOFT_CLIENT_SECRET=replace-with-legacy-application-client-secret
+# GOOGLE_CLIENT_ID=replace-with-legacy-google-oauth-client-id
+# GOOGLE_CLIENT_SECRET=replace-with-legacy-google-oauth-client-secret
+# DROPBOX_CLIENT_ID=replace-with-legacy-dropbox-app-key
+# DROPBOX_CLIENT_SECRET=replace-with-legacy-dropbox-app-secret

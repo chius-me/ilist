@@ -23,10 +23,10 @@ function r2Account(endpoint: string): string {
   try { return new URL(endpoint).hostname.split('.')[0] ?? ''; } catch { return ''; }
 }
 
-type StorageType = 's3' | 'onedrive' | 'google' | 'dropbox';
+type StorageType = 's3' | 'onedrive' | 'google' | 'dropbox' | 'pikpak';
 
 function initialStorageType(mount: Mount | null): StorageType {
-  if (mount?.driverType === 'onedrive' || mount?.driverType === 'google' || mount?.driverType === 'dropbox') return mount.driverType;
+  if (mount?.driverType === 'onedrive' || mount?.driverType === 'google' || mount?.driverType === 'dropbox' || mount?.driverType === 'pikpak') return mount.driverType;
   return 's3';
 }
 
@@ -52,6 +52,12 @@ export function MountDialog({ mount, active = true, busy, error, onClose, onSubm
   const [addressingMode, setAddressingMode] = useState<'path' | 'virtual-hosted'>(stringConfig(mount, 'addressingMode', 'path') === 'virtual-hosted' ? 'virtual-hosted' : 'path');
   const [accessKeyId, setAccessKeyId] = useState('');
   const [secretAccessKey, setSecretAccessKey] = useState('');
+  const [clientId, setClientId] = useState('');
+  const [clientSecret, setClientSecret] = useState('');
+  const [pikPakUsername, setPikPakUsername] = useState('');
+  const [pikPakPassword, setPikPakPassword] = useState('');
+  const [pikPakRefreshToken, setPikPakRefreshToken] = useState('');
+  const [useTrash, setUseTrash] = useState(mount?.config.useTrash !== false);
   const [rootItemId, setRootItemId] = useState(mount?.rootItemId ?? '');
   const [enabled, setEnabled] = useState(mount?.enabled ?? true);
   const [isPublic, setIsPublic] = useState(mount?.isPublic ?? false);
@@ -59,12 +65,16 @@ export function MountDialog({ mount, active = true, busy, error, onClose, onSubm
 
   function submit(event: FormEvent) {
     event.preventDefault();
+    const oauthCredentials = clientId || clientSecret
+      ? { ...(clientId ? { clientId } : {}), ...(clientSecret ? { clientSecret } : {}) }
+      : undefined;
     if (storageType === 'google') {
       void onSubmit({
         name, mountPath, driverType: 'google', provider: 'google',
         enabled, isPublic, sortOrder: mount?.sortOrder ?? 0,
         rootItemId: rootItemId.trim() || null,
         config: {},
+        ...(oauthCredentials ? { credentials: oauthCredentials } : {}),
       });
       return;
     }
@@ -74,6 +84,7 @@ export function MountDialog({ mount, active = true, busy, error, onClose, onSubm
         enabled, isPublic, sortOrder: mount?.sortOrder ?? 0,
         rootItemId: rootItemId.trim() || null,
         config: {},
+        ...(oauthCredentials ? { credentials: oauthCredentials } : {}),
       });
       return;
     }
@@ -82,6 +93,20 @@ export function MountDialog({ mount, active = true, busy, error, onClose, onSubm
         name, mountPath, driverType: 'onedrive', provider: 'microsoft-onedrive-personal',
         enabled, isPublic, sortOrder: mount?.sortOrder ?? 0,
         config: {},
+        ...(oauthCredentials ? { credentials: oauthCredentials } : {}),
+      });
+      return;
+    }
+    if (storageType === 'pikpak') {
+      const credentials = pikPakUsername || pikPakPassword || pikPakRefreshToken ? {
+        ...(pikPakUsername ? { username: pikPakUsername } : {}),
+        ...(pikPakPassword ? { password: pikPakPassword } : {}),
+        ...(pikPakRefreshToken ? { refreshToken: pikPakRefreshToken } : {}),
+      } : undefined;
+      void onSubmit({
+        name, mountPath, driverType: 'pikpak', provider: 'pikpak', enabled, isPublic,
+        sortOrder: mount?.sortOrder ?? 0, rootItemId: rootItemId.trim() || null,
+        config: { useTrash }, ...(credentials ? { credentials } : {}),
       });
       return;
     }
@@ -95,10 +120,10 @@ export function MountDialog({ mount, active = true, busy, error, onClose, onSubm
 
   return <div ref={backdrop} className="dialogBackdrop overlayScrim" role="presentation" onMouseDown={onClose}>
     <section className="mountDialog overlaySurface" role="dialog" aria-modal="true" aria-labelledby="mount-dialog-title" onMouseDown={(event) => event.stopPropagation()}>
-      <header className="overlayHeader"><div><h2 id="mount-dialog-title">{mount ? t('mount.editStorage') : t('admin.addStorage')}</h2><p>{storageType === 'onedrive' ? t('mount.oneDriveMount') : storageType === 'google' ? t('mount.googleDriveMount') : storageType === 'dropbox' ? t('mount.dropboxMount') : t('mount.s3Mount')}</p></div><button className="iconButton" type="button" onClick={onClose} aria-label={t('common.close')} title={t('common.close')}><X aria-hidden="true" size={18} /></button></header>
+      <header className="overlayHeader"><div><h2 id="mount-dialog-title">{mount ? t('mount.editStorage') : t('admin.addStorage')}</h2><p>{storageType === 'onedrive' ? t('mount.oneDriveMount') : storageType === 'google' ? t('mount.googleDriveMount') : storageType === 'dropbox' ? t('mount.dropboxMount') : storageType === 'pikpak' ? t('mount.pikPakMount') : t('mount.s3Mount')}</p></div><button className="iconButton" type="button" onClick={onClose} aria-label={t('common.close')} title={t('common.close')}><X aria-hidden="true" size={18} /></button></header>
       <form onSubmit={submit}>
         <div className="mountFormGrid">
-          <label>{t('mount.storageType')}<select value={storageType} disabled={Boolean(mount)} onChange={(event) => setStorageType(event.target.value as StorageType)}><option value="s3">{t('mount.s3Compatible')}</option><option value="onedrive">{t('mount.providerOneDrive')}</option><option value="google">{t('mount.providerGoogleDrive')}</option><option value="dropbox">{t('mount.providerDropbox')}</option></select></label>
+          <label>{t('mount.storageType')}<select value={storageType} disabled={Boolean(mount)} onChange={(event) => setStorageType(event.target.value as StorageType)}><option value="s3">{t('mount.s3Compatible')}</option><option value="onedrive">{t('mount.providerOneDrive')}</option><option value="google">{t('mount.providerGoogleDrive')}</option><option value="dropbox">{t('mount.providerDropbox')}</option><option value="pikpak">{t('mount.providerPikPak')}</option></select></label>
           <label>{t('mount.displayName')}<input ref={nameInput} value={name} onChange={(event) => setName(event.target.value)} required /></label>
           <label>{t('mount.mountPath')}<input value={mountPath} onChange={(event) => setMountPath(event.target.value)} placeholder="/archive" required /></label>
           {storageType === 's3' ? <>
@@ -110,14 +135,24 @@ export function MountDialog({ mount, active = true, busy, error, onClose, onSubm
             <label>{t('mount.addressing')}<select value={addressingMode} onChange={(event) => setAddressingMode(event.target.value as 'path' | 'virtual-hosted')}><option value="path">{t('mount.pathStyle')}</option><option value="virtual-hosted">{t('mount.virtualHosted')}</option></select></label>
             <label>{t('mount.accessKeyId')}<input autoComplete="off" value={accessKeyId} onChange={(event) => setAccessKeyId(event.target.value)} required={!mount} /></label>
             <label>{t('mount.secretAccessKey')}<input type="password" autoComplete="new-password" value={secretAccessKey} onChange={(event) => setSecretAccessKey(event.target.value)} required={!mount} placeholder={mount ? t('mount.keepExistingSecret') : ''} /></label>
+          </> : storageType === 'pikpak' ? <>
+            <label>{t('mount.rootFolderId')}<input value={rootItemId} onChange={(event) => setRootItemId(event.target.value)} placeholder="root" /></label>
+            <label>{t('mount.pikPakUsername')}<input autoComplete="username" value={pikPakUsername} onChange={(event) => setPikPakUsername(event.target.value)} placeholder={mount ? t('mount.keepExistingSecret') : ''} /></label>
+            <label>{t('mount.pikPakPassword')}<input type="password" autoComplete="new-password" value={pikPakPassword} onChange={(event) => setPikPakPassword(event.target.value)} placeholder={mount ? t('mount.keepExistingSecret') : ''} /></label>
+            <label>{t('mount.pikPakRefreshToken')}<input type="password" autoComplete="new-password" value={pikPakRefreshToken} onChange={(event) => setPikPakRefreshToken(event.target.value)} placeholder={mount ? t('mount.keepExistingSecret') : t('mount.pikPakRefreshTokenHint')} /></label>
+            <label><input type="checkbox" checked={useTrash} onChange={(event) => setUseTrash(event.target.checked)} />{t('mount.pikPakUseTrash')}</label>
+            <div className="oneDriveConnectNote">{t('mount.pikPakAuthorizationHint')}</div>
           </> : <>
             {storageType === 'google' || storageType === 'dropbox' ? <label>{t('mount.rootFolderId')}<input value={rootItemId} onChange={(event) => setRootItemId(event.target.value)} /></label> : null}
+            <label>{t('mount.oauthClientId')}<input autoComplete="off" value={clientId} onChange={(event) => setClientId(event.target.value)} placeholder={mount?.credentialStatus?.fields.clientIdConfigured ? t('mount.configuredSecret') : ''} /></label>
+            <label>{t('mount.oauthClientSecret')}<input type="password" autoComplete="new-password" value={clientSecret} onChange={(event) => setClientSecret(event.target.value)} placeholder={mount?.credentialStatus?.fields.clientSecretConfigured ? t('mount.configuredSecret') : ''} /></label>
+            {mount?.credentialStatus?.source === 'legacy' ? <div className="oneDriveConnectNote">{t('mount.legacyCredentialsWarning')}</div> : null}
             <div className="oneDriveConnectNote">{storageType === 'google' ? t('mount.googleDriveAuthorizationHint') : storageType === 'dropbox' ? t('mount.dropboxAuthorizationHint') : t('mount.oneDriveAuthorizationHint')}</div>
           </>}
         </div>
         <div className="mountSwitches"><label><input type="checkbox" checked={enabled} onChange={(event) => setEnabled(event.target.checked)} />{t('common.enabled')}</label><label><input type="checkbox" checked={isPublic} onChange={(event) => setIsPublic(event.target.checked)} />{t('mount.visibleToGuests')}</label></div>
         {error ? <div className="formError" role="alert">{error}</div> : null}
-        <footer><button className="button" type="button" onClick={onClose}>{t('action.cancel')}</button><button ref={submitButtonRef} className="button primary" type="submit" disabled={busy}>{mount ? t('mount.saveChanges') : storageType !== 's3' ? t('mount.createAndConnect') : t('mount.createMount')}</button></footer>
+        <footer><button className="button" type="button" onClick={onClose}>{t('action.cancel')}</button><button ref={submitButtonRef} className="button primary" type="submit" disabled={busy}>{mount ? t('mount.saveChanges') : storageType === 'onedrive' || storageType === 'google' || storageType === 'dropbox' ? t('mount.createAndConnect') : t('mount.createMount')}</button></footer>
       </form>
     </section>
   </div>;

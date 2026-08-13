@@ -39,7 +39,7 @@ describe('Dropbox token lifecycle', () => {
       getDropboxAccessToken(workerEnv(), mountId),
     ])).resolves.toEqual(['shared-dropbox-access', 'shared-dropbox-access']);
     expect(tokenFetch).toHaveBeenCalledOnce();
-    await expect(getCredentials(workerEnv(), mountId)).resolves.toMatchObject({ refreshToken: 'dropbox-refresh-1' });
+    await expect(getCredentials(workerEnv(), mountId)).resolves.toMatchObject({ auth: { refreshToken: 'dropbox-refresh-1' } });
   });
 
   it('does not expose token endpoint details', async () => {

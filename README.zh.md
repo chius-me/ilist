@@ -23,6 +23,8 @@
 - 支持多个 OneDrive 账户，每个账户都可挂载到自定义的顶层路径
 - 支持多个 Google My Drive 账户或根目录，每个挂载独立授权并使用自定义顶层路径
 - 支持多个 Dropbox 账户或根目录，并使用 PKCE OAuth 和加密刷新令牌
+- 支持从 `/admin/storages` 管理每个挂载独立的 OAuth 应用凭据，并兼容旧版 Worker secret 回退
+- 支持 PikPak 挂载、加密会话、浏览、原文件下载和文件管理
 - 支持使用 AWS Signature Version 4 的 S3 兼容挂载
 - 支持通过 S3 凭据或内置 Worker 绑定使用 Cloudflare R2
 - 支持公开目录浏览、稳定文件链接、下载和常见文件预览
@@ -42,6 +44,7 @@
 | OneDrive Personal | ✓ | ✓ | ✓ | ✓ | 支持可续传上传；仅支持个人 Microsoft 账户 |
 | Google My Drive | ✓ | ✓ | ✓ | ✓ | 支持 Range 下载、可续传上传以及 Docs/Sheets/Slides 导出 |
 | Dropbox | ✓ | ✓ | ✓ | ✓ | 支持 Range 下载、可续传上传、文件夹复制和云端文件导出 |
+| PikPak | ✓ | — | ✓ | ✓ | 代理原文件下载；暂不声明上传和复制能力 |
 | Cloudflare R2 绑定 | ✓ | ✓ | ✓ | ✓ | 内置兼容挂载；仅支持单请求上传 |
 | 通过 S3 接入 Cloudflare R2 | ✓ | ✓ | ✓ | ✓ | 使用 R2 S3 端点和限定范围凭据进行 multipart 上传 |
 | 其他 S3 兼容存储 | ✓ | ✓ | ✓ | ✓ | multipart 兼容性取决于提供商的 S3 实现 |
@@ -109,18 +112,12 @@ Worker 作为控制平面，在可能的情况下对文件数据进行流式传�
    npx wrangler secret put ADMIN_PASSWORD_HASH
    ```
 
-6. **存储全部十个必需的 Worker secret。** 使用生成的值和提供商应用值，通过 `npx wrangler secret put` 写入：
+6. **存储四个必需的基础设施 Worker secret。** 提供商凭据在 `/admin/storages` 中按挂载输入：
 
    ```bash
    npx wrangler secret put ADMIN_PASSWORD_HASH
    npx wrangler secret put CREDENTIAL_MASTER_KEY
    npx wrangler secret put SESSION_SECRET
-   npx wrangler secret put MICROSOFT_CLIENT_ID
-   npx wrangler secret put MICROSOFT_CLIENT_SECRET
-   npx wrangler secret put GOOGLE_CLIENT_ID
-   npx wrangler secret put GOOGLE_CLIENT_SECRET
-   npx wrangler secret put DROPBOX_CLIENT_ID
-   npx wrangler secret put DROPBOX_CLIENT_SECRET
    npx wrangler secret put PUBLIC_ORIGIN
    ```
 
@@ -137,13 +134,15 @@ Worker 作为控制平面，在可能的情况下对文件数据进行流式传�
 
 ## 存储设置
 
-登录后打开 `/admin/storages`。每个挂载都有自己的显示名称、顶层挂载路径、提供商及加密凭据、公开或私有可见性、启用状态以及可选的提供商根路径。删除或断开挂载只会移除 ilist 的配置和凭据，不会删除提供商账户、存储桶、云盘或已存储对象。
+登录后打开 `/admin/storages`。每个挂载都有自己的显示名称、顶层挂载路径、提供商及加密凭据、公开或私有可见性、启用状态以及可选的提供商根路径。断开连接只会移除账户授权，并保留可复用的应用/提供商配置；删除挂载会移除 ilist 挂载及其全部凭据。两者都不会删除提供商账户、存储桶、云盘或已存储对象。
 
-对于 OneDrive Personal，请遵循 [docs/onedrive-setup.md](docs/onedrive-setup.md)。使用一个仅配置为个人 Microsoft 账户的 Microsoft Entra 应用，并设置 Web 重定向 URI `https://ilist.chius.cc/api/admin/oauth/onedrive/callback` 以及委托的 Graph 权限 `User.Read` 和 `Files.ReadWrite`。在确认自定义域名授权流程正常前，请保留现有的 `https://ilist.chius.workers.dev/api/admin/oauth/onedrive/callback` URI。
+对于 OneDrive Personal，请遵循 [docs/onedrive-setup.md](docs/onedrive-setup.md)。使用一个仅配置为个人 Microsoft 账户的 Microsoft Entra 应用，并设置 Web 重定向 URI `https://ilist.chius.cc/api/admin/oauth/onedrive/callback` 以及委托的 Graph 权限 `User.Read` 和 `Files.ReadWrite`，然后在 `/admin/storages` 输入应用凭据。
 
-对于 Google Drive，请遵循 [docs/google-drive-setup.md](docs/google-drive-setup.md)。启用 Google Drive API，创建 Web OAuth 客户端，将重定向 URI 设置为 `https://ilist.chius.cc/api/admin/oauth/google/callback`，并配置 `GOOGLE_CLIENT_ID` 与 `GOOGLE_CLIENT_SECRET`。在确认自定义域名授权流程正常前，请保留现有的 `https://ilist.chius.workers.dev/api/admin/oauth/google/callback` URI。ilist 请求 `https://www.googleapis.com/auth/drive`；开发阶段应让 OAuth consent screen 保持 Testing 并明确添加测试用户，对外提供服务前需完成 Google 要求的生产验证。
+对于 Google Drive，请遵循 [docs/google-drive-setup.md](docs/google-drive-setup.md)。启用 Google Drive API，创建 Web OAuth 客户端，将重定向 URI 设置为 `https://ilist.chius.cc/api/admin/oauth/google/callback`，并在 `/admin/storages` 输入客户端 ID 和密钥。
 
-对于 Dropbox，请遵循 [docs/dropbox-setup.md](docs/dropbox-setup.md)。创建 scoped Dropbox 应用，注册 `https://ilist.chius.cc/api/admin/oauth/dropbox/callback`，启用文件 metadata/content 的读写四项 scope，并配置 `DROPBOX_CLIENT_ID` 与 `DROPBOX_CLIENT_SECRET`。
+对于 Dropbox，请遵循 [docs/dropbox-setup.md](docs/dropbox-setup.md)。创建 scoped Dropbox 应用，注册 `https://ilist.chius.cc/api/admin/oauth/dropbox/callback`，启用文件 metadata/content 的读写四项 scope，并在 `/admin/storages` 输入应用密钥。
+
+对于 PikPak，请遵循 [docs/pikpak-setup.md](docs/pikpak-setup.md)。账户会话按挂载加密保存，密码不会被保留。
 
 对于通过 S3 使用 Cloudflare R2 的情况，请使用：
 
@@ -225,7 +224,7 @@ npm run dev
 | `CLOUDFLARE_API_TOKEN` | 具备本账户 Workers、Workers Routes / Custom Domains 与 D1 编辑权限的 API token |
 | `CLOUDFLARE_ACCOUNT_ID` | 拥有 `ilist` Worker、`ilist-d1` D1 与 `ilist-r2` R2 的 Cloudflare 账户 ID |
 
-不要把 `ADMIN_PASSWORD_HASH`、`CREDENTIAL_MASTER_KEY`、OAuth client secret 或其他 Worker secret 放进 GitHub；它们只应作为 Cloudflare Worker secret 保存。
+不要把 `ADMIN_PASSWORD_HASH`、`CREDENTIAL_MASTER_KEY`、OAuth client secret 或其他密钥放进 GitHub。基础设施密钥保存在 Cloudflare Worker secret 中；通过 WebUI 输入的提供商凭据会加密保存在 D1 中。
 
 ## 安全
 
@@ -285,6 +284,7 @@ src/
       onedrive/               Microsoft Graph 驱动和 OAuth 令牌
       google/                 Google Drive API 驱动和 OAuth 令牌
       dropbox/                Dropbox API v2 驱动和 OAuth 令牌
+      pikpak/                 PikPak 驱动、会话令牌和下载代理
       s3/                     S3 兼容驱动和 SigV4 客户端
 migrations/                   D1 数据库结构迁移
 tests/worker/                 Worker 运行时测试

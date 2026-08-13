@@ -3,6 +3,17 @@ import type { Env } from './types';
 
 export type StorageCredentials = Record<string, unknown>;
 
+export interface OAuthApplicationCredentials extends StorageCredentials {
+  clientId: string;
+  clientSecret: string;
+}
+
+export interface MountSecrets extends StorageCredentials {
+  app?: StorageCredentials;
+  auth?: StorageCredentials;
+  provider?: StorageCredentials;
+}
+
 interface StorageCredentialRow {
   ciphertext: string;
 }
@@ -36,6 +47,80 @@ export function prepareDeleteCredentials(db: D1Database, mountId: string): D1Pre
 
 export async function putCredentials(env: Env, mountId: string, credentials: StorageCredentials): Promise<void> {
   await (await preparePutCredentials(env, mountId, credentials)).run();
+}
+
+function mergeSecretRecord(
+  current: StorageCredentials,
+  patch: StorageCredentials,
+): StorageCredentials {
+  const merged: StorageCredentials = { ...current };
+  for (const [key, value] of Object.entries(patch)) {
+    if (value === undefined) continue;
+    if (value === null) {
+      delete merged[key];
+      continue;
+    }
+    const prior = merged[key];
+    if (isStorageCredentials(prior) && isStorageCredentials(value)) {
+      const nested = mergeSecretRecord(prior, value);
+      if (Object.keys(nested).length) merged[key] = nested;
+      else delete merged[key];
+      continue;
+    }
+    merged[key] = value;
+  }
+  return merged;
+}
+
+/**
+ * Applies explicit patch semantics to an encrypted mount credential document.
+ * Omitted/undefined fields are retained and null removes a field.
+ */
+export async function patchCredentials(
+  env: Env,
+  mountId: string,
+  patch: StorageCredentials,
+): Promise<StorageCredentials> {
+  const next = mergeSecretRecord(await getCredentials(env, mountId) ?? {}, patch);
+  if (Object.keys(next).length === 0) await deleteCredentials(env, mountId);
+  else await putCredentials(env, mountId, next);
+  return next;
+}
+
+export function nestedSecrets(
+  credentials: StorageCredentials | null,
+  section: 'app' | 'auth' | 'provider',
+): StorageCredentials {
+  const value = credentials?.[section];
+  return isStorageCredentials(value) ? value : {};
+}
+
+export function oauthApplicationCredentials(
+  credentials: StorageCredentials | null,
+): OAuthApplicationCredentials | null {
+  const app = nestedSecrets(credentials, 'app');
+  if (typeof app.clientId !== 'string' || !app.clientId || typeof app.clientSecret !== 'string' || !app.clientSecret) {
+    return null;
+  }
+  return { clientId: app.clientId, clientSecret: app.clientSecret };
+}
+
+/** Reads the nested auth document, with a flat-document fallback for pre-v0.3 credentials. */
+export function authorizationSecrets(credentials: StorageCredentials | null): StorageCredentials {
+  const nested = nestedSecrets(credentials, 'auth');
+  if (Object.keys(nested).length) return nested;
+  if (!credentials) return {};
+  const result: StorageCredentials = {};
+  for (const key of ['accessToken', 'refreshToken', 'tokenType', 'expiresAt', 'scope']) {
+    if (credentials[key] !== undefined) result[key] = credentials[key];
+  }
+  return result;
+}
+
+/** Reads provider secrets, with a flat-document fallback for existing S3 credentials. */
+export function providerSecrets(credentials: StorageCredentials | null): StorageCredentials {
+  const nested = nestedSecrets(credentials, 'provider');
+  return Object.keys(nested).length ? nested : credentials ?? {};
 }
 
 export async function getCredentials<T extends StorageCredentials = StorageCredentials>(env: Env, mountId: string): Promise<T | null> {

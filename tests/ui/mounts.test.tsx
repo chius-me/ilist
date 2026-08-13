@@ -279,12 +279,40 @@ describe('MountManager', () => {
     await userEvent.selectOptions(screen.getByLabelText('Storage type'), 'onedrive');
     await userEvent.type(screen.getByLabelText('Display name'), 'Personal drive');
     await userEvent.type(screen.getByLabelText('Mount path'), '/personal');
+    await userEvent.type(screen.getByLabelText('OAuth client ID / app key'), 'mount-client-id');
+    await userEvent.type(screen.getByLabelText('OAuth client secret / app secret'), 'mount-client-secret');
     await userEvent.click(screen.getByRole('button', { name: 'Create and connect' }));
 
     await waitFor(() => expect(navigate).toHaveBeenCalledWith('/api/admin/oauth/onedrive/start?mountId=onedrive-1'));
     expect(submitted).toMatchObject({
       name: 'Personal drive', mountPath: '/personal', driverType: 'onedrive', provider: 'microsoft-onedrive-personal', config: {},
+      credentials: { clientId: 'mount-client-id', clientSecret: 'mount-client-secret' },
     });
+  });
+
+  it('switches to the PikPak form and submits session input without retaining it in config', async () => {
+    let submitted: Record<string, unknown> | null = null;
+    vi.stubGlobal('fetch', vi.fn(async (_input: RequestInfo | URL, init?: RequestInit) => {
+      if (!init?.method) return Response.json({ ok: true, data: [] });
+      submitted = JSON.parse(String(init.body));
+      return Response.json({ ok: true, data: { ...savedMount, id: 'pikpak-1', driverType: 'pikpak', provider: 'pikpak', config: { useTrash: true } } });
+    }));
+
+    render(<AppProviders><MountManager onBack={vi.fn()} /></AppProviders>);
+    await userEvent.click(await screen.findByRole('button', { name: 'Add storage' }));
+    await userEvent.selectOptions(screen.getByLabelText('Storage type'), 'pikpak');
+    await userEvent.type(screen.getByLabelText('Display name'), 'PikPak files');
+    await userEvent.type(screen.getByLabelText('Mount path'), '/pikpak');
+    await userEvent.type(screen.getByLabelText('Username / email / phone'), 'user@example.com');
+    await userEvent.type(screen.getByLabelText('Password'), 'temporary-password');
+    await userEvent.click(screen.getByRole('button', { name: 'Create mount' }));
+
+    await waitFor(() => expect(submitted).not.toBeNull());
+    expect(submitted).toMatchObject({
+      driverType: 'pikpak', provider: 'pikpak', config: { useTrash: true },
+      credentials: { username: 'user@example.com', password: 'temporary-password' },
+    });
+    expect((submitted! as { config: Record<string, unknown> }).config).not.toHaveProperty('password');
   });
 
   it('creates a named Google mount with an optional root folder before starting OAuth', async () => {

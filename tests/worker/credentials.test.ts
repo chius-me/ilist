@@ -61,6 +61,22 @@ describe('storage credentials', () => {
     await expect(getCredentials(workerEnv(), mountId)).resolves.toBeNull();
   });
 
+  it('patches one secret section without erasing unrelated application or account state', async () => {
+    const { getCredentials, patchCredentials, putCredentials } = await import('../../src/worker/credentials');
+    const mountId = await createTestMount();
+    await putCredentials(workerEnv(), mountId, {
+      app: { clientId: 'client', clientSecret: 'secret' },
+      auth: { accessToken: 'access', refreshToken: 'refresh' },
+    });
+
+    await patchCredentials(workerEnv(), mountId, { app: { clientSecret: 'replacement' } });
+
+    await expect(getCredentials(workerEnv(), mountId)).resolves.toEqual({
+      app: { clientId: 'client', clientSecret: 'replacement' },
+      auth: { accessToken: 'access', refreshToken: 'refresh' },
+    });
+  });
+
   it('rejects a credential envelope decrypted with another key', async () => {
     const { decryptCredential, encryptCredential } = await import('../../src/worker/crypto');
     const envelope = await encryptCredential({ secretAccessKey: 'secret' }, masterKey, 'mount-a');

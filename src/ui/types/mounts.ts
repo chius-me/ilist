@@ -1,4 +1,11 @@
-export type MountDriverType = 's3' | 'onedrive' | 'google' | 'dropbox' | 'native-r2';
+export type MountDriverType = 's3' | 'onedrive' | 'google' | 'dropbox' | 'pikpak' | 'native-r2';
+
+export interface MountCredentialStatus {
+  appConfigured: boolean;
+  connected: boolean;
+  source: 'mount' | 'legacy' | 'none';
+  fields: Record<string, boolean>;
+}
 
 export interface S3MountConfig {
   endpoint: string;
@@ -22,6 +29,7 @@ export interface Mount {
   createdAt: string;
   updatedAt: string;
   connected: boolean;
+  credentialStatus: MountCredentialStatus;
 }
 
 interface BaseMountInput {
@@ -44,18 +52,28 @@ export interface OneDriveMountInput extends BaseMountInput {
   driverType: 'onedrive';
   provider: 'microsoft-onedrive-personal';
   config: Record<string, never>;
+  credentials?: { clientId?: string; clientSecret?: string };
 }
 
 export interface GoogleMountInput extends BaseMountInput {
   driverType: 'google';
   provider: 'google';
   config: Record<string, never>;
+  credentials?: { clientId?: string; clientSecret?: string };
 }
 
 export interface DropboxMountInput extends BaseMountInput {
   driverType: 'dropbox';
   provider: 'dropbox';
   config: Record<string, never>;
+  credentials?: { clientId?: string; clientSecret?: string };
 }
 
-export type MountInput = S3MountInput | OneDriveMountInput | GoogleMountInput | DropboxMountInput;
+export interface PikPakMountInput extends BaseMountInput {
+  driverType: 'pikpak';
+  provider: 'pikpak';
+  config: { useTrash: boolean };
+  credentials?: { username?: string; password?: string; refreshToken?: string };
+}
+
+export type MountInput = S3MountInput | OneDriveMountInput | GoogleMountInput | DropboxMountInput | PikPakMountInput;

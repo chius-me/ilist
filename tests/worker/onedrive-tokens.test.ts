@@ -36,9 +36,9 @@ describe('OneDrive token lifecycle', () => {
       })));
 
     await expect(getOneDriveAccessToken(workerEnv(), mountId)).resolves.toBe('access-2');
-    await expect(getCredentials(workerEnv(), mountId)).resolves.toMatchObject({
+    await expect(getCredentials(workerEnv(), mountId)).resolves.toMatchObject({ auth: {
       accessToken: 'access-2', refreshToken: 'refresh-2', tokenType: 'Bearer',
-    });
+    } });
   });
 
   it('coalesces concurrent refreshes and releases its D1 lease', async () => {

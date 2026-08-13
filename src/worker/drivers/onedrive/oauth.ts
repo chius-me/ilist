@@ -1,6 +1,7 @@
 import { HttpError } from '../../http';
 import { consumeOAuthState, createOAuthState, publicOrigin } from '../../oauth-core';
 import type { Env } from '../../types';
+import { resolveOAuthApplication } from '../../oauth-credentials';
 
 export const ONEDRIVE_SCOPES = 'offline_access User.Read Files.ReadWrite';
 export const ONEDRIVE_AUTHORIZE_URL = 'https://login.microsoftonline.com/consumers/oauth2/v2.0/authorize';
@@ -19,10 +20,11 @@ export function oneDriveCallbackUrl(env: Env): string {
 }
 
 export async function createOneDriveAuthorization(env: Env, mountId: string, now = Date.now()): Promise<string> {
+  const application = await resolveOAuthApplication(env, mountId, 'onedrive');
   const { state, challenge } = await createOAuthState(env, mountId, now);
 
   const authorization = new URL(ONEDRIVE_AUTHORIZE_URL);
-  authorization.searchParams.set('client_id', env.MICROSOFT_CLIENT_ID);
+  authorization.searchParams.set('client_id', application.clientId);
   authorization.searchParams.set('response_type', 'code');
   authorization.searchParams.set('redirect_uri', oneDriveCallbackUrl(env));
   authorization.searchParams.set('response_mode', 'query');
@@ -45,12 +47,14 @@ export { publicOrigin } from '../../oauth-core';
 
 export async function requestOneDriveTokens(
   env: Env,
+  mountId: string,
   parameters: Record<string, string>,
   fetcher: typeof fetch = fetch,
 ): Promise<OneDriveTokenResponse> {
+  const application = await resolveOAuthApplication(env, mountId, 'onedrive');
   const body = new URLSearchParams({
-    client_id: env.MICROSOFT_CLIENT_ID,
-    client_secret: env.MICROSOFT_CLIENT_SECRET,
+    client_id: application.clientId,
+    client_secret: application.clientSecret,
     ...parameters,
   });
   let response: Response;

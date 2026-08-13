@@ -17,6 +17,7 @@ function providerName(mount: Mount, t: ReturnType<typeof useI18n>['t']): string 
   if (mount.driverType === 'onedrive') return t('mount.providerOneDrive');
   if (mount.driverType === 'google') return t('mount.providerGoogleDrive');
   if (mount.driverType === 'dropbox') return t('mount.providerDropbox');
+  if (mount.driverType === 'pikpak') return t('mount.providerPikPak');
   if (mount.provider === 'cloudflare-r2') return 'Cloudflare R2';
   if (mount.provider === 'aws-s3') return 'AWS S3';
   if (mount.provider === 'backblaze-b2') return 'Backblaze B2';
@@ -241,7 +242,8 @@ export function MountManager(props: MountManagerProps) {
             {isOAuthMount(mount) ? <>
               <button type="button" onClick={(event) => selectMountAction(event, () => navigate(connectUrl(mount)))}><Link aria-hidden="true" size={16} />{mount.connected ? t('mount.reconnect') : t('mount.connect')}</button>
               {mount.connected ? <button type="button" onClick={(event) => selectMountAction(event, () => setDisconnecting(mount))}><Link2Off aria-hidden="true" size={16} />{t('mount.disconnect')}</button> : null}
-            </> : <button type="button" onClick={(event) => selectMountAction(event, () => void test(mount))}><RefreshCw aria-hidden="true" size={16} />{t('mount.test')}</button>}
+            </> : null}
+            <button type="button" onClick={(event) => selectMountAction(event, () => void test(mount))}><RefreshCw aria-hidden="true" size={16} />{t('mount.test')}</button>
             <button type="button" disabled={busy} onClick={(event) => selectMountAction(event, () => void toggle(mount))}><CirclePower aria-hidden="true" size={16} />{mount.enabled ? t('mount.disable') : t('mount.enable')}</button>
             <button type="button" onClick={(event) => selectMountAction(event, () => setEditing(mount))}><Pencil aria-hidden="true" size={16} />{t('mount.edit')}</button>
             <button className="destructive" type="button" onClick={(event) => selectMountAction(event, () => setDeleting(mount))}><Trash2 aria-hidden="true" size={16} />{t('mount.delete')}</button>
