@@ -56,7 +56,8 @@ export class PikPakClient {
     url.searchParams.set('limit', '500');
     url.searchParams.set('with_audit', 'true');
     if (parentId !== 'root') url.searchParams.set('parent_id', parentId);
-    if (cursor) url.searchParams.set('page_token', cursor);
+    // PikPak distinguishes an explicit empty first-page token from an omitted parameter.
+    url.searchParams.set('page_token', cursor ?? '');
     url.searchParams.set('filters', JSON.stringify({ phase: { eq: 'PHASE_TYPE_COMPLETE' }, trashed: { eq: false } }));
     return this.requestJson<PikPakFileList>(url, { method: 'GET' });
   }
