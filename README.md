@@ -295,6 +295,11 @@ docs/                         Setup and implementation documentation
 - Cross-mount copy and move
 - Additional storage drivers and background operations
 
+## Contributors
+
+- [chius](https://github.com/chius-me)
+- [Grok](https://grok.com) (xAI)
+
 ## Contributing
 
 Run `npm run check` before submitting a change. Keep provider credentials, local variables, D1 exports, and temporary uploads out of Git. Update the relevant documentation when changing storage behavior or deployment requirements.

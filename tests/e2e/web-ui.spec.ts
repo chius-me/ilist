@@ -134,7 +134,7 @@ test('mobile command bar fits and search expands left from the search control', 
     iconBoxes.push(box!);
   }
   expect((await sort.boundingBox())!.width).toBeGreaterThan(64);
-  expect(await sort.evaluate((el: HTMLSelectElement) => el.scrollWidth <= el.clientWidth + 1)).toBe(true);
+  expect(await sort.evaluate((el) => el.scrollWidth <= el.clientWidth + 1)).toBe(true);
   expect(Math.max(...iconBoxes.map((box) => box.y)) - Math.min(...iconBoxes.map((box) => box.y))).toBeLessThanOrEqual(1);
 
   await searchButton.click();
@@ -172,7 +172,7 @@ test('explorer chrome keeps search on the action side and sort labels unclipped'
   await expect(sort.getByRole('option', { name: 'Name' })).toHaveCount(1);
   await expect(sort.getByRole('option', { name: 'Size' })).toHaveCount(1);
   await expect(sort.getByRole('option', { name: 'Modified' })).toHaveCount(1);
-  expect(await sort.evaluate((el: HTMLSelectElement) => el.scrollWidth <= el.clientWidth + 1)).toBe(true);
+  expect(await sort.evaluate((el) => el.scrollWidth <= el.clientWidth + 1)).toBe(true);
 
   await page.getByRole('button', { name: 'Search this folder' }).click();
   const search = page.getByRole('textbox', { name: 'Search this folder' });
