@@ -299,11 +299,6 @@ docs/                         配置与实现文档
 - 跨挂载复制和移动
 - 更多存储驱动和后台操作
 
-## 贡献者
-
-- [chius](https://github.com/chius-me)
-- [Grok](https://grok.com) (xAI)
-
 ## 贡献
 
 提交变更前运行 `npm run check`。不要将提供商凭据、本地变量、D1 导出文件和临时上传文件放入 Git。修改存储行为或部署要求时，请同步更新相关文档。
