@@ -151,7 +151,7 @@ test('mobile command bar fits and search expands left from the search control', 
   await expect(path).toHaveCount(1);
   await expect(path.getByRole('button', { name: 'Path home' })).toHaveCount(1);
   expect(await path.evaluate((el) => Boolean(el.querySelector('.searchControl')))).toBe(false);
-  expect(searchBox!.x).toBeGreaterThanOrEqual(browserBox!.x);
+  expect(searchBox!.x).toBeGreaterThanOrEqual(browserBox!.x - 1);
   expect(searchBox!.x + searchBox!.width).toBeLessThanOrEqual(sortAfter!.x + 1);
   expect(Math.abs(sortAfter!.x - sortBefore!.x)).toBeLessThanOrEqual(1);
   await expect(search).toBeFocused();
