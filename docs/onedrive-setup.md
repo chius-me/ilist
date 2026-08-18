@@ -57,7 +57,7 @@ Migrations `0008` through `0014` add mounts, encrypted credentials, the native R
 ## 4. Connect drives
 
 1. Sign in to ilist and open `/admin/storages`.
-2. Select **Add storage**, choose **OneDrive Personal**, and enter a unique display name, mount path, application client ID, and client secret.
+2. Select **Add storage**, choose **OneDrive Personal**, and enter a unique display name, mount path, application client ID, and client secret. Leave **Root folder ID** blank to mount the OneDrive drive root, or enter a Graph item ID to restrict the mount to that folder.
 3. Select **Create and connect**, sign in to Microsoft, and grant the requested access.
 4. Return to storage settings and run the connection test.
 5. Repeat with a different name and path to mount another personal account.

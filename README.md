@@ -2,7 +2,7 @@
 
 <div align="center">
 
-# ilist
+# iList
 
 Self-hosted file index and manager for Cloudflare Workers.
 

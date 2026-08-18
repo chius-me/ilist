@@ -85,7 +85,7 @@ export async function listExternalDirectory(
   let current = await driver.stat(driver.rootId);
   const mountPath = encodedMountPath(mount);
   const breadcrumbs: Breadcrumb[] = [
-    { id: 'virtual-root', name: 'ilist', path: '/' },
+    { id: 'virtual-root', name: 'iList', path: '/' },
     { id: encodeExternalId(mount.id, driver.rootId), name: mount.name, path: mountPath },
   ];
   const pathSegments: string[] = [];

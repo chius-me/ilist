@@ -65,7 +65,7 @@ function virtualRootEntry(): Entry {
   return {
     id: VIRTUAL_ROOT_ID,
     parentId: null,
-    name: 'ilist',
+    name: 'iList',
     kind: 'folder',
     size: 0,
     contentType: null,
@@ -117,7 +117,7 @@ function encodedMountPath(mount: Mount): string {
 function mountedBreadcrumbs(mount: Mount, breadcrumbs: Breadcrumb[]): Breadcrumb[] {
   const mountPath = encodedMountPath(mount);
   return [
-    { id: VIRTUAL_ROOT_ID, name: 'ilist', path: '/' },
+    { id: VIRTUAL_ROOT_ID, name: 'iList', path: '/' },
     { id: mount.id, name: mount.name, path: mountPath },
     ...breadcrumbs.slice(1).map((breadcrumb) => ({
       ...breadcrumb,
@@ -136,7 +136,7 @@ export async function listVirtualDirectory(
   if (pathname === '/') {
     return {
       current: virtualRootEntry(),
-      breadcrumbs: [{ id: VIRTUAL_ROOT_ID, name: 'ilist', path: '/' }],
+      breadcrumbs: [{ id: VIRTUAL_ROOT_ID, name: 'iList', path: '/' }],
       items: mounts
         .filter((mount) => mount.enabled && (admin || mount.isPublic))
         .filter((mount) => {

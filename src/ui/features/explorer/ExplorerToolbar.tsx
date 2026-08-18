@@ -137,21 +137,23 @@ export function ExplorerToolbar({
   return (
     <section className="explorerToolbar" aria-label={t('toolbar.controls')}>
       <div className="toolbarPath">
-        {searchOpen ? <label ref={searchControl} className="searchControl searchOverlay">
-          <Search aria-hidden="true" size={17} />
-          <span className="srOnly">{t('toolbar.search')}</span>
-          <input ref={searchInput} value={query} onChange={(event) => onQuery(event.target.value)} onKeyDown={(event) => {
-            if (event.key === 'Escape') {
-              event.preventDefault();
-              closeSearch();
-            }
-          }} placeholder={t('toolbar.search')} />
-        </label> : <Breadcrumbs items={breadcrumbs} onOpen={onOpenPath} />}
+        <Breadcrumbs items={breadcrumbs} onOpen={onOpenPath} />
       </div>
       <div className="toolbarActions">
-        {!searchOpen ? <button ref={searchButton} className="iconButton" type="button" title={t('toolbar.search')} aria-label={t('toolbar.search')} onClick={() => setSearchOpen(true)}>
-          <Search aria-hidden="true" size={17} />
-        </button> : null}
+        <div className={`searchCluster${searchOpen ? ' isOpen' : ''}`}>
+          {searchOpen ? <label ref={searchControl} className="searchControl">
+            <Search aria-hidden="true" size={17} />
+            <span className="srOnly">{t('toolbar.search')}</span>
+            <input ref={searchInput} value={query} onChange={(event) => onQuery(event.target.value)} onKeyDown={(event) => {
+              if (event.key === 'Escape') {
+                event.preventDefault();
+                closeSearch();
+              }
+            }} placeholder={t('toolbar.search')} />
+          </label> : <button ref={searchButton} className="iconButton" type="button" title={t('toolbar.search')} aria-label={t('toolbar.search')} onClick={() => setSearchOpen(true)}>
+            <Search aria-hidden="true" size={17} />
+          </button>}
+        </div>
         <label className="sortControl">
           <span className="srOnly">{t('toolbar.sort')}</span>
           <select value={sort.field} onChange={updateSort} aria-label={t('toolbar.sort')}>

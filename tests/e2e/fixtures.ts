@@ -294,8 +294,8 @@ export async function installApiFixtures(page: Page, options: ApiFixtureOptions 
       data: {
         current: path === '/' ? current : { ...current, id: 'projects', name: '项目资料' },
         breadcrumbs: path === '/'
-          ? [{ id: 'root', name: 'ilist', path: '/' }]
-          : [{ id: 'root', name: 'ilist', path: '/' }, { id: 'projects', name: '项目资料', path }],
+          ? [{ id: 'root', name: 'iList', path: '/' }]
+          : [{ id: 'root', name: 'iList', path: '/' }, { id: 'projects', name: '项目资料', path }],
         items,
       },
     });
@@ -324,6 +324,11 @@ export async function installApiFixtures(page: Page, options: ApiFixtureOptions 
     return json(route, { ok: false, error: { code: 'METHOD_NOT_ALLOWED', message: 'Method not allowed' } }, 405);
   });
   await page.route('**/api/admin/mounts/**', (route) => json(route, { ok: true, data: mounts[0] }));
+  await page.route('**/api/admin/oauth/onedrive/start**', (route) => route.fulfill({
+    status: 200,
+    contentType: 'text/html',
+    body: '<!doctype html><title>OneDrive OAuth</title>',
+  }));
   await page.route('**/api/admin/oauth/google/start**', (route) => route.fulfill({
     status: 200,
     contentType: 'text/html',

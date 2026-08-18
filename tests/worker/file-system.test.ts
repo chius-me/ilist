@@ -81,7 +81,7 @@ describe('virtual mount file system', () => {
     const guest = await listVirtualDirectory(workerEnv(), '/R2', false);
     expect(guest.items.map((item) => item.name)).toEqual(['Public']);
     expect(guest.breadcrumbs).toEqual([
-      { id: 'virtual-root', name: 'ilist', path: '/' },
+      { id: 'virtual-root', name: 'iList', path: '/' },
       { id: 'native-r2', name: 'R2', path: '/R2' },
     ]);
 

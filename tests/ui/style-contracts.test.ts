@@ -82,8 +82,15 @@ describe('visual style contracts', () => {
     expect(explorer).toContain('.explorerToolbar { position: relative; display: flex; align-items: center; min-height: 54px;');
     expect(explorer).toMatch(/\.toolbarPath\s*\{[^}]*min-width: 0;[^}]*flex: 1 1 auto;[^}]*overflow: hidden;/);
     expect(explorer).toContain('.toolbarActions { position: relative; z-index: var(--layer-sticky); margin-left: auto;');
-    expect(explorer).toContain('.searchOverlay { width: 100%; min-width: 0; max-width: 360px; }');
-    expect(explorer).toMatch(/\.sortControl select\s*\{[\s\S]*?width: auto;[\s\S]*?max-width: 88px;/);
+    expect(explorer).toContain('.searchCluster {');
+    expect(explorer).toContain('--search-width: min(280px, 32vw);');
+    expect(explorer).toContain('transform-origin: right center;');
+    expect(explorer).toContain('animation: searchExpand var(--transition);');
+    expect(explorer).toContain('.searchCluster { width: 48px; height: 48px; flex-basis: 48px; }');
+    expect(explorer).toContain('.searchControl { --search-width: 80px; height: 48px; }');
+    expect(explorer).not.toContain('.searchOverlay { width: 100%; min-width: 0; max-width: 360px; }');
+    expect(explorer).toMatch(/\.sortControl select\s*\{[\s\S]*?width: auto;[\s\S]*?min-width: 7\.25em;/);
+    expect(explorer).not.toMatch(/\.sortControl select\s*\{[\s\S]*?max-width: 88px;/);
     expect(explorer).toContain('.explorerToolbar .iconButton, .mobileViewToggle button { width: 48px; height: 48px; flex-basis: 48px; }');
     expect(explorer).toContain('.desktopViewToggle, .desktopAdminActions { display: none; }');
     expect(explorer).toContain('.mobileViewToggle, .mobileAdminActions { display: inline-flex; }');
@@ -92,7 +99,8 @@ describe('visual style contracts', () => {
     expect(explorer).not.toContain('.toolbarActions { width: 100%; justify-content: flex-start; }');
     expect(explorer).toContain('.explorerPage { width: 100%; padding-top: 12px; }');
     expect(explorer).toContain('.explorerToolbar, .toolbarActions { gap: 0; }');
-    expect(explorer).toContain('.sortControl select { width: 64px; max-width: 64px;');
+    expect(explorer).not.toContain('.sortControl select { width: 64px; max-width: 64px;');
+    expect(explorer).toContain('.sortControl select { min-width: 7.25em; height: 48px;');
   });
 
   it('keeps the site header transparent and merges the toolbar into the file browser surface', () => {
@@ -105,8 +113,13 @@ describe('visual style contracts', () => {
     expect(explorer).toMatch(/\.explorerToolbar\s*\{[^}]*padding: 8px 10px;[^}]*\}/);
     expect(explorer).toMatch(/\.explorerContent\s*\{[^}]*border-top: 1px solid var\(--line\);[^}]*\}/);
     expect(explorer).toMatch(/\.explorerContent\s*\{[^}]*background: transparent;[^}]*\}/);
+    expect(explorer).not.toMatch(/\.explorerContent\s*\{[^}]*min-height:\s*240px;/);
+    expect(explorer).toMatch(/\.emptyState,\s*\.errorState\s*\{[^}]*min-height:\s*240px;/);
     expect(explorer).not.toMatch(/\.explorerContent\s*\{[^}]*\bborder: 1px solid var\(--line\);/);
     expect(explorer).not.toMatch(/\.explorerContent\s*\{[^}]*border-radius: var\(--radius-panel\);/);
+    expect(shell).toMatch(/\.languageControl\s*\{[\s\S]*?flex:\s*0 0 auto;/);
+    expect(shell).toMatch(/\.languageControl\s*\{[\s\S]*?white-space:\s*nowrap;/);
+    expect(shell).not.toContain('.languageControl span { display: none; }');
   });
 
   it('keeps tokenized shape and layer scales in tokens.css', () => {

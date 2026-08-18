@@ -22,7 +22,7 @@ const root = {
       capabilities: { open: true, preview: false, download: false, upload: false, createFolder: false, rename: false, move: false,
     copy: false, delete: false, changeVisibility: false },
     },
-    breadcrumbs: [{ id: 'root', name: 'ilist', path: '/' }],
+    breadcrumbs: [{ id: 'root', name: 'iList', path: '/' }],
     items: [
       {
         id: 'docs',
@@ -115,7 +115,10 @@ describe('ExplorerApp', () => {
     const list = within(controls).getByRole('button', { name: 'List view' });
 
     expect(controls).toContainElement(path);
-    expect(home).not.toHaveTextContent('ilist');
+    expect(home).not.toHaveTextContent('iList');
+    expect(within(sort).getByRole('option', { name: 'Name' })).toBeInTheDocument();
+    expect(within(sort).getByRole('option', { name: 'Size' })).toBeInTheDocument();
+    expect(within(sort).getByRole('option', { name: 'Modified' })).toBeInTheDocument();
     expect(path.compareDocumentPosition(search) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
     expect(search.compareDocumentPosition(sort) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
     expect(sort.compareDocumentPosition(direction) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
@@ -139,6 +142,23 @@ describe('ExplorerApp', () => {
 
     expect(screen.queryByRole('textbox', { name: 'Search this folder' })).not.toBeInTheDocument();
     expect(screen.getByRole('button', { name: 'Search this folder' })).toHaveFocus();
+  });
+
+  it('expands search from the actions cluster without replacing breadcrumbs', async () => {
+    render(<App />);
+    const controls = await screen.findByRole('region', { name: 'File controls' });
+    const path = await screen.findByRole('navigation', { name: 'Path' });
+    const home = await within(path).findByRole('button', { name: 'Path home' });
+    const actions = controls.querySelector('.toolbarActions');
+    expect(actions).not.toBeNull();
+    fireEvent.click(within(controls).getByRole('button', { name: 'Search this folder' }));
+
+    const input = screen.getByRole('textbox', { name: 'Search this folder' });
+    expect(path).toBeVisible();
+    expect(home).toBeVisible();
+    expect(actions).toContainElement(input);
+    expect(path).not.toContainElement(input);
+    expect(input.compareDocumentPosition(within(controls).getByRole('combobox', { name: 'Sort files' })) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
   });
 
   it('closes search when another command-bar control is used', async () => {
@@ -193,7 +213,7 @@ describe('ExplorerApp', () => {
       data: {
         ...root.data,
         current: { ...root.data.current, id: 'virtual-root', mountPath: null },
-        breadcrumbs: [{ id: 'virtual-root', name: 'ilist', path: '/' }],
+        breadcrumbs: [{ id: 'virtual-root', name: 'iList', path: '/' }],
         items: [{
           ...root.data.items[0],
           id: 'archive-mount',
@@ -209,7 +229,7 @@ describe('ExplorerApp', () => {
         ...root.data,
         current: { ...root.data.current, id: 'archive-root', mountPath: '/archive' },
         breadcrumbs: [
-          { id: 'virtual-root', name: 'ilist', path: '/' },
+          { id: 'virtual-root', name: 'iList', path: '/' },
           { id: 'archive-mount', name: 'Cold Storage', path: '/archive' },
         ],
         items: [{ ...root.data.items[0], id: 'reports', name: 'Reports', mountPath: '/archive' }],

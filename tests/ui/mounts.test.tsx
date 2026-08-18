@@ -279,14 +279,39 @@ describe('MountManager', () => {
     await userEvent.selectOptions(screen.getByLabelText('Storage type'), 'onedrive');
     await userEvent.type(screen.getByLabelText('Display name'), 'Personal drive');
     await userEvent.type(screen.getByLabelText('Mount path'), '/personal');
+    await userEvent.type(screen.getByLabelText('Root folder ID'), 'folder-root-id');
     await userEvent.type(screen.getByLabelText('OAuth client ID / app key'), 'mount-client-id');
     await userEvent.type(screen.getByLabelText('OAuth client secret / app secret'), 'mount-client-secret');
     await userEvent.click(screen.getByRole('button', { name: 'Create and connect' }));
 
     await waitFor(() => expect(navigate).toHaveBeenCalledWith('/api/admin/oauth/onedrive/start?mountId=onedrive-1'));
     expect(submitted).toMatchObject({
-      name: 'Personal drive', mountPath: '/personal', driverType: 'onedrive', provider: 'microsoft-onedrive-personal', config: {},
+      name: 'Personal drive', mountPath: '/personal', driverType: 'onedrive', provider: 'microsoft-onedrive-personal',
+      rootItemId: 'folder-root-id', config: {},
       credentials: { clientId: 'mount-client-id', clientSecret: 'mount-client-secret' },
+    });
+  });
+
+  it('edits an OneDrive mount root folder id', async () => {
+    const existing = { ...oneDriveMount, rootItemId: 'old-root', connected: true };
+    let submitted: Record<string, unknown> | null = null;
+    vi.stubGlobal('fetch', vi.fn(async (_input: RequestInfo | URL, init?: RequestInit) => {
+      if (!init?.method) return Response.json({ ok: true, data: [existing] });
+      submitted = JSON.parse(String(init.body));
+      return Response.json({ ok: true, data: { ...existing, rootItemId: 'new-root' } });
+    }));
+
+    render(<AppProviders><MountManager onBack={vi.fn()} /></AppProviders>);
+    await chooseAction('Personal drive', 'Edit');
+    const rootField = screen.getByLabelText('Root folder ID');
+    expect(rootField).toHaveValue('old-root');
+    await userEvent.clear(rootField);
+    await userEvent.type(rootField, 'new-root');
+    await userEvent.click(screen.getByRole('button', { name: 'Save changes' }));
+
+    await waitFor(() => expect(submitted).not.toBeNull());
+    expect(submitted).toMatchObject({
+      name: 'Personal drive', driverType: 'onedrive', rootItemId: 'new-root',
     });
   });
 

@@ -88,6 +88,7 @@ export function MountDialog({ mount, active = true, busy, error, onClose, onSubm
       void onSubmit({
         name, mountPath, driverType: 'onedrive', provider: 'microsoft-onedrive-personal',
         enabled, isPublic, sortOrder: mount?.sortOrder ?? 0,
+        rootItemId: rootItemId.trim() || null,
         config: {},
         ...(oauthCredentials ? { credentials: oauthCredentials } : {}),
       });
@@ -119,7 +120,7 @@ export function MountDialog({ mount, active = true, busy, error, onClose, onSubm
             <label>{t('mount.accessKeyId')}<input autoComplete="off" value={accessKeyId} onChange={(event) => setAccessKeyId(event.target.value)} required={!mount} /></label>
             <label>{t('mount.secretAccessKey')}<input type="password" autoComplete="new-password" value={secretAccessKey} onChange={(event) => setSecretAccessKey(event.target.value)} required={!mount} placeholder={mount ? t('mount.keepExistingSecret') : ''} /></label>
           </> : <>
-            {storageType === 'google' || storageType === 'dropbox' ? <label>{t('mount.rootFolderId')}<input value={rootItemId} onChange={(event) => setRootItemId(event.target.value)} /></label> : null}
+            {storageType === 'google' || storageType === 'dropbox' || storageType === 'onedrive' ? <label>{t('mount.rootFolderId')}<input value={rootItemId} onChange={(event) => setRootItemId(event.target.value)} /></label> : null}
             <label>{t('mount.oauthClientId')}<input autoComplete="off" value={clientId} onChange={(event) => setClientId(event.target.value)} placeholder={mount?.credentialStatus?.fields.clientIdConfigured ? t('mount.configuredSecret') : ''} /></label>
             <label>{t('mount.oauthClientSecret')}<input type="password" autoComplete="new-password" value={clientSecret} onChange={(event) => setClientSecret(event.target.value)} placeholder={mount?.credentialStatus?.fields.clientSecretConfigured ? t('mount.configuredSecret') : ''} /></label>
             {mount?.credentialStatus?.source === 'legacy' ? <div className="oneDriveConnectNote">{t('mount.legacyCredentialsWarning')}</div> : null}

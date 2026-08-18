@@ -65,10 +65,21 @@
 .languageControl {
   width: auto;
   min-width: var(--control-size);
+  flex: 0 0 auto;
+  flex-wrap: nowrap;
   gap: 5px;
   padding: 0 8px;
   font-size: 12px;
   font-weight: 700;
+  white-space: nowrap;
+  writing-mode: horizontal-tb;
+}
+
+.languageControl span {
+  display: inline-block;
+  line-height: 1;
+  white-space: nowrap;
+  writing-mode: horizontal-tb;
 }
 
 .sessionIndicator {
@@ -89,6 +100,5 @@
 @media (max-width: 480px) {
   .sessionIndicator { display: none; }
   .headerControls { gap: 2px; }
-  .languageControl { width: var(--control-size); padding: 0; }
-  .languageControl span { display: none; }
+  .languageControl { width: auto; min-width: var(--control-size); padding: 0 6px; }
 }

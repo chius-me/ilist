@@ -64,7 +64,7 @@ export async function breadcrumbsFor(db: D1Database, id: string): Promise<Breadc
   const segments: string[] = [];
   return rows.map((row) => {
     if (row.id !== 'root') segments.push(row.name);
-    return { id: row.id, name: row.id === 'root' ? 'ilist' : row.name, path: encodeVirtualPath(segments) };
+    return { id: row.id, name: row.id === 'root' ? 'iList' : row.name, path: encodeVirtualPath(segments) };
   });
 }
 

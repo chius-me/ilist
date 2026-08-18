@@ -38,7 +38,7 @@ export function AppHeader({ admin, username, onHome, onStorage, onSignIn, onSign
       <div className="headerInner">
         <button className="siteName" type="button" onClick={onHome} aria-label={t('shell.openRoot')} title={t('shell.openRoot')}>
           <Folder aria-hidden="true" size={19} />
-          <span>ilist</span>
+          <span>iList</span>
         </button>
         <div className="headerControls">
           <a className="headerControl" href="https://github.com/chius-me/ilist" target="_blank" rel="noreferrer" aria-label={t('shell.openGitHub')} title={t('shell.openGitHub')}>

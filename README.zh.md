@@ -2,7 +2,7 @@
 
 <div align="center">
 
-# ilist
+# iList
 
 面向 Cloudflare Workers 的自托管文件索引与管理器。
 

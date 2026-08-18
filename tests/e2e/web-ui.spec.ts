@@ -38,6 +38,8 @@ test('@visual explorer list, grid, themes, and locales', async ({ page }) => {
   await page.goto('/');
   await expect(page.getByRole('list', { name: 'Files and folders' })).toBeVisible();
   await expect(page.getByRole('button', { name: 'Path home' })).toBeVisible();
+  await expect(page).toHaveTitle('iList');
+  await expect(page.getByRole('button', { name: 'Open iList root' })).toBeVisible();
   await expectNoHorizontalOverflow(page);
 
   const toolbarActions = page.locator('.toolbarActions');
@@ -99,13 +101,14 @@ test('@visual explorer list, grid, themes, and locales', async ({ page }) => {
   await expectNoHorizontalOverflow(page);
 });
 
-test('mobile command bar fits and search uses the available left region', async ({ page }, testInfo) => {
+test('mobile command bar fits and search expands left from the search control', async ({ page }, testInfo) => {
   test.skip(testInfo.project.name !== 'mobile', '390px mobile layout contract');
   await installApiFixtures(page, { admin: true });
   await page.goto('/');
 
   const toolbar = page.getByRole('region', { name: 'File controls' });
   const browser = page.locator('.explorerBrowser');
+  const path = page.getByRole('navigation', { name: 'Path' });
   const searchButton = page.getByRole('button', { name: 'Search this folder' });
   const sort = page.getByRole('combobox', { name: 'Sort files' });
   const iconControls = [
@@ -119,6 +122,8 @@ test('mobile command bar fits and search uses the available left region', async 
   const iconBoxes = [];
 
   expect(page.viewportSize()?.width).toBe(390);
+  await expect(page).toHaveTitle('iList');
+  await expect(page.getByRole('button', { name: 'Open iList root' })).toBeVisible();
   await expectNoHorizontalOverflow(page);
   await expectInsideViewport(page, toolbar);
   for (const control of iconControls) {
@@ -128,12 +133,14 @@ test('mobile command bar fits and search uses the available left region', async 
     expect(box!.height).toBeGreaterThanOrEqual(48);
     iconBoxes.push(box!);
   }
-  expect((await sort.boundingBox())!.width).toBeLessThanOrEqual(64);
+  expect((await sort.boundingBox())!.width).toBeGreaterThan(64);
+  expect(await sort.evaluate((el: HTMLSelectElement) => el.scrollWidth <= el.clientWidth + 1)).toBe(true);
   expect(Math.max(...iconBoxes.map((box) => box.y)) - Math.min(...iconBoxes.map((box) => box.y))).toBeLessThanOrEqual(1);
 
   await searchButton.click();
   const search = page.getByRole('textbox', { name: 'Search this folder' });
   const searchControl = page.locator('.searchControl');
+  await expect.poll(async () => (await searchControl.boundingBox())?.width ?? 0).toBeGreaterThan(48);
   const searchBox = await searchControl.boundingBox();
   const browserBox = await browser.boundingBox();
   const sortAfter = await sort.boundingBox();
@@ -141,12 +148,45 @@ test('mobile command bar fits and search uses the available left region', async 
   expect(browserBox).not.toBeNull();
   expect(sortBefore).not.toBeNull();
   expect(sortAfter).not.toBeNull();
+  await expect(path).toHaveCount(1);
+  await expect(path.getByRole('button', { name: 'Path home' })).toHaveCount(1);
+  expect(await path.evaluate((el) => Boolean(el.querySelector('.searchControl')))).toBe(false);
   expect(searchBox!.x).toBeGreaterThanOrEqual(browserBox!.x);
   expect(searchBox!.x + searchBox!.width).toBeLessThanOrEqual(sortAfter!.x + 1);
-  expect(searchBox!.width).toBeGreaterThanOrEqual(100);
   expect(Math.abs(sortAfter!.x - sortBefore!.x)).toBeLessThanOrEqual(1);
   await expect(search).toBeFocused();
   await expectNoHorizontalOverflow(page);
+});
+
+test('explorer chrome keeps search on the action side and sort labels unclipped', async ({ page }) => {
+  await installApiFixtures(page, { admin: true });
+  await page.goto('/');
+  await expect(page).toHaveTitle('iList');
+  await expect(page.getByRole('button', { name: 'Open iList root' })).toBeVisible();
+
+  const path = page.getByRole('navigation', { name: 'Path' });
+  const sort = page.getByRole('combobox', { name: 'Sort files' });
+  const refresh = page.getByRole('button', { name: 'Refresh' });
+  const sortBefore = await sort.boundingBox();
+  const refreshBefore = await refresh.boundingBox();
+  await expect(sort.getByRole('option', { name: 'Name' })).toHaveCount(1);
+  await expect(sort.getByRole('option', { name: 'Size' })).toHaveCount(1);
+  await expect(sort.getByRole('option', { name: 'Modified' })).toHaveCount(1);
+  expect(await sort.evaluate((el: HTMLSelectElement) => el.scrollWidth <= el.clientWidth + 1)).toBe(true);
+
+  await page.getByRole('button', { name: 'Search this folder' }).click();
+  const search = page.getByRole('textbox', { name: 'Search this folder' });
+  const searchBox = await page.locator('.searchControl').boundingBox();
+  const sortAfter = await sort.boundingBox();
+  const refreshAfter = await refresh.boundingBox();
+  await expect(path).toHaveCount(1);
+  await expect(path.getByRole('button', { name: 'Path home' })).toHaveCount(1);
+  await expect(search).toBeFocused();
+  expect(searchBox).not.toBeNull();
+  expect(sortAfter).not.toBeNull();
+  expect(searchBox!.x + searchBox!.width).toBeLessThanOrEqual(sortAfter!.x + 1);
+  expect(Math.abs(sortAfter!.x - sortBefore!.x)).toBeLessThanOrEqual(1);
+  expect(Math.abs(refreshAfter!.x - refreshBefore!.x)).toBeLessThanOrEqual(1);
 });
 
 test('@visual previews, selection, menus, and dialogs stay in bounds', async ({ page }) => {
@@ -236,6 +276,21 @@ test('@visual upload, storage, and appearance surfaces', async ({ page }) => {
   await page.getByRole('link', { name: 'Appearance' }).click();
   await expect(page.getByRole('heading', { name: 'Appearance' })).toBeVisible();
   await expect(page).toHaveScreenshot('appearance-preferences.png', { fullPage: true });
+});
+
+test('creates an OneDrive mount with a root folder id and enters its OAuth flow', async ({ page }) => {
+  await installApiFixtures(page, { admin: true });
+  await page.goto('/');
+  await expect(page).toHaveTitle('iList');
+  await page.getByRole('button', { name: 'Storage settings' }).click();
+  await page.getByRole('button', { name: 'Add storage' }).click();
+  await page.getByLabel('Storage type').selectOption('onedrive');
+  await page.getByLabel('Display name').fill('Personal projects');
+  await page.getByLabel('Mount path').fill('/personal-projects');
+  await page.getByLabel('Root folder ID').fill('folder-root-id');
+  await page.getByRole('button', { name: 'Create and connect' }).click();
+
+  await expect(page).toHaveURL(/\/api\/admin\/oauth\/onedrive\/start\?mountId=onedrive-e2e$/);
 });
 
 test('creates a Google Drive mount and enters its OAuth flow', async ({ page }) => {

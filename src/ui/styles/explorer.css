@@ -53,28 +53,55 @@
 .explorerToolbar { position: relative; display: flex; align-items: center; min-height: 54px; gap: 12px; background: transparent; padding: 8px 10px; }
 .toolbarPath { display: flex; min-width: 0; flex: 1 1 auto; overflow: hidden; }
 
+.searchCluster {
+  position: relative;
+  display: flex;
+  width: var(--control-size-sm);
+  height: var(--control-size-sm);
+  flex: 0 0 var(--control-size-sm);
+  justify-content: flex-end;
+  align-items: center;
+}
+
 .searchControl {
+  --search-width: min(280px, 32vw);
+  position: absolute;
+  right: 0;
+  z-index: 1;
   display: flex;
   align-items: center;
-  min-width: min(150px, calc(100vw - 24px));
+  width: var(--search-width);
+  max-width: min(360px, calc(100vw - 24px));
+  min-width: 0;
   height: 36px;
   gap: 8px;
+  overflow: hidden;
   border: 1px solid var(--line-strong);
   border-radius: var(--radius);
   background: var(--color-surface);
   color: var(--muted);
   padding: 0 10px;
+  transform-origin: right center;
+  animation: searchExpand var(--transition);
 }
 
 .searchControl:focus-within { border-color: var(--accent); box-shadow: var(--focus-ring); }
 .searchControl input { min-width: 0; width: 100%; height: 34px; border: 0; outline: 0; background: transparent; color: var(--text); }
-.searchOverlay { width: 100%; min-width: 0; max-width: 360px; }
+
+@keyframes searchExpand {
+  from { width: var(--control-size); }
+  to { width: var(--search-width); }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .searchControl { animation: none; }
+}
 
 .toolbarActions { position: relative; z-index: var(--layer-sticky); margin-left: auto; display: flex; flex: 0 0 auto; align-items: center; justify-content: flex-end; gap: 6px; }
 
 .sortControl select {
   width: auto;
-  max-width: 88px;
+  min-width: 7.25em;
   height: 34px;
   border: 1px solid var(--line-strong);
   border-radius: var(--radius);
@@ -104,7 +131,6 @@
 .operationNotice { border-top: 1px solid var(--color-border-strong); background: var(--accent-soft); color: var(--color-accent-foreground-strong); padding: 8px 12px; font-size: 13px; }
 
 .explorerContent {
-  min-height: 240px;
   border-top: 1px solid var(--line);
   background: transparent;
 }
@@ -239,9 +265,10 @@
   .toolbarPath .breadcrumbItem { min-width: 0; }
   .toolbarPath .breadcrumbItem button { max-width: 100%; }
   .explorerToolbar .iconButton, .mobileViewToggle button { width: 48px; height: 48px; flex-basis: 48px; }
-  .searchControl { height: 48px; }
+  .searchCluster { width: 48px; height: 48px; flex-basis: 48px; }
+  .searchControl { --search-width: 80px; height: 48px; }
   .searchControl input { height: 46px; }
-  .sortControl select { width: 64px; max-width: 64px; height: 48px; padding: 0 20px 0 6px; }
+  .sortControl select { min-width: 7.25em; height: 48px; padding: 0 22px 0 8px; }
   .desktopViewToggle, .desktopAdminActions { display: none; }
   .mobileViewToggle, .mobileAdminActions { display: inline-flex; }
   .fileListHeader, .entryRow { grid-template-columns: 48px minmax(0, 1fr) minmax(76px, auto); }
