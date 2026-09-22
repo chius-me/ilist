@@ -29,7 +29,7 @@
   },
   "devDependencies": {
     "@cloudflare/vitest-pool-workers": "^0.18.4",
-    "@cloudflare/workers-types": "^4.20250214.0",
+    "@cloudflare/workers-types": "^5.20260922.1",
     "@playwright/test": "^1.61.1",
     "@testing-library/jest-dom": "^6.9.1",
     "@testing-library/react": "^16.3.2",
@@ -41,6 +41,10 @@
     "typescript": "~5.8.3",
     "vite": "^7.1.2",
     "vitest": "^4.1.11",
-    "wrangler": "^4.20.0"
+    "wrangler": "^4.136.2"
+  },
+  "overrides": {
+    "sharp": "0.35.4",
+    "undici": "7.29.0"
   }
 }
