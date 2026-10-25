@@ -36,6 +36,14 @@
 
 .siteName:hover { color: var(--color-accent-foreground-strong); }
 
+.siteMark {
+  display: block;
+  flex: 0 0 auto;
+  color: var(--color-accent-foreground);
+}
+
+.siteName:hover .siteMark { color: var(--color-accent-foreground-strong); }
+
 .headerControls {
   display: flex;
   min-width: 0;

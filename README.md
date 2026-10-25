@@ -2,6 +2,8 @@
 
 <div align="center">
 
+<img src="./public/favicon.svg" width="56" height="56" alt="">
+
 # iList
 
 Self-hosted file index and manager for Cloudflare Workers.

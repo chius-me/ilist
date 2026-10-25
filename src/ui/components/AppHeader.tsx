@@ -1,6 +1,7 @@
-import { Folder, Github, Languages, LogIn, LogOut, Moon, Settings, Sun } from 'lucide-react';
+import { Github, Languages, LogIn, LogOut, Moon, Settings, Sun } from 'lucide-react';
 import { useI18n } from '../i18n/I18nProvider';
 import { usePreferences } from '../preferences/PreferencesProvider';
+import { FolderMark } from './FolderMark';
 
 interface AppHeaderProps {
   admin: boolean;
@@ -37,7 +38,7 @@ export function AppHeader({ admin, username, onHome, onStorage, onSignIn, onSign
     <header className="siteHeader">
       <div className="headerInner">
         <button className="siteName" type="button" onClick={onHome} aria-label={t('shell.openRoot')} title={t('shell.openRoot')}>
-          <Folder aria-hidden="true" size={19} />
+          <FolderMark />
           <span>iList</span>
         </button>
         <div className="headerControls">
