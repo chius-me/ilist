@@ -8,7 +8,7 @@
     "dev": "wrangler dev",
     "dev:web": "vite --host 127.0.0.1 --port 4173",
     "build": "vite build",
-    "deploy": "npm run build && wrangler deploy --minify",
+    "deploy": "npm run build && wrangler deploy --minify --env production",
     "types": "wrangler types src/worker/env.d.ts",
     "test": "npm run test:worker && npm run test:ui && npm run test:scripts",
     "test:worker": "vitest run --config vitest.worker.config.ts",

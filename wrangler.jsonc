@@ -29,6 +29,13 @@
       "PUBLIC_ORIGIN"
     ]
   },
+  // Local dev and Worker tests use a simulated bucket. It is not inherited.
+  "r2_buckets": [
+    {
+      "binding": "R2_BUCKET",
+      "bucket_name": "ilist-r2"
+    }
+  ],
   "d1_databases": [
     {
       "binding": "DB",
@@ -39,5 +46,31 @@
   ],
   "observability": {
     "enabled": true
+  },
+  "env": {
+    "production": {
+      "name": "ilist",
+      "vars": {
+        "ADMIN_USERNAME": "admin",
+        "SESSION_TTL_SECONDS": "604800"
+      },
+      "secrets": {
+        "required": [
+          "ADMIN_PASSWORD_HASH",
+          "CREDENTIAL_MASTER_KEY",
+          "SESSION_SECRET",
+          "PUBLIC_ORIGIN"
+        ]
+      },
+      "d1_databases": [
+        {
+          "binding": "DB",
+          "database_name": "ilist-d1",
+          "database_id": "a64f3be9-1470-4ad2-9cff-bc653d3ec2d0",
+          "migrations_dir": "migrations"
+        }
+      ],
+      "r2_buckets": []
+    }
   }
 }

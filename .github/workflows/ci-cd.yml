@@ -104,14 +104,14 @@ jobs:
           apiToken: ${{ secrets.CLOUDFLARE_API_TOKEN }}
           accountId: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
           # Resolve the target through wrangler.jsonc so resource renames cannot drift from CI.
-          command: d1 migrations apply DB --remote
+          command: d1 migrations apply DB --remote --env production
 
       - name: Deploy Worker and Assets
         uses: cloudflare/wrangler-action@v3
         with:
           apiToken: ${{ secrets.CLOUDFLARE_API_TOKEN }}
           accountId: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
-          command: deploy --minify
+          command: deploy --minify --env production
 
       # The active Worker no longer binds this bucket. Remove the empty bucket
       # created to satisfy the previous binding, then drop this step.
