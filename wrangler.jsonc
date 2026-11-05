@@ -29,12 +29,6 @@
       "PUBLIC_ORIGIN"
     ]
   },
-  "r2_buckets": [
-    {
-      "binding": "R2_BUCKET",
-      "bucket_name": "ilist-r2"
-    }
-  ],
   "d1_databases": [
     {
       "binding": "DB",
