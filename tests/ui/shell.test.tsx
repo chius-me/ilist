@@ -60,6 +60,7 @@ it('renders stable language, theme, and account controls', async () => {
   expect(screen.getByText('iList')).toBeVisible();
   expect(screen.getByRole('link', { name: 'Open iList on GitHub' })).toHaveAttribute('href', 'https://github.com/chius-me/ilist');
   expect(screen.getByRole('link', { name: 'Open iList on GitHub' })).toHaveAttribute('target', '_blank');
+  expect(screen.getByRole('link', { name: 'Email contact@chius.cc' })).toHaveAttribute('href', 'mailto:contact@chius.cc');
   expect(screen.getByRole('button', { name: 'Change language' })).toBeVisible();
   expect(screen.getByRole('button', { name: 'Change theme' })).toBeVisible();
   expect(screen.getByRole('button', { name: 'Admin sign in' })).toBeVisible();
@@ -93,6 +94,7 @@ it('localizes shell controls after changing language', async () => {
   expect(await screen.findByRole('link', { name: '跳转到内容' })).toBeVisible();
   expect(screen.getByRole('button', { name: '打开 iList 根目录' })).toBeVisible();
   expect(screen.getByRole('link', { name: '在 GitHub 上打开 iList' })).toBeVisible();
+  expect(screen.getByRole('link', { name: '发送邮件至 contact@chius.cc' })).toHaveAttribute('href', 'mailto:contact@chius.cc');
   expect(screen.getByRole('button', { name: '切换语言' })).toBeVisible();
   expect(screen.getByRole('button', { name: '切换主题' })).toBeVisible();
   expect(screen.getByRole('button', { name: '管理员登录' })).toBeVisible();
