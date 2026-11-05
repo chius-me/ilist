@@ -50,6 +50,12 @@
   "env": {
     "production": {
       "name": "ilist",
+      "routes": [
+        {
+          "pattern": "ilist.chius.dev",
+          "custom_domain": true
+        }
+      ],
       "vars": {
         "ADMIN_USERNAME": "admin",
         "SESSION_TTL_SECONDS": "604800"
