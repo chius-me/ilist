@@ -41,7 +41,7 @@
     "jsdom": "^29.1.1",
     "typescript": "~5.8.3",
     "vite": "^7.1.2",
-    "vitest": "^4.1.11",
+    "vitest": "^5.1.0",
     "wrangler": "^4.136.2"
   },
   "overrides": {
