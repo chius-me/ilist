@@ -1,12 +1,13 @@
-# Quality gate on every PR/push; deploy to Cloudflare Workers after main is green.
-# Deploy requires repository secrets CLOUDFLARE_API_TOKEN and CLOUDFLARE_ACCOUNT_ID.
-name: CI/CD
+name: CI
 
 on:
   push:
     branches: [main]
   pull_request:
   workflow_dispatch:
+
+permissions:
+  contents: read
 
 concurrency:
   group: ${{ github.workflow }}-${{ github.event.pull_request.number || github.ref }}
@@ -17,21 +18,15 @@ jobs:
     name: Check
     runs-on: ubuntu-latest
     timeout-minutes: 30
-    permissions:
-      contents: read
     steps:
       - name: Checkout
-        uses: actions/checkout@v4
+        uses: actions/checkout@v7
 
       - name: Setup Node.js
-        uses: actions/setup-node@v4
+        uses: actions/setup-node@v7
         with:
-          # jsdom@29 requires ^22.13 (not 22.12). Use npm 11 for package-lock peer resolution.
-          node-version: "22.13"
+          node-version: 24
           cache: npm
-
-      - name: Use npm 11
-        run: npm install -g npm@11
 
       - name: Install dependencies
         run: npm ci
@@ -43,7 +38,7 @@ jobs:
         run: npm run check
 
       - name: Cache Playwright browsers
-        uses: actions/cache@v4
+        uses: actions/cache@v6
         with:
           path: ~/.cache/ms-playwright
           key: playwright-${{ runner.os }}-${{ hashFiles('package-lock.json') }}
@@ -57,7 +52,7 @@ jobs:
 
       - name: Upload production assets
         if: github.ref == 'refs/heads/main' && (github.event_name == 'push' || github.event_name == 'workflow_dispatch')
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: dist
           path: dist
@@ -70,45 +65,34 @@ jobs:
     if: github.ref == 'refs/heads/main' && (github.event_name == 'push' || github.event_name == 'workflow_dispatch')
     runs-on: ubuntu-latest
     timeout-minutes: 30
-    permissions:
-      contents: read
-    # Serialize production deploys so migrations and Worker updates do not race.
+    environment: production
     concurrency:
       group: deploy-production
       cancel-in-progress: false
+    env:
+      CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+      CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
     steps:
       - name: Checkout
-        uses: actions/checkout@v4
+        uses: actions/checkout@v7
 
       - name: Setup Node.js
-        uses: actions/setup-node@v4
+        uses: actions/setup-node@v7
         with:
-          node-version: "22.13"
+          node-version: 24
           cache: npm
-
-      - name: Use npm 11
-        run: npm install -g npm@11
 
       - name: Install dependencies
         run: npm ci
 
       - name: Download production assets
-        uses: actions/download-artifact@v4
+        uses: actions/download-artifact@v8
         with:
           name: dist
           path: dist
 
       - name: Apply remote D1 migrations
-        uses: cloudflare/wrangler-action@v3
-        with:
-          apiToken: ${{ secrets.CLOUDFLARE_API_TOKEN }}
-          accountId: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
-          # Resolve the target through wrangler.jsonc so resource renames cannot drift from CI.
-          command: d1 migrations apply DB --remote --env production
+        run: npm run deploy:d1
 
       - name: Deploy Worker and Assets
-        uses: cloudflare/wrangler-action@v3
-        with:
-          apiToken: ${{ secrets.CLOUDFLARE_API_TOKEN }}
-          accountId: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
-          command: deploy --minify --env production
+        run: npx wrangler deploy --minify --env production
