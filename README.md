@@ -8,11 +8,14 @@
 
 Self-hosted file index and manager for Cloudflare Workers.
 
-[![Release](https://img.shields.io/badge/release-v0.2.1-2ea44f?logo=github)](https://github.com/chius-me/ilist/blob/main/docs/releases/v0.2.1.md)
-[![License](https://img.shields.io/badge/license-MIT-blue)](https://github.com/chius-me/ilist/blob/main/LICENSE)
+[![Release](https://img.shields.io/badge/release-v0.2.1-2ea44f?logo=github)](https://github.com/chius-me/ilist/releases)
+[![License](https://img.shields.io/badge/license-MIT-blue.svg)](LICENSE)
+[![CI](https://github.com/chius-me/ilist/actions/workflows/ci.yml/badge.svg)](https://github.com/chius-me/ilist/actions)
 ![Cloudflare Workers](https://img.shields.io/badge/Cloudflare-Workers-f38020?logo=cloudflare&logoColor=white)
 ![TypeScript](https://img.shields.io/badge/TypeScript-5.8-3178c6?logo=typescript&logoColor=white)
 ![Tests](https://img.shields.io/badge/tests-Vitest-6e9f18)
+
+[Releases](https://github.com/chius-me/ilist/releases) · [Issues](https://github.com/chius-me/ilist/issues) · [Docs](./docs/)
 
 </div>
 
@@ -301,6 +304,12 @@ docs/                         Setup and implementation documentation
 
 Run `npm run check` before submitting a change. Keep provider credentials, local variables, D1 exports, and temporary uploads out of Git. Update the relevant documentation when changing storage behavior or deployment requirements.
 
-## License
+## 📄 License
 
-ilist is licensed under the MIT license.
+ilist is licensed under the [MIT License](LICENSE).
+
+---
+
+<div align="center">
+  <sub>Crafted with ❤️ by <a href="https://chius.cc">Chius</a> · Powered by Cloudflare & GitHub</sub>
+</div>

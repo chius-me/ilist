@@ -8,11 +8,14 @@
 
 面向 Cloudflare Workers 的自托管文件索引与管理器。
 
-[![Release](https://img.shields.io/badge/release-v0.2.1-2ea44f?logo=github)](https://github.com/chius-me/ilist/blob/main/docs/releases/v0.2.1.md)
-[![License](https://img.shields.io/badge/license-GPL--3.0--only-blue)](https://github.com/chius-me/ilist/blob/main/LICENSE)
+[![Release](https://img.shields.io/badge/release-v0.2.1-2ea44f?logo=github)](https://github.com/chius-me/ilist/releases)
+[![License](https://img.shields.io/badge/license-MIT-blue.svg)](LICENSE)
+[![CI](https://github.com/chius-me/ilist/actions/workflows/ci.yml/badge.svg)](https://github.com/chius-me/ilist/actions)
 ![Cloudflare Workers](https://img.shields.io/badge/Cloudflare-Workers-f38020?logo=cloudflare&logoColor=white)
 ![TypeScript](https://img.shields.io/badge/TypeScript-5.8-3178c6?logo=typescript&logoColor=white)
 ![Tests](https://img.shields.io/badge/tests-Vitest-6e9f18)
+
+[版本发布](https://github.com/chius-me/ilist/releases) · [反馈问题](https://github.com/chius-me/ilist/issues) · [文档指南](./docs/)
 
 </div>
 
@@ -305,6 +308,12 @@ docs/                         配置与实现文档
 
 提交变更前运行 `npm run check`。不要将提供商凭据、本地变量、D1 导出文件和临时上传文件放入 Git。修改存储行为或部署要求时，请同步更新相关文档。
 
-## 许可证
+## 📄 许可证
 
-ilist 采用 GPL-3.0-only 许可证。
+ilist 采用 [MIT 许可证](LICENSE) 开源发布。
+
+---
+
+<div align="center">
+  <sub>Crafted with ❤️ by <a href="https://chius.cc">Chius</a> · Powered by Cloudflare & GitHub</sub>
+</div>
