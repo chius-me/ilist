@@ -9,7 +9,7 @@
 Self-hosted file index and manager for Cloudflare Workers.
 
 [![Release](https://img.shields.io/badge/release-v0.2.1-2ea44f?logo=github)](https://github.com/chius-me/ilist/blob/main/docs/releases/v0.2.1.md)
-[![License](https://img.shields.io/badge/license-GPL--3.0--only-blue)](https://github.com/chius-me/ilist/blob/main/LICENSE)
+[![License](https://img.shields.io/badge/license-MIT-blue)](https://github.com/chius-me/ilist/blob/main/LICENSE)
 ![Cloudflare Workers](https://img.shields.io/badge/Cloudflare-Workers-f38020?logo=cloudflare&logoColor=white)
 ![TypeScript](https://img.shields.io/badge/TypeScript-5.8-3178c6?logo=typescript&logoColor=white)
 ![Tests](https://img.shields.io/badge/tests-Vitest-6e9f18)
@@ -303,4 +303,4 @@ Run `npm run check` before submitting a change. Keep provider credentials, local
 
 ## License
 
-ilist is licensed under the GPL-3.0-only license.
+ilist is licensed under the MIT license.

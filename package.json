@@ -1,7 +1,7 @@
 {
   "name": "ilist",
   "version": "0.2.1",
-  "license": "GPL-3.0-only",
+  "license": "MIT",
   "private": true,
   "type": "module",
   "scripts": {
