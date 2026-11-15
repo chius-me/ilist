@@ -1,45 +1,48 @@
 /*
- * ilist design tokens — see docs/frontend-design-system.md
+ * ilist design tokens — Swiss Style · Chius
+ * 暖纸与蓝灰双配色、等宽排版、单栏网格、细线分隔
  * Dials: DESIGN_VARIANCE=2, MOTION_INTENSITY=2, VISUAL_DENSITY=7
+ * See docs/frontend-design-system.md
  */
 :root {
   color-scheme: light;
 
-  /* Color — warm stone + single terracotta accent family */
-  --color-page: #f2f2f1;
+  /* Color — 暖纸底 + 墨灰字 + 深蓝强调 + 砖红标记 (from swiss-style) */
+  --color-page: #fdfcfb;
   --color-surface: #ffffff;
   --color-surface-raised: #ffffff;
-  --color-surface-muted: #faf9f7;
-  --color-hover: #f7f3f0;
-  --color-selected: #fff0e9;
-  --color-text: #282726;
-  --color-muted: #69645f;
-  --color-border: #e4e0dc;
-  --color-border-strong: #cbc5bf;
-  --color-primary: #ad4020;
-  --color-primary-hover: #913318;
+  --color-surface-muted: #f2f1ee;
+  --color-hover: #f2f1ee;
+  --color-selected: #eef5f8;
+  --color-text: #292c30;
+  --color-muted: #6b7076;
+  --color-border: #e5e4e1;
+  --color-border-strong: #cbc8c3;
+  --color-primary: #256786;
+  --color-primary-hover: #124c68;
   --color-primary-text: #ffffff;
-  --color-accent-foreground: #ad4020;
-  --color-accent-foreground-strong: #913318;
-  --color-danger: #b53a43;
-  --color-success: #2d7a54;
-  --color-danger-surface: #fff0f2;
-  --color-danger-hover: #ffe0e5;
-  --color-danger-border: #ecc5cb;
-  --color-danger-text: #81202d;
-  --color-folder-icon: #a16600;
-  --color-folder-icon-surface: #fff4d8;
-  --color-file-icon: #285d7f;
-  --color-file-icon-surface: #e7f1f7;
-  --color-skeleton: #e8e5e2;
-  --color-progress-track: #e4e0dc;
-  --color-media-canvas: #171716;
-  --color-scrim: rgb(23 23 22 / 38%);
-  --color-scrim-strong: rgb(23 23 22 / 52%);
+  --color-accent-foreground: #256786;
+  --color-accent-foreground-strong: #124c68;
+  --color-mark: #b24c37;
+  --color-danger: #b24c37;
+  --color-success: #2a8556;
+  --color-danger-surface: #fbf2f0;
+  --color-danger-hover: #f6e4e0;
+  --color-danger-border: #ebcbc5;
+  --color-danger-text: #8c2e1c;
+  --color-folder-icon: #c77826;
+  --color-folder-icon-surface: #faf1e4;
+  --color-file-icon: #256786;
+  --color-file-icon-surface: #edf4f7;
+  --color-skeleton: #e8e6e2;
+  --color-progress-track: #e5e4e1;
+  --color-media-canvas: #202530;
+  --color-scrim: rgb(32 37 48 / 42%);
+  --color-scrim-strong: rgb(32 37 48 / 62%);
 
   /* Focus / elevation / motion */
-  --focus-ring: 0 0 0 3px rgb(217 96 55 / 28%);
-  --shadow-raised: 0 12px 30px rgb(64 47 39 / 12%);
+  --focus-ring: 0 0 0 3px rgb(37 103 134 / 25%);
+  --shadow-raised: 0 8px 24px rgb(41 44 48 / 8%);
   --transition: 140ms ease;
 
   /* Shape scale (one system) */
@@ -85,31 +88,31 @@
 
 [data-theme='dark'] {
   color-scheme: dark;
-  --color-page: #171716;
-  --color-surface: #201f1e;
-  --color-surface-raised: #292725;
-  --color-surface-muted: #242321;
-  --color-hover: #302d2a;
-  --color-selected: #41291f;
-  --color-text: #f1efec;
-  --color-muted: #b0aaa3;
-  --color-border: #3b3834;
-  --color-border-strong: #55504a;
-  --color-primary: #b24725;
-  --color-primary-hover: #c0522e;
-  --color-accent-foreground: #f59a75;
-  --color-accent-foreground-strong: #ffad8a;
-  --color-danger-surface: #3a2224;
-  --color-danger-hover: #4a292c;
-  --color-danger-border: #754045;
+  --color-page: #202530;
+  --color-surface: #252c38;
+  --color-surface-raised: #2e3544;
+  --color-surface-muted: #222834;
+  --color-hover: #2f3747;
+  --color-selected: #384154;
+  --color-text: #e1e5ed;
+  --color-muted: #a4adbb;
+  --color-border: #3c4350;
+  --color-border-strong: #525c6d;
+  --color-primary: #1b526d;
+  --color-primary-hover: #144258;
+  --color-accent-foreground: #eab38b;
+  --color-accent-foreground-strong: #ffd1ad;
+  --color-danger-surface: #3a2226;
+  --color-danger-hover: #4a292f;
+  --color-danger-border: #754048;
   --color-danger-text: #ffb3b8;
-  --color-folder-icon: #f5c15b;
-  --color-folder-icon-surface: #3b3220;
-  --color-file-icon: #80b6da;
-  --color-file-icon-surface: #23313a;
-  --color-skeleton: #34312e;
-  --color-progress-track: #3b3834;
-  --color-media-canvas: #0f0f0e;
+  --color-folder-icon: #eab38b;
+  --color-folder-icon-surface: #372e27;
+  --color-file-icon: #88bcdb;
+  --color-file-icon-surface: #22313d;
+  --color-skeleton: #2f3747;
+  --color-progress-track: #3c4350;
+  --color-media-canvas: #161922;
   --color-scrim: rgb(0 0 0 / 54%);
   --color-scrim-strong: rgb(0 0 0 / 68%);
   --shadow-raised: 0 14px 34px rgb(0 0 0 / 32%);

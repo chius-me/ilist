@@ -1,7 +1,15 @@
+@font-face {
+  font-family: "Google Sans Code";
+  font-style: normal;
+  font-weight: 300 800;
+  font-display: swap;
+  src: url("/fonts/google-sans-code.woff2") format("woff2");
+}
+
 :root {
   color: var(--color-text);
   background: var(--color-page);
-  font-family: "Aptos", "SF Pro Text", "Segoe UI", ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, sans-serif;
+  font-family: "Google Sans Code", "Sarasa Mono SC", ui-monospace, "SF Mono", Menlo, Consolas, "PingFang SC", "Microsoft YaHei", monospace;
   font-synthesis: none;
   text-rendering: optimizeLegibility;
 }
@@ -11,11 +19,33 @@
 html { background: var(--color-page); }
 
 body {
+  position: relative;
+  isolation: isolate;
   min-width: 320px;
   min-height: 100dvh;
   margin: 0;
   background: var(--color-page);
   color: var(--color-text);
+}
+
+body::before {
+  content: "";
+  position: fixed;
+  inset: 0;
+  z-index: -1;
+  background-image: url("/images/paper-grain.svg");
+  opacity: 0.045;
+  pointer-events: none;
+}
+
+[data-theme='dark'] body::before {
+  opacity: 0.025;
+  filter: invert(1);
+}
+
+::selection {
+  background: var(--color-primary);
+  color: var(--color-primary-text);
 }
 
 button, input, select, textarea { font: inherit; }

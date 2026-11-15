@@ -19,7 +19,7 @@ Cross-references in this repo use these exact dial names only—never invent ali
 - **Not a landing page:** no GSAP marketing motion by default, no high-VARIANCE artsy layouts, no three equal marketing cards, no hero split-screen, no Awwwards motion theater.
 - **Product surfaces only:** explorer, admin (storages/shares/preferences), public share viewer, overlays (dialogs, preview, toasts, menus).
 - **Stack:** keep React + CSS custom properties. Do not migrate to Tailwind/shadcn for this system.
-- **Brand continuity:** warm stone neutrals + terracotta/burnt-orange accent already in production tokens—do not rebrand to emerald/violet for novelty.
+- **Brand continuity:** Swiss Style · Chius Paper visual language (warm paper `#fdfcfb` / slate-blue `#202530`, deep blue accent `#256786` / apricot `#eab38b`, and terracotta mark `#b24c37`).
 
 ## Tokens
 
@@ -27,9 +27,9 @@ Source of truth: `src/ui/styles/tokens.css`.
 
 ### Color
 
-- **Neutrals:** warm stone (`--color-page`, `--color-surface`, `--color-border`, `--color-text`, `--color-muted`).
-- **Single accent family:** terracotta (`--color-primary`, `--color-primary-hover`, `--color-accent-foreground*`, `--color-selected`). One hue family in light and dark.
-- **Semantic:** danger / success only for destructive and positive outcomes—not decoration.
+- **Neutrals:** warm paper in light (`--color-page: #fdfcfb`, `--color-surface: #ffffff`, `--color-border: #e5e4e1`, `--color-text: #292c30`, `--color-muted: #6b7076`), slate-blue in dark (`--color-page: #202530`, `--color-surface: #252c38`, `--color-border: #3c4350`, `--color-text: #e1e5ed`, `--color-muted: #a4adbb`).
+- **Accent:** deep blue in light (`--color-primary: #256786`, `--color-primary-hover: #124c68`), apricot in dark (`--color-accent-foreground: #eab38b`, `--color-accent-foreground-strong: #ffd1ad`).
+- **Semantic:** terracotta mark/danger (`#b24c37`), forest green success (`#2a8556`).
 - **Icons:** folder/file tints for scanning density; never compete with primary CTAs.
 
 ### Type hierarchy
@@ -42,7 +42,7 @@ Source of truth: `src/ui/styles/tokens.css`.
 | Meta / tabular | 11–12px | 500–600 | Sizes, dates, muted labels |
 | Caption / status | 12px | 500 | Toasts meta, progress |
 
-Font stack: system UI sans (`Aptos` / SF Pro / Segoe UI). No Inter-as-default “AI landing” stack, no decorative display fonts in product chrome.
+Font stack: Swiss monospace typographic stack (`"Google Sans Code"`, `"Sarasa Mono SC"`, `ui-monospace`, `Menlo`, `Consolas`, `monospace`). Monospace as visual protagonist for tabular scanning, clean information hierarchy, and crisp 1px borders.
 
 ### Shape (radius scale)
 
