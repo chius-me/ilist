@@ -1,6 +1,6 @@
-import { Download, MoreHorizontal } from 'lucide-react';
-import { isEntryMutable, type Entry } from '../../types/entries';
+import { Download, Lock, MoreHorizontal } from 'lucide-react';
 import { useI18n } from '../../i18n/I18nProvider';
+import { isEntryMutable, type Entry } from '../../types/entries';
 import { FileIcon } from './FileIcon';
 
 export interface EntryHandlers {
@@ -8,6 +8,7 @@ export interface EntryHandlers {
   onPreview: (entry: Entry) => void;
   onToggle: (entry: Entry, options?: { range?: boolean }) => void;
   onMenu: (entry: Entry, anchor?: HTMLElement) => void;
+  folderHrefFor?: (entry: Entry) => string;
 }
 
 export function EntryRow({
@@ -19,6 +20,7 @@ export function EntryRow({
   onPreview,
   onToggle,
   onMenu,
+  folderHrefFor,
   fileUrlFor = (item, download, exportFormat) => {
     const query = new URLSearchParams();
     if (download) query.set('download', '1');
@@ -31,10 +33,25 @@ export function EntryRow({
   const isFolder = entry.kind === 'folder';
   const selectable = admin && isEntryMutable(entry);
   const showActionMenu = admin || Boolean(entry.capabilities.download && entry.exportOptions?.length);
-  const activate = () => (isFolder ? onOpen(entry) : onPreview(entry));
   const openLabel = `${t('action.open')} ${entry.name}`;
   const quickExport = entry.exportOptions?.find((option) => option.format === 'pdf') ?? entry.exportOptions?.[0];
   const downloadLabel = quickExport ? t('action.exportNamed', { format: quickExport.label, name: entry.name }) : `${t('action.download')} ${entry.name}`;
+  const folderHref = isFolder ? folderHrefFor?.(entry) : undefined;
+
+  const openContent = (
+    <>
+      <span className={`entryIcon ${isFolder ? 'folder' : 'file'}`}><FileIcon entry={entry} size={18} /></span>
+      <span className="entryName">
+        <strong title={entry.name}>{entry.name}</strong>
+        {admin && !entry.effectivePublic ? (
+          <span className="privateBadge" title={t('explorer.privateBadge')}>
+            <Lock aria-hidden="true" size={12} />
+            <span className="srOnly">{t('explorer.privateBadge')}</span>
+          </span>
+        ) : null}
+      </span>
+    </>
+  );
 
   return (
     <li
@@ -56,15 +73,39 @@ export function EntryRow({
           <input type="checkbox" checked={selected} onChange={(event) => onToggle(entry, { range: (event.nativeEvent as MouseEvent).shiftKey })} />
         </label>
       ) : <span className="entrySelectPlaceholder" aria-hidden="true" />}
-      <button className="entryOpen" type="button" onClick={(event) => {
-        if (selectable && (event.metaKey || event.ctrlKey || event.shiftKey)) onToggle(entry, { range: event.shiftKey });
-        else activate();
-      }} aria-label={openLabel}>
-        <span className={`entryIcon ${isFolder ? 'folder' : 'file'}`}><FileIcon entry={entry} size={18} /></span>
-        <span className="entryName">
-          <strong title={entry.name}>{entry.name}</strong>
-        </span>
-      </button>
+      {folderHref ? (
+        <a
+          className="entryOpen"
+          href={folderHref}
+          aria-label={openLabel}
+          onClick={(event) => {
+            if (selectable && (event.metaKey || event.ctrlKey || event.shiftKey)) {
+              event.preventDefault();
+              onToggle(entry, { range: event.shiftKey });
+              return;
+            }
+            if (!event.metaKey && !event.ctrlKey && !event.shiftKey && !event.altKey && event.button === 0) {
+              event.preventDefault();
+              onOpen(entry);
+            }
+          }}
+        >
+          {openContent}
+        </a>
+      ) : (
+        <button
+          className="entryOpen"
+          type="button"
+          onClick={(event) => {
+            if (selectable && (event.metaKey || event.ctrlKey || event.shiftKey)) onToggle(entry, { range: event.shiftKey });
+            else if (isFolder) onOpen(entry);
+            else onPreview(entry);
+          }}
+          aria-label={openLabel}
+        >
+          {openContent}
+        </button>
+      )}
       <time className="entryDate" dateTime={entry.updatedAt}>{formatDate(entry.updatedAt)}</time>
       <span className="entrySize">{isFolder ? '—' : formatBytes(entry.size)}</span>
       <span className="entryActions">

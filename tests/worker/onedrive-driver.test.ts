@@ -2,7 +2,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { env } from 'cloudflare:test';
 import { putCredentials } from '../../src/worker/credentials';
 import { createMount } from '../../src/worker/mounts';
-import { OneDriveClient, type GraphDriveItem, type GraphListResult, type GraphUploadPartResult, type GraphUploadSession } from '../../src/worker/drivers/onedrive/client';
+import { OneDriveClient, type GraphDriveItem, type GraphUploadPartResult, type GraphUploadSession } from '../../src/worker/drivers/onedrive/client';
 import { OneDriveDriver, type OneDriveDriverClient } from '../../src/worker/drivers/onedrive/driver';
 import { mapGraphItem } from '../../src/worker/drivers/onedrive/mapper';
 import { UPLOAD_PART_SIZE_BYTES } from '../../src/worker/drivers/types';
@@ -87,7 +87,7 @@ describe('OneDrive read driver', () => {
 
   it('lists root and child items while preserving opaque nextLink cursors', async () => {
     const api = driverClient({
-      list: vi.fn(async (parentId, cursor) => ({
+      list: vi.fn(async (_parentId, cursor) => ({
         items: [graphItem(), { id: 'vault', name: 'Personal Vault', size: 0 }],
         nextCursor: cursor ? null : 'https://graph.microsoft.com/v1.0/me/drive/root/children?$skiptoken=opaque',
       })),
@@ -117,9 +117,49 @@ describe('OneDrive read driver', () => {
       kind: 'redirect', url: 'https://download.example/one',
     });
     await expect(driver.getDownload('folder', new Request('https://ilist.example/file'))).rejects.toMatchObject({ code: 'INVALID_STORAGE_OPERATION' });
-    expect(stat).toHaveBeenCalledTimes(4);
+    expect(stat).toHaveBeenCalledTimes(3);
     expect(getDownloadUrl).toHaveBeenCalledOnce();
     expect(getDownloadUrl).toHaveBeenCalledWith('item-1');
+  });
+
+  it('streams downloads, serves HEAD metadata without downloading, polls async Graph copy, and resolves paths safely', async () => {
+    const stat = vi.fn(async (id: string) => {
+      if (id === 'root') return graphItem({ id: 'root', file: undefined, folder: { childCount: 1 }, parentReference: undefined });
+      if (id === 'dest') return graphItem({ id: 'dest', name: 'Dest', file: undefined, folder: { childCount: 0 }, parentReference: { id: 'root' } });
+      return graphItem({ id, name: 'report.pdf', size: 2048, eTag: 'etag-r', parentReference: { id: 'root' }, file: { mimeType: 'application/pdf' } });
+    });
+    const download = vi.fn(async () => new Response('pdf-bytes', { status: 200 }));
+    const copy = vi.fn(async () => graphItem({ id: 'copied-1', name: 'report.pdf', parentReference: { id: 'dest' } }));
+    const statByPath = vi.fn(async (_rootId: string, segments: string[]) => graphItem({
+      id: `path-${segments.join('-')}`,
+      name: segments[segments.length - 1]!,
+      file: undefined,
+      folder: { childCount: 0 },
+      parentReference: { id: 'root' },
+    }));
+    const driver = new OneDriveDriver(mount, driverClient({ stat, download, copy, statByPath }));
+
+    const headResult = await driver.getDownload('file-1', new Request('https://ilist.example/file', { method: 'HEAD' }));
+    expect(headResult.kind).toBe('stream');
+    if (headResult.kind === 'stream') {
+      expect(headResult.response.headers.get('content-length')).toBe('2048');
+      expect(headResult.response.headers.get('content-type')).toBe('application/pdf');
+    }
+    expect(download).not.toHaveBeenCalled();
+
+    const streamResult = await driver.getDownload('file-1', new Request('https://ilist.example/file', {
+      headers: { range: 'bytes=0-3' },
+    }));
+    expect(streamResult.kind).toBe('stream');
+    expect(download).toHaveBeenCalledWith('file-1', 'bytes=0-3');
+
+    const copied = await driver.copy('file-1', 'dest');
+    expect(copied.id).toBe('copied-1');
+    expect(copy).toHaveBeenCalledWith('file-1', 'dest', 'report.pdf');
+
+    const chain = await driver.resolvePath(['docs']);
+    expect(chain.map((item) => item.id)).toEqual(['root', 'path-docs']);
+    await expect(driver.resolvePath(['..'])).rejects.toMatchObject({ code: 'ENTRY_NOT_FOUND' });
   });
 
   it('rejects item IDs outside a configured OneDrive sub-root', async () => {

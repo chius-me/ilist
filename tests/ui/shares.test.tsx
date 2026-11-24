@@ -17,7 +17,7 @@ const entry: Entry = {
 };
 
 const share: ShareView = {
-  id: 'share-1', mountId: 'native-r2', mountName: 'R2', name: 'private.txt', targetKind: 'file',
+  id: 'share-1', mountId: 's3-mount', mountName: 'Cloud Storage', name: 'private.txt', targetKind: 'file',
   protected: false, expiresAt: null, allowDownload: true, enabled: true,
   downloadCount: 0,
   maxDownloads: null,
@@ -88,7 +88,7 @@ describe('controlled shares UI', () => {
 
     render(<AppProviders><ShareManager /></AppProviders>);
     expect(await screen.findByText('private.txt')).toBeVisible();
-    expect(screen.getByText('R2')).toBeVisible();
+    expect(screen.getByText('Cloud Storage')).toBeVisible();
     expect(document.body.textContent).not.toMatch(/raw-token|providerItemId|tokenHash|private-file/);
     expect(screen.queryByRole('button', { name: /copy/i })).not.toBeInTheDocument();
 

@@ -11,18 +11,31 @@ export class ApiError extends Error {
 }
 
 export async function unwrap<T>(response: Response): Promise<T> {
-  const payload = (await response.json()) as {
-    ok: boolean;
+  let payload: {
+    ok?: unknown;
     data?: T;
-    error?: { code?: string; message?: string; details?: unknown };
-  };
-  if (!response.ok || !payload.ok || payload.data === undefined) {
-    throw new ApiError(
-      response.status,
-      payload.error?.code ?? `HTTP_${response.status}`,
-      payload.error?.message ?? 'Request failed',
-      payload.error?.details,
-    );
+    error?: { code?: unknown; message?: unknown; details?: unknown };
+  } | null = null;
+
+  try {
+    const parsed: unknown = await response.json();
+    if (typeof parsed === 'object' && parsed !== null && !Array.isArray(parsed)) {
+      payload = parsed as {
+        ok?: unknown;
+        data?: T;
+        error?: { code?: unknown; message?: unknown; details?: unknown };
+      };
+    }
+  } catch {
+    payload = null;
+  }
+
+  if (!response.ok || payload?.ok !== true || payload.data === undefined) {
+    const code = typeof payload?.error?.code === 'string' ? payload.error.code : `HTTP_${response.status}`;
+    const message = typeof payload?.error?.message === 'string'
+      ? payload.error.message
+      : response.statusText || 'Request failed';
+    throw new ApiError(response.status, code, message, payload?.error?.details);
   }
   return payload.data;
 }

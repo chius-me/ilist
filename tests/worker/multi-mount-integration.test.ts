@@ -94,7 +94,7 @@ afterEach(() => {
 describe('multi-mount filesystem integration', () => {
   it('isolates identical Dropbox provider item IDs across independent mounts', async () => {
     const db = (env as unknown as Env).DB;
-    await db.prepare("DELETE FROM mounts WHERE id <> 'native-r2'").run();
+    await db.prepare('DELETE FROM mounts').run();
     const first = await createMount(db, {
       name: 'Dropbox First', mountPath: '/dropbox-first', driverType: 'dropbox', provider: 'dropbox', isPublic: true,
     });
@@ -116,7 +116,7 @@ describe('multi-mount filesystem integration', () => {
 
   it('isolates identical Google provider item IDs across independent mounts', async () => {
     const db = (env as unknown as Env).DB;
-    await db.prepare("DELETE FROM mounts WHERE id <> 'native-r2'").run();
+    await db.prepare('DELETE FROM mounts').run();
     const personal = await createMount(db, {
       name: 'Google Personal', mountPath: '/google-personal', driverType: 'google', provider: 'google',
       isPublic: true,
@@ -144,7 +144,7 @@ describe('multi-mount filesystem integration', () => {
 
   it('advertises resumable uploads only for authenticated external folders with a provider adapter', async () => {
     const db = (env as unknown as Env).DB;
-    await db.prepare("DELETE FROM mounts WHERE id <> 'native-r2'").run();
+    await db.prepare('DELETE FROM mounts').run();
     await createMount(db, { name: 'Personal', mountPath: '/personal', driverType: 'onedrive', provider: 'onedrive', isPublic: true });
     const driver = fakeDriver('personal', true);
     driverRegistry.onedrive = () => driver;
@@ -163,10 +163,12 @@ describe('multi-mount filesystem integration', () => {
     const publicFolder = (await publicResponse.json() as { data: { items: Array<{ capabilities: Record<string, boolean> }> } }).data.items[0];
     expect(publicFolder.capabilities.multipartUpload).toBe(false);
 
-    const nativeResponse = await SELF.fetch(`${origin}/api/fs/list?path=/R2`, { headers: { cookie } });
-    expect(nativeResponse.status).toBe(200);
-    const nativeRoot = (await nativeResponse.json() as { data: { current: { capabilities: Record<string, boolean> } } }).data.current;
-    expect(nativeRoot.capabilities.multipartUpload).toBe(false);
+    const plainMount = await createMount(db, { name: 'Plain', mountPath: '/plain', driverType: 's3', provider: 'custom', isPublic: true });
+    driverRegistry.s3 = (_env, mount) => fakeDriver(mount.id === plainMount.id ? 'plain' : 'other', false);
+    const plainResponse = await SELF.fetch(`${origin}/api/fs/list?path=/plain`, { headers: { cookie } });
+    expect(plainResponse.status).toBe(200);
+    const plainRoot = (await plainResponse.json() as { data: { current: { capabilities: Record<string, boolean> } } }).data.current;
+    expect(plainRoot.capabilities.multipartUpload).toBe(false);
 
     const listed = await SELF.fetch(`${origin}/api/fs/list?path=/personal`, { headers: { cookie } });
     const uploadFolder = (await listed.json() as { data: { items: Array<{ id: string }> } }).data.items[0];
@@ -181,7 +183,7 @@ describe('multi-mount filesystem integration', () => {
 
   it('browses two mounts with collision-free IDs and downloads through the selected driver', async () => {
     const db = (env as unknown as Env).DB;
-    await db.prepare("DELETE FROM mounts WHERE id <> 'native-r2'").run();
+    await db.prepare('DELETE FROM mounts').run();
     const first = await createMount(db, { name: 'Personal', mountPath: '/personal', driverType: 'onedrive', provider: 'onedrive', isPublic: true });
     const second = await createMount(db, { name: 'Archive', mountPath: '/archive', driverType: 'onedrive', provider: 'onedrive', isPublic: true });
     const drivers = new Map([[first.id, fakeDriver('personal')], [second.id, fakeDriver('archive')]]);
@@ -206,7 +208,7 @@ describe('multi-mount filesystem integration', () => {
 
   it('dispatches admin create, upload, rename, move, and delete operations to an external mount', async () => {
     const db = (env as unknown as Env).DB;
-    await db.prepare("DELETE FROM mounts WHERE id <> 'native-r2'").run();
+    await db.prepare('DELETE FROM mounts').run();
     const mount = await createMount(db, { name: 'Personal', mountPath: '/personal', driverType: 'onedrive', provider: 'onedrive' });
     const driver = fakeDriver('personal');
     driverRegistry.onedrive = () => driver;
@@ -252,7 +254,7 @@ describe('multi-mount filesystem integration', () => {
 
   it('isolates private, disabled, and failing mounts while keeping healthy roots available', async () => {
     const db = (env as unknown as Env).DB;
-    await db.prepare("DELETE FROM mounts WHERE id <> 'native-r2'").run();
+    await db.prepare('DELETE FROM mounts').run();
     const healthy = await createMount(db, { name: 'Healthy', mountPath: '/healthy', driverType: 'onedrive', provider: 'onedrive', isPublic: true });
     await createMount(db, { name: 'Private', mountPath: '/private', driverType: 'onedrive', provider: 'onedrive', isPublic: false });
     await createMount(db, { name: 'Disabled', mountPath: '/disabled', driverType: 'onedrive', provider: 'onedrive', enabled: false });
@@ -264,11 +266,11 @@ describe('multi-mount filesystem integration', () => {
 
     const guestRoot = await SELF.fetch(`${origin}/api/fs/list?path=/`);
     const guestNames = (await guestRoot.json() as { data: { items: Array<{ name: string }> } }).data.items.map((entry) => entry.name);
-    expect(guestNames).toEqual(['Failing', 'Healthy', 'R2']);
+    expect(guestNames).toEqual(['Failing', 'Healthy']);
     const cookie = await login();
     const adminRoot = await SELF.fetch(`${origin}/api/fs/list?path=/`, { headers: { cookie } });
     const adminNames = (await adminRoot.json() as { data: { items: Array<{ name: string }> } }).data.items.map((entry) => entry.name);
-    expect(adminNames).toEqual(['Failing', 'Healthy', 'Private', 'R2']);
+    expect(adminNames).toEqual(['Failing', 'Healthy', 'Private']);
     expect((await SELF.fetch(`${origin}/api/fs/list?path=/private`)).status).toBe(404);
     expect((await SELF.fetch(`${origin}/api/fs/list?path=/failing`)).status).toBe(500);
     expect((await SELF.fetch(`${origin}/api/fs/list?path=/healthy`)).status).toBe(200);
@@ -276,8 +278,8 @@ describe('multi-mount filesystem integration', () => {
 
   it('forces private no-store caching and empty bodies for external HEAD downloads', async () => {
     const db = (env as unknown as Env).DB;
-    await db.prepare("DELETE FROM mounts WHERE id <> 'native-r2'").run();
-    const mount = await createMount(db, { name: 'Private', mountPath: '/private', driverType: 'onedrive', provider: 'onedrive', isPublic: false });
+    await db.prepare('DELETE FROM mounts').run();
+    await createMount(db, { name: 'Private', mountPath: '/private', driverType: 'onedrive', provider: 'onedrive', isPublic: false });
     const driver = fakeDriver('private');
     driver.getDownload = vi.fn(async () => ({
       kind: 'stream' as const,
@@ -312,7 +314,7 @@ describe('multi-mount filesystem integration', () => {
     ['google', 'google', 'SVG', 'image/svg+xml', 'svg'],
   ] as const)('secures streamed %s $s downloads at the file route', async (driverType, provider, _label, contentType, extension) => {
     const db = (env as unknown as Env).DB;
-    await db.prepare("DELETE FROM mounts WHERE id <> 'native-r2'").run();
+    await db.prepare('DELETE FROM mounts').run();
     await createMount(db, {
       name: `${driverType} streamed`, mountPath: '/streamed', driverType, provider,
       isPublic: true,
@@ -356,7 +358,7 @@ describe('multi-mount filesystem integration', () => {
 
   it('routes S3-compatible browsing and CRUD through the same mounted filesystem API', async () => {
     const db = (env as unknown as Env).DB;
-    await db.prepare("DELETE FROM mounts WHERE id <> 'native-r2'").run();
+    await db.prepare('DELETE FROM mounts').run();
     await createMount(db, {
       name: 'S3 Archive', mountPath: '/s3-archive', driverType: 's3', provider: 'cloudflare-r2',
       isPublic: true,
@@ -403,32 +405,5 @@ describe('multi-mount filesystem integration', () => {
     expect(driver.move).toHaveBeenCalledWith('upload-s3', 'shared-folder-id');
     expect(driver.remove).toHaveBeenCalledWith('folder-s3');
     expect(driver.remove).toHaveBeenCalledWith('upload-s3');
-  });
-
-  it('preserves native R2 stable links and redirects legacy object paths', async () => {
-    const worker = env as unknown as Env;
-    const cookie = await login();
-    const stableId = `integration-${crypto.randomUUID()}`;
-    const uploaded = await SELF.fetch(`${origin}/api/admin/files/${stableId}?parentId=root&name=stable.txt`, {
-      method: 'PUT', headers: { cookie, origin, 'content-type': 'text/plain' }, body: 'stable-data',
-    });
-    expect(uploaded.status).toBe(200);
-    const stable = await SELF.fetch(`${origin}/file/${stableId}/ignored.txt`);
-    expect(stable.status).toBe(200);
-    await expect(stable.text()).resolves.toBe('stable-data');
-
-    const legacyId = `legacy-${crypto.randomUUID()}`;
-    const legacyKey = `legacy/${legacyId}.txt`;
-    const now = new Date().toISOString();
-    await worker.R2_BUCKET.put(legacyKey, 'legacy-data', { httpMetadata: { contentType: 'text/plain' } });
-    await worker.DB.prepare(`INSERT INTO objects (key, name, size, content_type, etag, updated_at, is_public, sort_order, description)
-      VALUES (?, 'legacy.txt', 11, 'text/plain', 'etag', ?, 1, 0, '')`).bind(legacyKey, now).run();
-    await worker.DB.prepare(`INSERT INTO entries (
-      id, parent_id, name, kind, storage_key, size, content_type, etag, status, lifecycle_owner, is_public, sort_order, description, created_at, updated_at
-    ) VALUES (?, 'root', 'legacy.txt', 'file', ?, 11, 'text/plain', 'etag', 'ready', NULL, 1, 0, '', ?, ?)`)
-      .bind(legacyId, legacyKey, now, now).run();
-    const legacy = await SELF.fetch(`${origin}/file/${legacyKey}`, { redirect: 'manual' });
-    expect(legacy.status).toBe(302);
-    expect(legacy.headers.get('location')).toBe(`/file/${legacyId}/legacy.txt`);
   });
 });

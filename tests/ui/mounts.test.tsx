@@ -268,8 +268,14 @@ describe('MountManager', () => {
   it('creates a named OneDrive mount before starting OAuth', async () => {
     const navigate = vi.fn();
     let submitted: Record<string, unknown> | null = null;
-    vi.stubGlobal('fetch', vi.fn(async (_input: RequestInfo | URL, init?: RequestInit) => {
+    const oauthRequests: Array<{ url: string; body: unknown }> = [];
+    vi.stubGlobal('fetch', vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
+      const url = String(input);
       if (!init?.method) return Response.json({ ok: true, data: [] });
+      if (url === '/api/admin/oauth/onedrive/start') {
+        oauthRequests.push({ url, body: JSON.parse(String(init.body)) });
+        return Response.json({ ok: true, data: { url: 'https://login.example/onedrive-auth' } });
+      }
       submitted = JSON.parse(String(init.body));
       return Response.json({ ok: true, data: oneDriveMount });
     }));
@@ -284,7 +290,8 @@ describe('MountManager', () => {
     await userEvent.type(screen.getByLabelText('OAuth client secret / app secret'), 'mount-client-secret');
     await userEvent.click(screen.getByRole('button', { name: 'Create and connect' }));
 
-    await waitFor(() => expect(navigate).toHaveBeenCalledWith('/api/admin/oauth/onedrive/start?mountId=onedrive-1'));
+    await waitFor(() => expect(navigate).toHaveBeenCalledWith('https://login.example/onedrive-auth'));
+    expect(oauthRequests).toEqual([{ url: '/api/admin/oauth/onedrive/start', body: { mountId: 'onedrive-1' } }]);
     expect(submitted).toMatchObject({
       name: 'Personal drive', mountPath: '/personal', driverType: 'onedrive', provider: 'microsoft-onedrive-personal',
       rootItemId: 'folder-root-id', config: {},
@@ -340,8 +347,14 @@ describe('MountManager', () => {
   it('creates a named Google mount with an optional root folder before starting OAuth', async () => {
     const navigate = vi.fn();
     let submitted: Record<string, unknown> | null = null;
-    vi.stubGlobal('fetch', vi.fn(async (_input: RequestInfo | URL, init?: RequestInit) => {
+    const oauthRequests: Array<{ url: string; body: unknown }> = [];
+    vi.stubGlobal('fetch', vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
+      const url = String(input);
       if (!init?.method) return Response.json({ ok: true, data: [] });
+      if (url === '/api/admin/oauth/google/start') {
+        oauthRequests.push({ url, body: JSON.parse(String(init.body)) });
+        return Response.json({ ok: true, data: { url: 'https://accounts.example/google-auth' } });
+      }
       submitted = JSON.parse(String(init.body));
       return Response.json({ ok: true, data: googleMount });
     }));
@@ -354,7 +367,8 @@ describe('MountManager', () => {
     await userEvent.type(screen.getByLabelText('Root folder ID'), 'folder-root-id');
     await userEvent.click(screen.getByRole('button', { name: 'Create and connect' }));
 
-    await waitFor(() => expect(navigate).toHaveBeenCalledWith('/api/admin/oauth/google/start?mountId=google-1'));
+    await waitFor(() => expect(navigate).toHaveBeenCalledWith('https://accounts.example/google-auth'));
+    expect(oauthRequests).toEqual([{ url: '/api/admin/oauth/google/start', body: { mountId: 'google-1' } }]);
     expect(submitted).toMatchObject({
       name: 'Google projects', mountPath: '/google-projects', driverType: 'google', provider: 'google',
       rootItemId: 'folder-root-id', config: {},
@@ -364,8 +378,14 @@ describe('MountManager', () => {
   it('creates a named Dropbox mount with an optional root folder before starting OAuth', async () => {
     const navigate = vi.fn();
     let submitted: Record<string, unknown> | null = null;
-    vi.stubGlobal('fetch', vi.fn(async (_input: RequestInfo | URL, init?: RequestInit) => {
+    const oauthRequests: Array<{ url: string; body: unknown }> = [];
+    vi.stubGlobal('fetch', vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
+      const url = String(input);
       if (!init?.method) return Response.json({ ok: true, data: [] });
+      if (url === '/api/admin/oauth/dropbox/start') {
+        oauthRequests.push({ url, body: JSON.parse(String(init.body)) });
+        return Response.json({ ok: true, data: { url: 'https://dropbox.example/dropbox-auth' } });
+      }
       submitted = JSON.parse(String(init.body));
       return Response.json({ ok: true, data: dropboxMount });
     }));
@@ -378,7 +398,8 @@ describe('MountManager', () => {
     await userEvent.type(screen.getByLabelText('Root folder ID'), 'id:folder-root');
     await userEvent.click(screen.getByRole('button', { name: 'Create and connect' }));
 
-    await waitFor(() => expect(navigate).toHaveBeenCalledWith('/api/admin/oauth/dropbox/start?mountId=dropbox-1'));
+    await waitFor(() => expect(navigate).toHaveBeenCalledWith('https://dropbox.example/dropbox-auth'));
+    expect(oauthRequests).toEqual([{ url: '/api/admin/oauth/dropbox/start', body: { mountId: 'dropbox-1' } }]);
     expect(submitted).toMatchObject({
       name: 'Dropbox projects', mountPath: '/dropbox-projects', driverType: 'dropbox', provider: 'dropbox',
       rootItemId: 'id:folder-root', config: {},

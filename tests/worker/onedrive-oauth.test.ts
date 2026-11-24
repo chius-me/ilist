@@ -28,10 +28,18 @@ async function createOneDriveMount(): Promise<string> {
 
 async function start(mountId: string): Promise<Response> {
   const cookie = await login();
-  return SELF.fetch(`${origin}/api/admin/oauth/onedrive/start?mountId=${encodeURIComponent(mountId)}`, {
-    headers: { cookie },
-    redirect: 'manual',
+  return SELF.fetch(`${origin}/api/admin/oauth/onedrive/start`, {
+    method: 'POST',
+    headers: { cookie, origin, 'content-type': 'application/json' },
+    body: JSON.stringify({ mountId }),
   });
+}
+
+async function startUrl(mountId: string): Promise<URL> {
+  const response = await start(mountId);
+  expect(response.status).toBe(200);
+  const payload = await response.json() as { data: { url: string } };
+  return new URL(payload.data.url);
 }
 
 describe('OneDrive OAuth routes', () => {
@@ -40,10 +48,7 @@ describe('OneDrive OAuth routes', () => {
   it('builds a consumers PKCE authorization URL with exact scopes and a fixed callback origin', async () => {
     const mountId = await createOneDriveMount();
     await putCredentials(workerEnv(), mountId, { app: { clientId: 'per-mount-microsoft-id', clientSecret: 'per-mount-microsoft-secret' } });
-    const response = await start(mountId);
-
-    expect(response.status).toBe(302);
-    const authorization = new URL(response.headers.get('location')!);
+    const authorization = await startUrl(mountId);
     expect(`${authorization.origin}${authorization.pathname}`).toBe('https://login.microsoftonline.com/consumers/oauth2/v2.0/authorize');
     expect(authorization.searchParams.get('scope')).toBe('offline_access User.Read Files.ReadWrite');
     expect(authorization.searchParams.get('redirect_uri')).toBe(`${origin}/api/admin/oauth/onedrive/callback`);
@@ -62,7 +67,7 @@ describe('OneDrive OAuth routes', () => {
   it('consumes state once, encrypts tokens, and redirects to the configured public origin', async () => {
     const mountId = await createOneDriveMount();
     await putCredentials(workerEnv(), mountId, { app: { clientId: 'callback-microsoft-id', clientSecret: 'callback-microsoft-secret' } });
-    const authorization = new URL((await start(mountId)).headers.get('location')!);
+    const authorization = await startUrl(mountId);
     const state = authorization.searchParams.get('state')!;
     const tokenFetch = vi.fn(async (_input: RequestInfo | URL, _init?: RequestInit) => Response.json({
         token_type: 'Bearer', access_token: 'access-token', refresh_token: 'refresh-token', expires_in: 3600,
@@ -95,7 +100,7 @@ describe('OneDrive OAuth routes', () => {
 
   it('rejects expired state before contacting Microsoft', async () => {
     const mountId = await createOneDriveMount();
-    const authorization = new URL((await start(mountId)).headers.get('location')!);
+    const authorization = await startUrl(mountId);
     const state = authorization.searchParams.get('state')!;
     await workerEnv().DB.prepare('UPDATE oauth_states SET expires_at = 0 WHERE mount_id = ?').bind(mountId).run();
     const tokenFetch = vi.fn();
@@ -112,7 +117,7 @@ describe('OneDrive OAuth routes', () => {
 
   it('rejects callbacks served from an origin outside PUBLIC_ORIGIN', async () => {
     const mountId = await createOneDriveMount();
-    const authorization = new URL((await start(mountId)).headers.get('location')!);
+    const authorization = await startUrl(mountId);
     const cookie = await login();
 
     const response = await SELF.fetch(`https://ilist-workers.example/api/admin/oauth/onedrive/callback?code=code&state=${authorization.searchParams.get('state')}`, {
@@ -124,7 +129,7 @@ describe('OneDrive OAuth routes', () => {
 
   it('consumes denied authorization state and returns to storage settings with an error status', async () => {
     const mountId = await createOneDriveMount();
-    const authorization = new URL((await start(mountId)).headers.get('location')!);
+    const authorization = await startUrl(mountId);
     const cookie = await login();
     const response = await SELF.fetch(`${origin}/api/admin/oauth/onedrive/callback?error=access_denied&state=${authorization.searchParams.get('state')}`, {
       headers: { cookie }, redirect: 'manual',

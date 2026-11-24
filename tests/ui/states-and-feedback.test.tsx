@@ -7,6 +7,10 @@ import { LoginDialog } from '../../src/ui/features/explorer/LoginDialog';
 import { PreviewOverlay } from '../../src/ui/features/preview/PreviewOverlay';
 import type { Entry } from '../../src/ui/types/entries';
 
+function CrashingChild(): never {
+  throw new Error('boom');
+}
+
 const capabilities = {
   open: false,
   preview: true,
@@ -178,7 +182,7 @@ describe('page states and feedback', () => {
     expect(screen.queryByText(/Raw provider/)).not.toBeInTheDocument();
 
     await userEvent.click(screen.getByRole('button', { name: '管理员登录' }));
-    await userEvent.type(screen.getByLabelText('用户名'), 'admin');
+    await userEvent.type(await screen.findByLabelText('用户名'), 'admin');
     await userEvent.type(screen.getByLabelText('密码'), 'bad');
     await userEvent.click(screen.getByRole('button', { name: '登录' }));
     expect(await screen.findByText('用户名或密码无效。')).toBeVisible();
@@ -200,5 +204,29 @@ describe('page states and feedback', () => {
 
     expect(await screen.findByRole('alert')).toHaveTextContent('存储操作失败。');
     expect(screen.queryByText(/Raw preview metadata/)).not.toBeInTheDocument();
+  });
+
+  it('handles non-JSON API errors in unwrap, surfaces non-401 session errors, and catches render crashes in ErrorBoundary', async () => {
+    const { unwrap } = await import('../../src/ui/api/client');
+    const { ErrorBoundary } = await import('../../src/ui/components/ErrorBoundary');
+
+    await expect(unwrap(new Response('<html>502 Bad Gateway</html>', { status: 502, statusText: 'Bad Gateway' })))
+      .rejects.toMatchObject({ status: 502, code: 'HTTP_502', message: 'Bad Gateway' });
+
+    const errorSpy = vi.spyOn(console, 'error').mockImplementation(() => undefined);
+    render(<ErrorBoundary title="Custom crash" hint="Try reload" reloadLabel="Reload now"><CrashingChild /></ErrorBoundary>);
+    expect(screen.getByRole('alert')).toHaveTextContent('Custom crash');
+    expect(screen.getByRole('button', { name: 'Reload now' })).toBeVisible();
+    errorSpy.mockRestore();
+
+    vi.stubGlobal('fetch', vi.fn(async (input: RequestInfo | URL) => {
+      const url = String(input);
+      if (url.includes('/api/admin/me')) return new Response('Bad Gateway', { status: 502, statusText: 'Bad Gateway' });
+      if (url.includes('/api/fs/list')) return Response.json(root);
+      throw new Error(`Unexpected fetch: ${url}`);
+    }));
+    render(<App />);
+    const region = await screen.findByRole('region', { name: 'Notifications' });
+    await waitFor(() => expect(region).toHaveTextContent('Unable to verify administrator session.'));
   });
 });

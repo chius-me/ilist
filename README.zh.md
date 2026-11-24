@@ -24,22 +24,20 @@
 ## 功能
 
 - 支持虚拟根目录以及多个可独立命名的存储挂载
-- 支持通过 PKCE 进行 OneDrive Personal OAuth 授权，并加密保存刷新令牌
+- 支持通过 PKCE 与 POST 启动流程进行 OneDrive Personal OAuth 授权，并加密保存刷新令牌
 - 支持多个 OneDrive 账户，每个账户都可挂载到自定义的顶层路径
 - 支持多个 Google My Drive 账户或根目录，每个挂载独立授权并使用自定义顶层路径
 - 支持多个 Dropbox 账户或根目录，并使用 PKCE OAuth 和加密刷新令牌
 - 支持从 `/admin/storages` 管理每个挂载独立的 OAuth 应用凭据，并兼容旧版 Worker secret 回退
-- 支持 PikPak 挂载、加密会话、浏览、原文件下载和文件管理
-- 支持使用 AWS Signature Version 4 的 S3 兼容挂载
-- 支持通过 S3 凭据或内置 Worker 绑定使用 Cloudflare R2
-- 支持公开目录浏览、稳定文件链接、下载和常见文件预览
-- 支持可撤销的文件与文件夹分享，可选密码、过期时间和下载策略
-- 支持英文和简体中文界面，并提供跟随系统、浅色和深色主题，偏好保存在本地
-- 支持列表和网格视图、面包屑、排序、搜索、键盘选择及响应式布局
-- 支持适配桌面、平板和移动屏幕的存储与外观管理界面
-- 支持管理员登录、上传、新建文件夹、重命名、移动、删除及可见性控制
-- 支持 OneDrive、Google Drive、Dropbox 可续传上传和 S3 multipart 上传，并提供暂停、继续、重试、取消及进度控制
-- 支持 D1 迁移以及旧版 R2 对象链接的兼容
+- 支持通过 S3 兼容 API 接入 Cloudflare R2 或其他 S3 存储（AWS Signature Version 4、并发分片上传、批量删除 `DeleteObjects`）
+- 支持游标分页浏览、访客目录 60 秒边缘缓存（`?refresh=1` 可绕过缓存），以及前端 30 秒 LRU 目录导航缓存
+- 支持丰富安全的文件预览：PDF.js Canvas 渲染（`pdfjs-dist`）、防 XSS 净化的 Markdown（`marked`）、代码语法高亮（`highlight.js`）、UTF-8/GB18030 自动文本编码回退、图片缩放旋转，以及同目录文件上下切换
+- 支持文件夹上传（`webkitdirectory` 选择器与递归拖拽上传）、网格图片缩略图、超过 100 项列表虚拟滚动、交互式列排序、全选和键盘快捷键（`/`、`Escape`、`Backspace`）
+- 支持可撤销的文件与文件夹分享，提供密码保护、过期时间、禁止或限制下载次数、分享页站内搜索排序、URL 状态同步，以及访问/下载统计
+- 支持英文和简体中文界面，按需懒加载中文词典，并在本地持久化系统、浅色和深色主题
+- 支持通过 `VITE_REPO_URL` 与 `VITE_CONTACT_EMAIL` 在构建时自定义顶部链接
+- 支持适配桌面、平板和移动屏幕的响应式文件浏览器、存储管理、分享与外观设置界面
+- 支持通过 `triggers.crons` 定期清理过期会话、OAuth 状态、限流窗口与过期上传会话
 - 支持流式传输提供商响应，不会将完整文件缓冲在 Worker 内存中
 
 ## 支持的存储
@@ -49,36 +47,33 @@
 | OneDrive Personal | ✓ | ✓ | ✓ | ✓ | 支持可续传上传；仅支持个人 Microsoft 账户 |
 | Google My Drive | ✓ | ✓ | ✓ | ✓ | 支持 Range 下载、可续传上传以及 Docs/Sheets/Slides 导出 |
 | Dropbox | ✓ | ✓ | ✓ | ✓ | 支持 Range 下载、可续传上传、文件夹复制和云端文件导出 |
-| PikPak | ✓ | — | ✓ | ✓ | 代理原文件下载；暂不声明上传和复制能力 |
-| Cloudflare R2 绑定 | ✓ | ✓ | ✓ | ✓ | 内置兼容挂载；仅支持单请求上传 |
-| 通过 S3 接入 Cloudflare R2 | ✓ | ✓ | ✓ | ✓ | 使用 R2 S3 端点和限定范围凭据进行 multipart 上传 |
+| 通过 S3 接入 Cloudflare R2 | ✓ | ✓ | ✓ | ✓ | 使用 R2 S3 端点与限定存储桶范围凭据，支持 3 并发 multipart 上传与批量删除 |
 | 其他 S3 兼容存储 | ✓ | ✓ | ✓ | ✓ | multipart 兼容性取决于提供商的 S3 实现 |
 
-不提供 OneDrive Personal Vault。Microsoft Graph 返回的锁定保险库不包含可用的文件或文件夹类型信息，因此 ilist 会跳过它，避免导致父目录加载失败。
+不提供 OneDrive Personal Vault。Microsoft Graph 返回的锁定保险库不包含可用的文件或文件夹类型信息，因此 ilist 会跳过它，避免导致父目录加载失败。旧版原生 `R2` Worker 绑定（`native-r2`）已通过迁移 `0020_retire_native_r2_mounts.sql` 退役；请改用 S3 兼容凭据挂载 R2。
 
 ## 架构
 
 ```text
 浏览器
   |
-  +-- React + Vite 界面（Workers Assets）
+  +-- React + Vite 界面（Workers Assets，按需分块加载）
   |
-  +-- Cloudflare Worker
-        +-- 原生请求路由与会话认证
-        +-- 虚拟文件系统与存储驱动注册表
+  +-- Cloudflare Worker（Smart Placement + scheduled Cron 清理）
+        +-- 模块化路由（routes/auth、routes/fs、routes/admin-entries）与会话认证
+        +-- 虚拟文件系统、游标分页与惰性存储驱动注册表
         +-- OneDrive Personal 驱动 -> Microsoft Graph
         +-- Google Drive 驱动 -> Google Drive API v3
         +-- Dropbox 驱动 -> Dropbox API v2
-        +-- S3 驱动 -> R2 或其他 S3 兼容提供商
-        +-- D1 -> 挂载、加密凭据、文件条目、会话和分享
-        +-- R2 绑定 -> 内置兼容存储
+        +-- S3 驱动 -> Cloudflare R2（S3 API）或其他 S3 兼容提供商
+        +-- D1 -> 挂载、加密凭据、文件条目、上传会话和分享
 ```
 
 Worker 作为控制平面，在可能的情况下对文件数据进行流式传输或重定向。提供商凭据在写入 D1 前会先经过加密。
 
 ## 快速开始
 
-1. **前置条件。** 安装 Node.js 22.12 或更高版本以及 npm 10 或更高版本。准备好已启用 Workers、D1 和 R2 的 Cloudflare 账户，使用 `npx wrangler login` 完成 Wrangler 身份验证，并为计划使用的云存储准备 OAuth 应用。
+1. **前置条件。** 安装 Node.js 22.12 或更高版本以及 npm 10 或更高版本。准备好已启用 Workers 和 D1 的 Cloudflare 账户，使用 `npx wrangler login` 完成 Wrangler 身份验证，并准备好所需云存储的 OAuth 应用或 R2/S3 凭据。
 2. **克隆并安装。**
 
    ```bash
@@ -87,17 +82,16 @@ Worker 作为控制平面，在可能的情况下对文件数据进行流式传�
    npm install
    ```
 
-3. **创建 D1 和 R2 资源。**
+3. **创建 D1 数据库。**
 
    ```bash
    npx wrangler d1 create ilist-d1
-   npx wrangler r2 bucket create ilist-r2
    ```
 
-4. **配置 `wrangler.jsonc`、自定义域名并应用 D1 迁移。** 将 Wrangler 返回的 D1 `database_id` 复制到 `wrangler.jsonc`，确认数据库和存储桶名称；只有当 `ilist.chius.dev` 位于你的 Cloudflare zone 时，才保留已配置的该自定义域名路由。然后运行：
+4. **配置 `wrangler.jsonc`、自定义域名并应用 D1 迁移。** 将 Wrangler 返回的 D1 `database_id` 复制到 `wrangler.jsonc`，确认数据库名称；只有当 `ilist.chius.dev` 位于你的 Cloudflare zone 时，才保留已配置的该自定义域名路由。然后运行：
 
    ```bash
-   npx wrangler d1 migrations apply ilist-d1 --remote
+   npx wrangler d1 migrations apply DB --remote --env production
    ```
 
 5. **生成管理员密码哈希和随机密钥。**
@@ -110,7 +104,7 @@ Worker 作为控制平面，在可能的情况下对文件数据进行流式传�
 
    密码命令拒绝通过参数传入密码。在终端中读取密码时会关闭字符回显；自动化场景可通过非 TTY 标准输入提供且仅提供一行密码。stdout 只输出最终哈希，提示和错误只写入 stderr。
 
-   新哈希使用 `pbkdf2-sha256:600000`。旧版 `pbkdf2` 哈希在本版本仍可使用，但管理员哈希属于 Cloudflare Secret，Worker 无法自动回写升级。使用旧哈希成功登录后，请执行以下命令轮换：
+   新哈希使用 `pbkdf2-sha256:600000`。旧版 `pbkdf2` 哈希在迁移兼容期内仍可使用，但管理员哈希属于 Cloudflare Secret，Worker 无法自动回写升级。使用旧哈希成功登录后，请执行以下命令轮换：
 
    ```bash
    npm run hash-password
@@ -126,11 +120,12 @@ Worker 作为控制平面，在可能的情况下对文件数据进行流式传�
    npx wrangler secret put PUBLIC_ORIGIN
    ```
 
-   规范生产值为 `https://ilist.chius.dev`。`PUBLIC_ORIGIN` 必须与实际部署的 HTTPS origin 完全一致，且不能带末尾斜杠。
+   规范生产值为 `https://ilist.chius.dev`。`PUBLIC_ORIGIN` 必须与实际部署的 HTTPS origin 完全一致，且不能带末尾斜杠。如需自定义页头仓库或联系邮箱链接，可在构建 UI 时设置 `VITE_REPO_URL` 与 `VITE_CONTACT_EMAIL`。
 
-7. **运行 `npm run check` 和 `npm run deploy`。**
+7. **运行检查并部署。**
 
    ```bash
+   npm run lint
    npm run check
    npm run deploy
    ```
@@ -147,8 +142,6 @@ Worker 作为控制平面，在可能的情况下对文件数据进行流式传�
 
 对于 Dropbox，请遵循 [docs/dropbox-setup.md](docs/dropbox-setup.md)。创建 scoped Dropbox 应用，注册 `https://ilist.chius.dev/api/admin/oauth/dropbox/callback`，启用文件 metadata/content 的读写四项 scope，并在 `/admin/storages` 输入应用密钥。
 
-对于 PikPak，请遵循 [docs/pikpak-setup.md](docs/pikpak-setup.md)。账户会话按挂载加密保存，密码不会被保留。
-
 对于通过 S3 使用 Cloudflare R2 的情况，请使用：
 
 ```text
@@ -164,21 +157,21 @@ Secret access key: R2 API token secret access key
 
 ## 上传行为
 
-- 小于 `10 MiB` 的文件继续使用原有的单请求上传路径。
+- 小于 `10 MiB` 的文件使用单请求上传路径。
 - 等于或大于 `10 MiB` 的文件，在当前 OneDrive、Google Drive、Dropbox 或 S3 挂载声明支持 multipart 时使用可续传上传。
-- 分片按顺序以 `10 MiB` 大小上传，队列最多同时处理两个文件。
+- 分片大小为 `10 MiB`；S3/R2 挂载支持最多 3 路分片并发上传，OneDrive、Google Drive 和 Dropbox 按顺序逐片上传。上传队列最多同时处理两个文件。
 - 页面保持打开时，暂停、继续和重试会保留不透明的 ilist 会话 ID 以及服务端已确认分片。完整刷新后，未完成的 multipart 会话会重新出现在上传队列中，并要求重新选择本地原文件后才能继续分片（浏览器无法静默读取磁盘文件）。
+- 文件夹上传（“上传文件夹”按钮或递归拖拽文件夹）会按层级创建缺失目录，并将文件分组排入对应目标目录。
 - 提供商上传 URL、OneDrive 会话证明、Google 可续传会话 URL、Dropbox 会话 ID 和 S3 Upload ID 只保存在加密状态或服务端，绝不会返回浏览器。
-- 内置 `R2` Worker 绑定继续兼容已有部署，但不支持可续传上传；需要 multipart 上传时，请将 R2 配置为 S3 挂载。
 - 建议为 S3 兼容存储桶配置未完成 multipart 上传生命周期规则，以便在 Worker 无法完成清理时自动删除遗留上传。
 
-OneDrive 可续传上传继续使用上文所述的 `Files.ReadWrite` 委托权限，Google Drive 使用上文所述的完整 Drive OAuth scope。部署当前版本前必须应用全部 D1 迁移，包括 `0012_upload_sessions.sql`、`0013_upload_terminal_leases.sql`、`0014_shares.sql`、`0015_auth_rate_limits.sql`、`0016_mounts_private_default.sql`、`0017_share_auth_revision.sql` 和 `0018_share_limits_and_counters.sql`。
+部署当前版本前请确保已应用全部 D1 迁移（直至 `0021_optimize_indexes.sql`）。
 
 ## 受控分享
 
-管理员可以从任意文件或文件夹的操作菜单创建分享，并在 `/admin/shares` 管理已有分享。分享可设置密码、过期时间、禁止显式下载，也可随时停用或重新启用。文件夹分享支持嵌套浏览、列表与网格视图，以及主文件浏览器已有的安全预览类型。
+管理员可以从任意文件或文件夹的操作菜单创建分享，并在 `/admin/shares` 管理已有分享（包括查看访问次数和下载次数统计）。分享可设置密码、过期时间、禁止显式下载、限制最大下载次数，也可随时停用或重新启用。文件夹分享支持嵌套浏览、列表与网格视图、前端搜索与排序、URL 查询参数同步，以及与主文件浏览器相同的安全预览类型。
 
-Google Docs、Sheets 和 Slides 会在主文件浏览器与受控分享中显示明确的导出格式。存在 PDF 格式时优先用于预览，下载仍受分享当前下载策略约束。
+Google Docs、Sheets 和 Slides 会在主文件浏览器与受控分享中显示明确的导出格式，并支持按需点击“预览 PDF”，不会在打开时自动内嵌。下载仍受分享当前下载策略约束。
 
 原始 `/s/:token` 链接只在创建成功或轮换令牌时返回。D1 仅保存令牌的 SHA-256 哈希，因此管理页无法恢复或复制已有链接。管理员可轮换令牌，旧公开 URL 会立即失效且策略字段保留。可选最大下载次数由服务端强制执行。公开条目 ID 是限定到单个分享的加密句柄，不会暴露挂载 ID 或提供商条目 ID。密码授权使用短时有效、`HttpOnly`、`SameSite=Lax` 且限定到该分享路径的 Cookie。
 
@@ -192,11 +185,11 @@ Google Docs、Sheets 和 Slides 会在主文件浏览器与受控分享中显示
 
 ```bash
 cp .dev.vars.example .dev.vars
-npx wrangler d1 migrations apply ilist-d1 --local
+npx wrangler d1 migrations apply DB --local
 npm run dev
 ```
 
-启动 Wrangler 前填入仅用于测试的值。它通常会在 `http://localhost:8787` 提供应用。OAuth 无法针对普通 HTTP origin 完成；回调流程请使用已部署的 Worker 或 HTTPS 开发主机名。本地 D1 和 R2 数据与生产环境隔离。永远不要将生产凭据放入 `.dev.vars`。
+启动 Wrangler 前填入仅用于测试的值。它通常会在 `http://localhost:8787` 提供应用。OAuth 无法针对普通 HTTP origin 完成；回调流程请使用已部署的 Worker 或 HTTPS 开发主机名。本地 D1 数据与生产环境隔离。永远不要将生产凭据放入 `.dev.vars`。
 
 ## 命令
 
@@ -205,29 +198,34 @@ npm run dev
 | `npm run dev` | 运行本地 Worker 和 UI |
 | `npm run dev:web` | 运行仅前端的 Vite 开发服务器 |
 | `npm run build` | 构建 Vite 前端 |
-| `npm run test:worker` | 运行 Worker 运行时测试 |
-| `npm run test:ui` | 运行 UI 测试 |
+| `npm run lint` | 使用 Biome 检查 `src`、`tests` 和 `scripts` 的代码规范 |
+| `npm run lint:fix` | 应用安全的 Biome 自动修复 |
+| `npm run typecheck` | 运行隔离且严格的 `worker`/`ui`/`node` 类型检查 |
+| `npm run test:worker` | 使用 `@cloudflare/vitest-plugin` 运行 Worker 运行时测试 |
+| `npm run test:ui` | 运行 UI 单元测试与交互测试 |
+| `npm run test:scripts` | 运行 CLI 脚本测试 |
 | `npm run test:e2e` | 在桌面、平板和移动视口运行浏览器流程测试 |
+| `npm run test:e2e:ci` | 运行非截图浏览器 E2E 测试 |
 | `npm run test:visual` | 运行浏览器截图场景 |
-| `npm run test` | 运行全部测试 |
-| `npm run check` | 类型检查、构建并运行全部测试 |
-| `npm run deploy` | 使用 Wrangler 构建并部署 |
+| `npm run test` | 运行全部 Worker、UI 和脚本测试 |
+| `npm run check` | 运行分组类型检查、构建前端并执行全部单元测试 |
+| `npm run deploy:d1` | 向生产 D1 应用远程迁移 |
+| `npm run deploy` | 应用迁移、构建并使用 Wrangler 部署 |
+| `npm run types` | 重新生成 `src/worker/env.d.ts` 中的 Worker 绑定类型 |
 | `npm run hash-password` | 交互输入并生成管理员密码哈希 |
-| `npm run migrate:objects -- --local` | 在本地将旧版对象行导入条目模型 |
-| `npm run migrate:objects -- --remote` | 在生产环境导入旧版对象行 |
 
 ## 持续部署
 
-[`.github/workflows/ci-cd.yml`](.github/workflows/ci-cd.yml) 会在每个 Pull Request 以及每次推送到 `main` 时运行 `npm run check`。
+[`.github/workflows/ci.yml`](.github/workflows/ci.yml) 会在每个 Pull Request 以及每次推送到 `main` 时依次运行 `npm audit --omit=dev --audit-level=high`、`npm run lint`、`npm run check` 与 `npm run test:e2e:ci`。
 
-`main` 上检查通过后（或手动 `workflow_dispatch`），同一 workflow 会应用待执行的远程 D1 迁移，再用 Wrangler 部署 Worker 与 Assets。通过 `wrangler secret put` 写入的 Worker secret 保留在 Cloudflare，不会由 CI 重新上传。
+`main` 上检查通过后（或手动 `workflow_dispatch`），部署任务会应用待执行的远程 D1 迁移，再用 Wrangler 部署 Worker 与 Assets。通过 `wrangler secret put` 写入的 Worker secret 保留在 Cloudflare，不会由 CI 重新上传。
 
 首次自动部署前，请在仓库 **Settings → Secrets and variables → Actions** 配置以下 **repository secrets**：
 
 | Secret | 用途 |
 | --- | --- |
 | `CLOUDFLARE_API_TOKEN` | 具备本账户 Workers、Workers Routes / Custom Domains 与 D1 编辑权限的 API token |
-| `CLOUDFLARE_ACCOUNT_ID` | 拥有 `ilist` Worker、`ilist-d1` D1 与 `ilist-r2` R2 的 Cloudflare 账户 ID |
+| `CLOUDFLARE_ACCOUNT_ID` | 拥有 `ilist` Worker 与 `ilist-d1` D1 数据库的 Cloudflare 账户 ID |
 
 不要把 `ADMIN_PASSWORD_HASH`、`CREDENTIAL_MASTER_KEY`、OAuth client secret 或其他密钥放进 GitHub。基础设施密钥保存在 Cloudflare Worker secret 中；通过 WebUI 输入的提供商凭据会加密保存在 D1 中。
 
@@ -237,11 +235,12 @@ npm run dev
 - 任何出现在终端录制、截图、issue 或聊天中的凭据都必须轮换。
 - 在应用迁移或部署新版本前备份 D1。
 - 使用最小权限、限定存储桶范围的 S3 或 R2 凭据。
+- S3 兼容存储的创建、上传、multipart 完成、重命名和移动操作会拒绝覆盖已存在目标，确保并发安全。
 - 不要提交 `.dev.vars`、D1 导出文件、访问令牌、client secret 或临时上传文件。
 - 私有挂载依赖 ilist 授权；请检查部署中的 Cloudflare 日志、Access 策略和缓存规则。
 - 分享链接属于持有者凭据，请通过合适的私密渠道发送；敏感内容应同时设置密码。
 - D1 无法恢复已有分享的原始 URL；链接丢失时应创建替代分享。
-- 同源 HTML、SVG、XML、PDF 和未知类型文件会作为附件下载，并使用隔离的文件响应策略。只有精确的少数图片、音频和视频 MIME 类型可内联预览。
+- 应用响应配置了严格安全响应头（包含供 PDF.js Worker 使用的 `worker-src 'self'`）；同源 HTML、SVG、XML 和未知类型文件会作为附件下载，并使用隔离的文件响应策略（`sandbox; default-src 'none'`）。
 - 新挂载默认私有。公开挂载必须由管理员显式确认，因为未登录访客可以浏览该挂载。
 - 每次访问分享条目都会根据实时分享根目录校验句柄；将文件移出被分享文件夹会立即使旧句柄失效。
 - 管理员失败尝试会在执行 PBKDF2 前同时受两个限制：每 IP 每分钟最多五次，以及每 IP 加规范化用户名每分钟最多五次。分享密码仍限制为每 IP 加分享每分钟最多十次。请勿在分享响应前配置覆盖其缓存策略的规则。
@@ -255,45 +254,34 @@ npm run dev
 - 尚未实现 Dropbox Business 团队代理和显式 Team Space namespace 选择
 - 不支持 WebDAV、FTP、SFTP、SMB 或本地文件系统驱动
 - 刷新后续传需要重新绑定本地原文件；浏览器无法在无用户确认时静默恢复上传
-- 内置 R2 绑定仍使用小于 `10 MiB` 的单请求上传，更大单请求上传会返回稳定错误；大文件请将 R2 配置为 S3 挂载
 - 不支持跨挂载复制或移动（支持同挂载复制）
 - 分享不支持上传、接收者账户或邮件通知
-- 不支持离线下载、归档解压、媒体转码或后台任务系统
-- 提供商列表实时获取；尚未实现分布式目录缓存
-- 内置 R2 的递归删除有数量上限，并会逐条报告失败；S3 兼容存储和 OneDrive 文件夹删除遵循各提供商的行为
+- 除定时清理过期会话/状态的 Cron 外，不支持离线下载、归档解压、媒体转码或后台任务队列
+- 访客目录列表使用 60 秒边缘 Cache API 缓存（可用 `?refresh=1` 绕过）及 30 秒客户端 LRU 缓存，并非跨区域实时分布式缓存失效总线
 - Google Shared Drives、Shared with me、OneDrive 工作/学校账号、多用户 ACL 与 WebDAV 仍不在范围内
-
-## 旧版 R2 升级
-
-修改生产环境前，导出 D1 并将导出文件保存在 Git 之外：
-
-```bash
-npx wrangler d1 export ilist-d1 --remote --output /tmp/ilist-d1-before-multi-mount.sql
-npx wrangler d1 migrations apply ilist-d1 --remote
-npm run migrate:objects -- --remote
-npm run deploy
-```
-
-`v0.1.x` 版本旨在继续兼容旧版 R2 对象链接。迁移会添加条目和挂载模型，但不会删除文件或旧版行。v0.1.7 安全版本请遵循[发布中止流程](docs/releases/v0.1.7.md#emergency-abort-and-rollback)：不要将公开流量回退到 v0.1.6，并保留 `0015` 和 `0016`。只有数据本身损坏或迁移失败时才恢复 D1 导出。
 
 ## 项目结构
 
 ```text
 src/
-  ui/                         React 文件浏览器和管理界面
+  ui/                         React 文件浏览器、富媒体预览与管理界面
   worker/
-    index.ts                  原生 Worker 入口
-    router.ts                 HTTP 路由分发
+    index.ts                  原生 Worker 入口与定时 Cron 处理器
+    router.ts                 顶层 HTTP 路由分发
+    routes/                   auth / fs / admin-entries 模块化路由
     file-system.ts            虚拟文件系统操作
+    shared/                   HTTP 客户端、编码、IP 校验与 OAuth 公共辅助模块
     drivers/
+      registry.ts             惰性存储驱动注册表
       onedrive/               Microsoft Graph 驱动和 OAuth 令牌
       google/                 Google Drive API 驱动和 OAuth 令牌
       dropbox/                Dropbox API v2 驱动和 OAuth 令牌
-      pikpak/                 PikPak 驱动、会话令牌和下载代理
       s3/                     S3 兼容驱动和 SigV4 客户端
 migrations/                   D1 数据库结构迁移
 tests/worker/                 Worker 运行时测试
 tests/ui/                     React 组件和交互测试
+tests/e2e/                    Playwright 端到端测试
+scripts/                      CLI 脚本工具
 docs/                         配置与实现文档
 ```
 
@@ -306,7 +294,7 @@ docs/                         配置与实现文档
 
 ## 贡献
 
-提交变更前运行 `npm run check`。不要将提供商凭据、本地变量、D1 导出文件和临时上传文件放入 Git。修改存储行为或部署要求时，请同步更新相关文档。
+提交变更前运行 `npm run lint` 与 `npm run check`。不要将提供商凭据、本地变量、D1 导出文件和临时上传文件放入 Git。修改存储行为或部署要求时，请同步更新相关文档。
 
 ## 📄 许可证
 

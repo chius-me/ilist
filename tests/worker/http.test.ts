@@ -1,5 +1,6 @@
-import { describe, expect, it } from 'vitest';
+import { describe, expect, it, vi } from 'vitest';
 import { fail, HttpError, requireSameOrigin } from '../../src/worker/http';
+import { fetchWithRetry } from '../../src/worker/shared/http-client';
 
 describe('HTTP errors', () => {
   it('serializes a stable error code and details', async () => {
@@ -31,5 +32,23 @@ describe('HTTP errors', () => {
       headers: { origin: 'https://attacker.example' },
     });
     expect(() => requireSameOrigin(request)).toThrowError(HttpError);
+  });
+
+  it('guards 502/504 retries to idempotent or explicitly flagged requests', async () => {
+    const postFetcher = vi.fn(async () => new Response('bad gateway', { status: 502 }));
+    const postResponse = await fetchWithRetry(postFetcher, 'https://upstream.example/items', { method: 'POST', body: '{}' });
+    expect(postResponse.status).toBe(502);
+    expect(postFetcher).toHaveBeenCalledOnce();
+
+    const idempotentPostFetcher = vi.fn<typeof fetch>()
+      .mockResolvedValueOnce(new Response('gateway timeout', { status: 504 }))
+      .mockResolvedValueOnce(new Response('ok', { status: 200 }));
+    const rpcResponse = await fetchWithRetry(idempotentPostFetcher, 'https://upstream.example/rpc', {
+      method: 'POST',
+      body: '{}',
+      idempotent: true,
+    });
+    expect(rpcResponse.status).toBe(200);
+    expect(idempotentPostFetcher).toHaveBeenCalledTimes(2);
   });
 });

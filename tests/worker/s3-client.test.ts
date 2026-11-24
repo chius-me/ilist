@@ -408,15 +408,20 @@ describe('S3Client multipart requests', () => {
     await expect(client.uploadPart('archive.bin', 'upload-123', 1, 'part')).rejects.toThrow('S3 upload part response is missing ETag');
   });
 
-  it('forwards an upload-part AbortSignal to fetch', async () => {
+  it('forwards an upload-part AbortSignal to fetch and stops retrying gateway timeouts on non-idempotent POST', async () => {
     const controller = new AbortController();
+    let seenSignal: AbortSignal | undefined;
     const fetcher = vi.fn<typeof fetch>(async (_input, init) => {
-      expect(init?.signal).toBe(controller.signal);
-      return new Response(null, { headers: { etag: '"part-etag"' } });
+      seenSignal = init?.signal ?? undefined;
+      expect(seenSignal).toBeInstanceOf(AbortSignal);
+      expect(seenSignal?.aborted).toBe(false);
+      controller.abort('client-cancelled');
+      expect(seenSignal?.aborted).toBe(true);
+      throw new DOMException('Aborted', 'AbortError');
     });
     const client = createClient(fetcher);
 
-    await client.uploadPart('archive.bin', 'upload-123', 1, 'part', { signal: controller.signal });
+    await expect(client.uploadPart('archive.bin', 'upload-123', 1, 'part', { signal: controller.signal })).rejects.toThrow();
     expect(fetcher).toHaveBeenCalledOnce();
   });
 
@@ -449,26 +454,33 @@ describe('S3Client multipart requests', () => {
     });
   });
 
-  it('retains only a validated retry-after duration on S3 errors', async () => {
-    const fetcher = vi.fn<typeof fetch>()
-      .mockResolvedValueOnce(new Response(
-        '<Error><Code>SlowDown</Code><Message>private upstream message</Message></Error>',
-        { status: 503, headers: { 'retry-after': '30' } },
-      ))
-      .mockResolvedValueOnce(new Response(
-        '<Error><Code>RequestTimeout</Code><Message>private upstream message</Message></Error>',
-        { status: 503, headers: { 'retry-after': 'not-seconds' } },
-      ));
-    const client = createClient(fetcher);
-
-    await expect(client.headObject('archive.bin')).rejects.toMatchObject({
+  it('retains only a validated retry-after duration on S3 errors and retries transient 503s', async () => {
+    const slowDownFetcher = vi.fn<typeof fetch>().mockResolvedValueOnce(new Response(
+      '<Error><Code>SlowDown</Code><Message>private upstream message</Message></Error>',
+      { status: 503, headers: { 'retry-after': '30' } },
+    ));
+    await expect(createClient(slowDownFetcher).headObject('archive.bin')).rejects.toMatchObject({
       code: 'SlowDown',
       retryAfterSeconds: 30,
     });
-    await expect(client.headObject('archive.bin')).rejects.toMatchObject({
+    expect(slowDownFetcher).toHaveBeenCalledOnce();
+
+    const invalidRetryAfterFetcher = vi.fn<typeof fetch>().mockImplementation(async () => new Response(
+      '<Error><Code>RequestTimeout</Code><Message>private upstream message</Message></Error>',
+      { status: 503, headers: { 'retry-after': 'not-seconds' } },
+    ));
+    await expect(createClient(invalidRetryAfterFetcher).headObject('archive.bin')).rejects.toMatchObject({
       code: 'RequestTimeout',
       retryAfterSeconds: null,
     });
+    expect(invalidRetryAfterFetcher).toHaveBeenCalledTimes(3);
+
+    const recoveredFetcher = vi.fn<typeof fetch>()
+      .mockResolvedValueOnce(new Response(null, { status: 503 }))
+      .mockResolvedValueOnce(new Response(null, { status: 200, headers: { 'content-length': '12' } }));
+    const head = await createClient(recoveredFetcher).headObject('archive.bin');
+    expect(head.headers.get('content-length')).toBe('12');
+    expect(recoveredFetcher).toHaveBeenCalledTimes(2);
   });
 
   it('rejects duplicate and non-positive completion parts before issuing a request', async () => {
@@ -483,5 +495,39 @@ describe('S3Client multipart requests', () => {
       { partNumber: 0, size: 1, etag: '"zero"' },
     ])).rejects.toThrow('S3 multipart part numbers must be unique positive integers');
     expect(fetcher).not.toHaveBeenCalled();
+  });
+
+  it('batches deleteObjects with Content-MD5 and falls back on 501', async () => {
+    const seen: Request[] = [];
+    const batchFetcher = vi.fn<typeof fetch>(async (input, init) => {
+      seen.push(new Request(input, init));
+      return new Response('<DeleteResult></DeleteResult>', { status: 200 });
+    });
+    await createClient(batchFetcher).deleteObjects(['a.txt', 'b.txt']);
+    expect(seen).toHaveLength(1);
+    expect(new URL(seen[0]!.url).search).toBe('?delete');
+    expect(seen[0]!.headers.get('content-md5')).toMatch(/^[A-Za-z0-9+/]+={0,2}$/);
+    await expect(seen[0]!.text()).resolves.toContain('<Object><Key>a.txt</Key></Object><Object><Key>b.txt</Key></Object>');
+
+    const errorFetcher = vi.fn<typeof fetch>(async () => new Response(
+      '<DeleteResult><Error><Key>a.txt</Key><Code>AccessDenied</Code><Message>Denied</Message></Error></DeleteResult>',
+      { status: 200 },
+    ));
+    await expect(createClient(errorFetcher).deleteObjects(['a.txt'])).rejects.toMatchObject({
+      status: 502,
+      code: 'AccessDenied',
+    });
+
+    const deletedIndividual: string[] = [];
+    const fallbackFetcher = vi.fn<typeof fetch>(async (input, init) => {
+      const request = new Request(input, init);
+      if (request.method === 'POST' && request.url.includes('?delete')) {
+        return new Response('<Error><Code>NotImplemented</Code><Message>No batch delete</Message></Error>', { status: 501 });
+      }
+      deletedIndividual.push(`${request.method}:${new URL(request.url).pathname}`);
+      return new Response(null, { status: 204 });
+    });
+    await createClient(fallbackFetcher).deleteObjects(['x.txt', 'y.txt']);
+    expect(deletedIndividual).toEqual(expect.arrayContaining(['DELETE:/storage/archive/x.txt', 'DELETE:/storage/archive/y.txt']));
   });
 });

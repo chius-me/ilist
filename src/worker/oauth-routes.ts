@@ -1,5 +1,12 @@
 import { patchCredentials } from './credentials';
 import {
+  consumeDropboxOAuthState,
+  createDropboxAuthorization,
+  DROPBOX_SCOPES,
+  dropboxCallbackUrl,
+  requestDropboxTokens,
+} from './drivers/dropbox/oauth';
+import {
   consumeGoogleOAuthState,
   createGoogleAuthorization,
   GOOGLE_DRIVE_SCOPES,
@@ -13,16 +20,10 @@ import {
   oneDriveCallbackUrl,
   requestOneDriveTokens,
 } from './drivers/onedrive/oauth';
-import {
-  consumeDropboxOAuthState,
-  createDropboxAuthorization,
-  DROPBOX_SCOPES,
-  dropboxCallbackUrl,
-  requestDropboxTokens,
-} from './drivers/dropbox/oauth';
-import { HttpError } from './http';
+import { fail, HttpError, ok, readJson } from './http';
 import { getMount } from './mounts';
-import { publicOrigin } from './oauth-core';
+import { isRecord } from './shared/encoding';
+import { publicOrigin } from './shared/origin';
 import type { Env } from './types';
 
 function assertConfiguredOrigin(request: Request, env: Env): void {
@@ -31,18 +32,31 @@ function assertConfiguredOrigin(request: Request, env: Env): void {
   }
 }
 
+function methodNotAllowed(): Response {
+  return fail(405, 'Method not allowed');
+}
+
+async function readStartMountId(request: Request, url: URL): Promise<string> {
+  const queryId = url.searchParams.get('mountId');
+  if (queryId) return queryId;
+  const contentType = request.headers.get('content-type') ?? '';
+  if (!contentType.includes('application/json')) return '';
+  const body = await readJson<unknown>(request);
+  return isRecord(body) && typeof body.mountId === 'string' ? body.mountId : '';
+}
+
 export async function handleOAuthRoutes(request: Request, env: Env, url: URL): Promise<Response | null> {
   if (url.pathname === '/api/admin/oauth/dropbox/start') {
-    if (request.method !== 'GET') throw new HttpError(405, 'Method not allowed');
+    if (request.method !== 'POST') return methodNotAllowed();
     assertConfiguredOrigin(request, env);
-    const mountId = url.searchParams.get('mountId') ?? '';
+    const mountId = await readStartMountId(request, url);
     const mount = await getMount(env.DB, mountId);
     if (!mount || mount.driverType !== 'dropbox') throw new HttpError(404, 'MOUNT_NOT_FOUND', 'Dropbox mount not found');
-    return Response.redirect(await createDropboxAuthorization(env, mount.id), 302);
+    return ok({ url: await createDropboxAuthorization(env, mount.id) });
   }
 
   if (url.pathname === '/api/admin/oauth/dropbox/callback') {
-    if (request.method !== 'GET') throw new HttpError(405, 'Method not allowed');
+    if (request.method !== 'GET') return methodNotAllowed();
     assertConfiguredOrigin(request, env);
     const pending = await consumeDropboxOAuthState(env, url.searchParams.get('state') ?? '');
     if (url.searchParams.has('error')) {
@@ -67,16 +81,16 @@ export async function handleOAuthRoutes(request: Request, env: Env, url: URL): P
   }
 
   if (url.pathname === '/api/admin/oauth/google/start') {
-    if (request.method !== 'GET') throw new HttpError(405, 'Method not allowed');
+    if (request.method !== 'POST') return methodNotAllowed();
     assertConfiguredOrigin(request, env);
-    const mountId = url.searchParams.get('mountId') ?? '';
+    const mountId = await readStartMountId(request, url);
     const mount = await getMount(env.DB, mountId);
     if (!mount || mount.driverType !== 'google') throw new HttpError(404, 'MOUNT_NOT_FOUND', 'Google Drive mount not found');
-    return Response.redirect(await createGoogleAuthorization(env, mount.id), 302);
+    return ok({ url: await createGoogleAuthorization(env, mount.id) });
   }
 
   if (url.pathname === '/api/admin/oauth/google/callback') {
-    if (request.method !== 'GET') throw new HttpError(405, 'Method not allowed');
+    if (request.method !== 'GET') return methodNotAllowed();
     assertConfiguredOrigin(request, env);
     const pending = await consumeGoogleOAuthState(env, url.searchParams.get('state') ?? '');
     if (url.searchParams.has('error')) {
@@ -101,16 +115,16 @@ export async function handleOAuthRoutes(request: Request, env: Env, url: URL): P
   }
 
   if (url.pathname === '/api/admin/oauth/onedrive/start') {
-    if (request.method !== 'GET') throw new HttpError(405, 'Method not allowed');
+    if (request.method !== 'POST') return methodNotAllowed();
     assertConfiguredOrigin(request, env);
-    const mountId = url.searchParams.get('mountId') ?? '';
+    const mountId = await readStartMountId(request, url);
     const mount = await getMount(env.DB, mountId);
     if (!mount || mount.driverType !== 'onedrive') throw new HttpError(404, 'MOUNT_NOT_FOUND', 'OneDrive mount not found');
-    return Response.redirect(await createOneDriveAuthorization(env, mount.id), 302);
+    return ok({ url: await createOneDriveAuthorization(env, mount.id) });
   }
 
   if (url.pathname === '/api/admin/oauth/onedrive/callback') {
-    if (request.method !== 'GET') throw new HttpError(405, 'Method not allowed');
+    if (request.method !== 'GET') return methodNotAllowed();
     assertConfiguredOrigin(request, env);
     const state = url.searchParams.get('state') ?? '';
     const pending = await consumeOneDriveOAuthState(env, state);

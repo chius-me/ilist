@@ -53,6 +53,7 @@ export interface DirectoryResponse {
   current: Entry;
   breadcrumbs: Breadcrumb[];
   items: Entry[];
+  nextCursor?: string | null;
 }
 
 export interface BatchFailure {

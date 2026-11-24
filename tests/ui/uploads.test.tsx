@@ -401,6 +401,27 @@ describe('upload transport', () => {
       credentials: 'same-origin',
     });
   });
+
+  it('uploads multiple parts concurrently when maxPartConcurrency is 3 with monotonic combined progress', async () => {
+    const fetchMock = vi.fn()
+      .mockResolvedValueOnce(apiResponse({ ...sessionView(PART_SIZE * 3), maxPartConcurrency: 3 }))
+      .mockResolvedValueOnce(apiResponse({ id: 'entry-1' }));
+    vi.stubGlobal('fetch', fetchMock);
+    MockXMLHttpRequest.plans = [{ type: 'pending' }, { type: 'pending' }, { type: 'pending' }];
+    const file = new File([new Uint8Array(PART_SIZE * 3)], 'parallel.bin', { type: 'application/octet-stream' });
+    const progress: number[] = [];
+
+    const upload = uploadFile({ ...multipartInput(file), onProgress: (uploadedBytes) => progress.push(uploadedBytes) });
+    await waitFor(() => expect(MockXMLHttpRequest.requests).toHaveLength(3));
+    expect(progress[0]).toBe(0);
+
+    MockXMLHttpRequest.requests[1].emitProgress(PART_SIZE / 2);
+    MockXMLHttpRequest.requests[0].succeed();
+    MockXMLHttpRequest.requests[1].succeed();
+    MockXMLHttpRequest.requests[2].succeed();
+    await upload;
+    expect(progress).toEqual([...progress].sort((left, right) => left - right));
+  });
 });
 
 describe('upload queue', () => {
@@ -641,5 +662,28 @@ describe('upload panel', () => {
     expect(handlers.onRetry).toHaveBeenCalledWith('task-1');
     expect(screen.getByText(file.name)).toBeInTheDocument();
     expect(screen.getByRole('progressbar')).toHaveAttribute('aria-valuenow', '40');
+  });
+
+  it('skips session restore when disabled and hides pause controls on single-PUT uploads', () => {
+    const restoreSpy = vi.fn();
+    vi.stubGlobal('fetch', restoreSpy);
+    renderHook(() => useUploadQueue({ enabled: false, onCompleted: () => undefined }), { wrapper });
+    expect(restoreSpy).not.toHaveBeenCalled();
+
+    const singleFile = new File(['small'], 'small.txt');
+    render(
+      <UploadPanel
+        tasks={[{ id: 'single-1', parentId: 'root', file: singleFile, transport: 'single', status: 'uploading', uploadedBytes: 1, progress: 20 }]}
+        onPause={vi.fn()}
+        onResume={vi.fn()}
+        onCancel={vi.fn()}
+        onRetry={vi.fn()}
+        onRemove={vi.fn()}
+        onClearCompleted={vi.fn()}
+      />,
+      { wrapper },
+    );
+    expect(screen.queryByRole('button', { name: `Pause ${singleFile.name}` })).not.toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: `Resume ${singleFile.name}` })).not.toBeInTheDocument();
   });
 });

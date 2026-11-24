@@ -9,11 +9,19 @@ function snapshot(): string {
   return `${window.location.pathname}${window.location.search}`;
 }
 
+function safeDecodeSegment(segment: string): string {
+  try {
+    return decodeURIComponent(segment);
+  } catch {
+    return segment;
+  }
+}
+
 function canonicalPath(path: string): string {
   const segments = path
     .split('/')
     .filter(Boolean)
-    .map((segment) => encodeURIComponent(decodeURIComponent(segment)));
+    .map((segment) => encodeURIComponent(safeDecodeSegment(segment)));
   return segments.length ? `/${segments.join('/')}` : '/';
 }
 

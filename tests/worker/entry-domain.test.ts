@@ -1,28 +1,23 @@
 import { describe, expect, it } from 'vitest';
-import {
-  normalizeVirtualPath,
-  storageKeyForEntry,
-  validateEntryName,
-} from '../../src/worker/entry-domain';
+import { matchesNameFilter, validateEntryName } from '../../src/worker/entry-domain';
 
 describe('entry domain', () => {
-  it('decodes Chinese path segments independently', () => {
-    expect(normalizeVirtualPath('/R2/%E9%A1%B9%E7%9B%AE/demo')).toEqual({
-      path: '/R2/项目/demo',
-      segments: ['R2', '项目', 'demo'],
-    });
+  it.each(['', '   ', '.', '..', 'a/b', 'a\\b', 'bad\u0000name', 'del\u007fname', 'a'.repeat(256)])(
+    'rejects invalid name %j',
+    (name) => {
+      expect(() => validateEntryName(name)).toThrow();
+    },
+  );
+
+  it('accepts valid unicode and boundary-length entry names', () => {
+    expect(validateEntryName('项目资料 2026.txt')).toBe('项目资料 2026.txt');
+    expect(validateEntryName('a'.repeat(255))).toBe('a'.repeat(255));
   });
 
-  it.each(['', '.', '..', 'a/b', 'bad\u0000name'])('rejects invalid name %j', (name) => {
-    expect(() => validateEntryName(name)).toThrow();
-  });
-
-  it('rejects reserved root names only at the root', () => {
-    expect(() => validateEntryName('api', true)).toThrow();
-    expect(validateEntryName('api', false)).toBe('api');
-  });
-
-  it('uses an immutable physical key', () => {
-    expect(storageKeyForEntry('018f-entry')).toBe('blobs/018f-entry');
+  it('matches names case-insensitively and ignores empty queries', () => {
+    expect(matchesNameFilter('Reports', null)).toBe(true);
+    expect(matchesNameFilter('Reports', '  ')).toBe(true);
+    expect(matchesNameFilter('Reports', 'PORT')).toBe(true);
+    expect(matchesNameFilter('Reports', 'xyz')).toBe(false);
   });
 });

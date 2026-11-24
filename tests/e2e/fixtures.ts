@@ -211,7 +211,7 @@ export async function installApiFixtures(page: Page, options: ApiFixtureOptions 
       const input = request.postDataJSON() as { entryId: string; password?: string; allowDownload: boolean; enabled?: boolean; expiresAt?: string };
       const source = fixtureEntries.find((entry) => entry.id === input.entryId) ?? fixtureEntries[2];
       const share = {
-        id: 'created-share', mountId: 'native-r2', mountName: 'Built-in R2', name: source.name,
+        id: 'created-share', mountId: 's3-mount', mountName: 'Cloud Storage', name: source.name,
         targetKind: source.kind as 'file' | 'folder', protected: Boolean(input.password), expiresAt: input.expiresAt ?? null,
         allowDownload: input.allowDownload, enabled: input.enabled ?? true,
         createdAt: '2026-07-18T01:00:00.000Z', updatedAt: '2026-07-18T01:00:00.000Z',
@@ -324,26 +324,44 @@ export async function installApiFixtures(page: Page, options: ApiFixtureOptions 
     return json(route, { ok: false, error: { code: 'METHOD_NOT_ALLOWED', message: 'Method not allowed' } }, 405);
   });
   await page.route('**/api/admin/mounts/**', (route) => json(route, { ok: true, data: mounts[0] }));
-  await page.route('**/api/admin/oauth/onedrive/start**', (route) => route.fulfill({
-    status: 200,
-    contentType: 'text/html',
-    body: '<!doctype html><title>OneDrive OAuth</title>',
-  }));
-  await page.route('**/api/admin/oauth/google/start**', (route) => route.fulfill({
-    status: 200,
-    contentType: 'text/html',
-    body: '<!doctype html><title>Google OAuth</title>',
-  }));
-  await page.route('**/api/admin/oauth/dropbox/start**', (route) => route.fulfill({
-    status: 200,
-    contentType: 'text/html',
-    body: '<!doctype html><title>Dropbox OAuth</title>',
-  }));
+  await page.route('**/oauth-mock/**', (route) => {
+    const url = new URL(route.request().url());
+    const provider = url.pathname.split('/').pop() ?? 'oauth';
+    return route.fulfill({
+      status: 200,
+      contentType: 'text/html',
+      body: `<!doctype html><title>${provider} OAuth</title>`,
+    });
+  });
+  await page.route('**/api/admin/oauth/onedrive/start**', (route) => {
+    const body = route.request().method() === 'POST' ? route.request().postDataJSON() as { mountId?: unknown } | null : null;
+    const mountId = typeof body?.mountId === 'string' ? body.mountId : (new URL(route.request().url()).searchParams.get('mountId') ?? '');
+    return route.request().method() === 'POST'
+      ? json(route, { ok: true, data: { url: `/oauth-mock/onedrive?mountId=${encodeURIComponent(mountId)}` } })
+      : route.fulfill({ status: 405, body: '' });
+  });
+  await page.route('**/api/admin/oauth/google/start**', (route) => {
+    const body = route.request().method() === 'POST' ? route.request().postDataJSON() as { mountId?: unknown } | null : null;
+    const mountId = typeof body?.mountId === 'string' ? body.mountId : (new URL(route.request().url()).searchParams.get('mountId') ?? '');
+    return route.request().method() === 'POST'
+      ? json(route, { ok: true, data: { url: `/oauth-mock/google?mountId=${encodeURIComponent(mountId)}` } })
+      : route.fulfill({ status: 405, body: '' });
+  });
+  await page.route('**/api/admin/oauth/dropbox/start**', (route) => {
+    const body = route.request().method() === 'POST' ? route.request().postDataJSON() as { mountId?: unknown } | null : null;
+    const mountId = typeof body?.mountId === 'string' ? body.mountId : (new URL(route.request().url()).searchParams.get('mountId') ?? '');
+    return route.request().method() === 'POST'
+      ? json(route, { ok: true, data: { url: `/oauth-mock/dropbox?mountId=${encodeURIComponent(mountId)}` } })
+      : route.fulfill({ status: 405, body: '' });
+  });
   await page.route('**/api/admin/entries/**', (route) => json(route, { ok: true, data: { succeeded: ['report'], failed: [] } }));
   await page.route('**/api/admin/uploads/sessions**', async (route) => {
     const request = route.request();
     const url = new URL(request.url());
     const path = url.pathname;
+    if (request.method() === 'GET' && path === '/api/admin/uploads/sessions') {
+      return json(route, { ok: true, data: [] });
+    }
     if (request.method() === 'POST' && path === '/api/admin/uploads/sessions') {
       uploads.createCalls += 1;
       uploads.confirmedParts.clear();

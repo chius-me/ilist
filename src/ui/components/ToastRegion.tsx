@@ -1,6 +1,6 @@
 import { CircleAlert, CircleCheck, Info, X } from 'lucide-react';
 import { useEffect } from 'react';
-import { useI18n } from '../i18n/I18nProvider';
+import { useI18n, useOptionalI18n } from '../i18n/I18nProvider';
 import { en, type MessageKey } from '../i18n/messages';
 
 export type ToastTone = 'success' | 'error' | 'info';
@@ -13,23 +13,25 @@ export interface ToastMessage {
 
 type MessageValues = Record<string, string | number>;
 
+const fallbackT = (key: MessageKey, values: MessageValues = {}) =>
+  en[key].replace(/\{(\w+)\}/g, (placeholder, name: string) => {
+    const replacement = values[name];
+    return replacement === undefined ? placeholder : String(replacement);
+  });
+
+const fallbackDateFormatter = new Intl.DateTimeFormat('en');
+const fallbackNumberFormatter = new Intl.NumberFormat('en');
+
+const FEEDBACK_I18N_FALLBACK: ReturnType<typeof useI18n> = {
+  locale: 'en',
+  t: fallbackT,
+  formatBytes: (bytes) => `${bytes} bytes`,
+  formatDate: (value) => fallbackDateFormatter.format(new Date(value)),
+  formatNumber: (value) => fallbackNumberFormatter.format(value),
+};
+
 export function useFeedbackI18n(): ReturnType<typeof useI18n> {
-  try {
-    return useI18n();
-  } catch (error) {
-    if (!(error instanceof Error) || error.message !== 'useI18n must be used within I18nProvider') throw error;
-    const t = (key: MessageKey, values: MessageValues = {}) => en[key].replace(/\{(\w+)\}/g, (placeholder, name: string) => {
-      const replacement = values[name];
-      return replacement === undefined ? placeholder : String(replacement);
-    });
-    return {
-      locale: 'en',
-      t,
-      formatBytes: (bytes) => `${bytes} bytes`,
-      formatDate: (value) => new Intl.DateTimeFormat('en').format(new Date(value)),
-      formatNumber: (value) => new Intl.NumberFormat('en').format(value),
-    };
-  }
+  return useOptionalI18n() ?? FEEDBACK_I18N_FALLBACK;
 }
 
 function ToastItem({ toast, onDismiss }: { toast: ToastMessage; onDismiss(id: string): void }) {
@@ -52,7 +54,7 @@ function ToastItem({ toast, onDismiss }: { toast: ToastMessage; onDismiss(id: st
 export function ToastRegion({ toasts, onDismiss }: { toasts: ToastMessage[]; onDismiss(id: string): void }) {
   const { t } = useFeedbackI18n();
   return (
-    <section className="toastRegion" role="region" aria-label={t('feedback.notifications')} aria-live="polite" aria-relevant="additions removals">
+    <section className="toastRegion" aria-label={t('feedback.notifications')} aria-live="polite" aria-relevant="additions removals">
       {toasts.slice(-4).map((toast) => <ToastItem key={toast.id} toast={toast} onDismiss={onDismiss} />)}
     </section>
   );

@@ -28,9 +28,18 @@ async function createDropboxMount(): Promise<string> {
 
 async function start(mountId: string): Promise<Response> {
   const cookie = await login();
-  return SELF.fetch(`${origin}/api/admin/oauth/dropbox/start?mountId=${encodeURIComponent(mountId)}`, {
-    headers: { cookie }, redirect: 'manual',
+  return SELF.fetch(`${origin}/api/admin/oauth/dropbox/start`, {
+    method: 'POST',
+    headers: { cookie, origin, 'content-type': 'application/json' },
+    body: JSON.stringify({ mountId }),
   });
+}
+
+async function startUrl(mountId: string): Promise<URL> {
+  const response = await start(mountId);
+  expect(response.status).toBe(200);
+  const payload = await response.json() as { data: { url: string } };
+  return new URL(payload.data.url);
 }
 
 describe('Dropbox OAuth routes', () => {
@@ -39,9 +48,7 @@ describe('Dropbox OAuth routes', () => {
   it('builds an offline PKCE authorization URL with file scopes', async () => {
     const mountId = await createDropboxMount();
     await putCredentials(workerEnv(), mountId, { app: { clientId: 'per-mount-dropbox-id', clientSecret: 'per-mount-dropbox-secret' } });
-    const response = await start(mountId);
-    expect(response.status).toBe(302);
-    const authorization = new URL(response.headers.get('location')!);
+    const authorization = await startUrl(mountId);
     expect(`${authorization.origin}${authorization.pathname}`).toBe('https://www.dropbox.com/oauth2/authorize');
     expect(authorization.searchParams.get('redirect_uri')).toBe(`${origin}/api/admin/oauth/dropbox/callback`);
     expect(authorization.searchParams.get('token_access_type')).toBe('offline');
@@ -54,7 +61,7 @@ describe('Dropbox OAuth routes', () => {
   it('consumes state once, stores encrypted tokens, and redirects to storage settings', async () => {
     const mountId = await createDropboxMount();
     await putCredentials(workerEnv(), mountId, { app: { clientId: 'callback-dropbox-id', clientSecret: 'callback-dropbox-secret' } });
-    const authorization = new URL((await start(mountId)).headers.get('location')!);
+    const authorization = await startUrl(mountId);
     const state = authorization.searchParams.get('state')!;
     const tokenFetch = vi.fn(async (_input: RequestInfo | URL, _init?: RequestInit) => Response.json({
       token_type: 'bearer', access_token: 'dropbox-access', refresh_token: 'dropbox-refresh', expires_in: 14400,
@@ -86,7 +93,7 @@ describe('Dropbox OAuth routes', () => {
 
   it('consumes denied authorization state and returns a concise status', async () => {
     const mountId = await createDropboxMount();
-    const authorization = new URL((await start(mountId)).headers.get('location')!);
+    const authorization = await startUrl(mountId);
     const response = await SELF.fetch(`${origin}/api/admin/oauth/dropbox/callback?error=access_denied&state=${authorization.searchParams.get('state')}`, {
       headers: { cookie: await login() }, redirect: 'manual',
     });

@@ -1,9 +1,31 @@
-import { Download, MoreHorizontal } from 'lucide-react';
-import type { HTMLAttributes } from 'react';
-import { isEntryMutable, type Entry } from '../../types/entries';
+import { Download, Lock, MoreHorizontal } from 'lucide-react';
+import { useState, type HTMLAttributes } from 'react';
 import { useI18n } from '../../i18n/I18nProvider';
-import { FileIcon } from './FileIcon';
+import { isEntryMutable, type Entry } from '../../types/entries';
+import { isSafeGridThumbnail } from '../preview/preview-kind';
 import type { EntryHandlers } from './EntryRow';
+import { FileIcon } from './FileIcon';
+
+function GridMedia({ entry, url }: { entry: Entry; url: string }) {
+  const [thumbFailed, setThumbFailed] = useState(false);
+  const showThumb = !thumbFailed && isSafeGridThumbnail(entry);
+  return (
+    <span className={`gridMedia ${entry.kind}`}>
+      {showThumb ? (
+        <img
+          className="gridThumb"
+          src={url}
+          alt=""
+          loading="lazy"
+          decoding="async"
+          onError={() => setThumbFailed(true)}
+        />
+      ) : (
+        <span className={`gridIcon ${entry.kind}`}><FileIcon entry={entry} size={34} /></span>
+      )}
+    </span>
+  );
+}
 
 export function FileGrid({
   entries,
@@ -40,6 +62,26 @@ export function FileGrid({
         const downloadLabel = quickExport
           ? t('action.exportNamed', { format: quickExport.label, name: entry.name })
           : `${t('action.download')} ${entry.name}`;
+        const openLabel = `${t('action.open')} ${entry.name}`;
+        const folderHref = entry.kind === 'folder' ? handlers.folderHrefFor?.(entry) : undefined;
+        const primaryInner = (
+          <>
+            <GridMedia entry={entry} url={fileUrlFor(entry, false)} />
+            <span className="gridFooter">
+              <span className="gridTitleRow">
+                <strong title={entry.name}>{entry.name}</strong>
+                {admin && !entry.effectivePublic ? (
+                  <span className="privateBadge" title={t('explorer.privateBadge')}>
+                    <Lock aria-hidden="true" size={12} />
+                    <span className="srOnly">{t('explorer.privateBadge')}</span>
+                  </span>
+                ) : null}
+              </span>
+              <small>{entry.kind === 'folder' ? t('entry.folder') : formatBytes(entry.size)}</small>
+            </span>
+          </>
+        );
+
         return (
           <li
             id={`explorer-entry-${entry.id}`}
@@ -56,17 +98,39 @@ export function FileGrid({
             }}
           >
             {selectable ? <input className="gridSelect" type="checkbox" checked={selected} aria-label={t('entry.select', { name: entry.name })} onChange={(event) => handlers.onToggle(entry, { range: (event.nativeEvent as MouseEvent).shiftKey })} /> : null}
-            <button className="gridPrimary" type="button" aria-label={`${t('action.open')} ${entry.name}`} onClick={(event) => {
-              if (selectable && (event.metaKey || event.ctrlKey || event.shiftKey)) handlers.onToggle(entry, { range: event.shiftKey });
-              else if (entry.kind === 'folder') handlers.onOpen(entry);
-              else handlers.onPreview(entry);
-            }}>
-              <span className={`gridMedia ${entry.kind}`}><span className={`gridIcon ${entry.kind}`}><FileIcon entry={entry} size={34} /></span></span>
-              <span className="gridFooter">
-                <strong title={entry.name}>{entry.name}</strong>
-                <small>{entry.kind === 'folder' ? t('entry.folder') : formatBytes(entry.size)}</small>
-              </span>
-            </button>
+            {folderHref ? (
+              <a
+                className="gridPrimary"
+                href={folderHref}
+                aria-label={openLabel}
+                onClick={(event) => {
+                  if (selectable && (event.metaKey || event.ctrlKey || event.shiftKey)) {
+                    event.preventDefault();
+                    handlers.onToggle(entry, { range: event.shiftKey });
+                    return;
+                  }
+                  if (!event.metaKey && !event.ctrlKey && !event.shiftKey && !event.altKey && event.button === 0) {
+                    event.preventDefault();
+                    handlers.onOpen(entry);
+                  }
+                }}
+              >
+                {primaryInner}
+              </a>
+            ) : (
+              <button
+                className="gridPrimary"
+                type="button"
+                aria-label={openLabel}
+                onClick={(event) => {
+                  if (selectable && (event.metaKey || event.ctrlKey || event.shiftKey)) handlers.onToggle(entry, { range: event.shiftKey });
+                  else if (entry.kind === 'folder') handlers.onOpen(entry);
+                  else handlers.onPreview(entry);
+                }}
+              >
+                {primaryInner}
+              </button>
+            )}
             {entry.capabilities.download && !admin ? (
               <a className="gridMenu iconButton" href={fileUrlFor(entry, true, quickExport?.format)} title={downloadLabel} aria-label={downloadLabel}>
                 <Download aria-hidden="true" size={17} />

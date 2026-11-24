@@ -1,11 +1,12 @@
 import { env } from 'cloudflare:test';
 import { describe, expect, it } from 'vitest';
 import disablePikPakMounts from '../../migrations/0019_disable_pikpak_mounts.sql?raw';
+import retireNativeR2Mounts from '../../migrations/0020_retire_native_r2_mounts.sql?raw';
 import type { Env } from '../../src/worker/types';
 
 const db = () => (env as unknown as Env).DB;
 
-describe('retired storage driver migration', () => {
+describe('retired storage driver migrations', () => {
   it('makes existing PikPak mounts inactive without deleting their records', async () => {
     await db().prepare(`INSERT INTO mounts (
       id, name, mount_path, driver_type, provider, enabled, is_public,
@@ -21,5 +22,14 @@ describe('retired storage driver migration', () => {
 
     const mount = await db().prepare("SELECT id, enabled, is_public FROM mounts WHERE id = 'retired-pikpak'").first();
     expect(mount).toEqual({ id: 'retired-pikpak', enabled: 0, is_public: 0 });
+  });
+
+  it('retires existing native-r2 mounts without deleting their records', async () => {
+    await db().prepare(`UPDATE mounts SET enabled = 1, is_public = 1 WHERE id = 'native-r2'`).run();
+
+    await db().prepare(retireNativeR2Mounts).run();
+
+    const mount = await db().prepare("SELECT id, enabled, is_public FROM mounts WHERE id = 'native-r2'").first();
+    expect(mount).toEqual({ id: 'native-r2', enabled: 0, is_public: 0 });
   });
 });

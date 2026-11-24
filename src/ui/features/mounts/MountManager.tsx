@@ -1,6 +1,6 @@
 import { CirclePower, Cloud, Link, Link2Off, MoreHorizontal, Pencil, Plus, RefreshCw, Trash2 } from 'lucide-react';
 import { useCallback, useEffect, useRef, useState, type MouseEvent } from 'react';
-import { createMount, disconnectMount, dropboxConnectUrl, googleDriveConnectUrl, listMounts, oneDriveConnectUrl, removeMount, testMount, updateMount } from '../../api/mounts';
+import { createMount, disconnectMount, listMounts, removeMount, startOAuthAuthorization, testMount, updateMount } from '../../api/mounts';
 import { useI18n } from '../../i18n/I18nProvider';
 import type { Mount, MountInput } from '../../types/mounts';
 import { MountDialog } from './MountDialog';
@@ -18,24 +18,19 @@ function providerName(mount: Mount, t: ReturnType<typeof useI18n>['t']): string 
   if (mount.driverType === 'google') return t('mount.providerGoogleDrive');
   if (mount.driverType === 'dropbox') return t('mount.providerDropbox');
   if (mount.driverType === 'pikpak') return t('mount.retiredPikPak');
+  if (mount.driverType === 'native-r2') return t('mount.retiredNativeR2');
   if (mount.provider === 'cloudflare-r2') return 'Cloudflare R2';
   if (mount.provider === 'aws-s3') return 'AWS S3';
   if (mount.provider === 'backblaze-b2') return 'Backblaze B2';
   return mount.provider;
 }
 
-function isOAuthMount(mount: Mount): boolean {
+function isOAuthMount(mount: Mount): mount is Mount & { driverType: 'onedrive' | 'google' | 'dropbox' } {
   return mount.driverType === 'onedrive' || mount.driverType === 'google' || mount.driverType === 'dropbox';
 }
 
 function isRetiredMount(mount: Mount): boolean {
-  return mount.driverType === 'pikpak';
-}
-
-function connectUrl(mount: Pick<Mount, 'id' | 'driverType'>): string {
-  if (mount.driverType === 'google') return googleDriveConnectUrl(mount.id);
-  if (mount.driverType === 'dropbox') return dropboxConnectUrl(mount.id);
-  return oneDriveConnectUrl(mount.id);
+  return mount.driverType === 'pikpak' || mount.driverType === 'native-r2';
 }
 
 function MountConfirmation({ label, message, confirmLabel, busy, onClose, onConfirm }: {
@@ -52,7 +47,7 @@ function MountConfirmation({ label, message, confirmLabel, busy, onClose, onConf
   useModalFocus({ containerRef: backdrop, initialFocusRef: cancel, onClose });
   return <div ref={backdrop} className="dialogBackdrop overlayScrim" role="presentation" onMouseDown={onClose}>
     <section className="confirmDialog overlaySurface" role="dialog" aria-modal="true" aria-label={label} onMouseDown={(event) => event.stopPropagation()}>
-      <h2>{label}</h2><p>{message}</p><footer><button ref={cancel} className="button" onClick={onClose}>{t('action.cancel')}</button><button className="button danger" disabled={busy} onClick={onConfirm}>{confirmLabel}</button></footer>
+      <h2>{label}</h2><p>{message}</p><footer><button ref={cancel} className="button" type="button" onClick={onClose}>{t('action.cancel')}</button><button className="button danger" type="button" disabled={busy} onClick={onConfirm}>{confirmLabel}</button></footer>
     </section>
   </div>;
 }
@@ -141,7 +136,8 @@ export function MountManager(props: MountManagerProps) {
       else {
         const created = await createMount(input);
         if (input.driverType === 'onedrive' || input.driverType === 'google' || input.driverType === 'dropbox') {
-          navigate(connectUrl(created));
+          const authUrl = await startOAuthAuthorization(input.driverType, created.id);
+          navigate(authUrl);
           return;
         }
       }
@@ -193,6 +189,19 @@ export function MountManager(props: MountManagerProps) {
     }
   }
 
+  async function connect(mount: Mount & { driverType: 'onedrive' | 'google' | 'dropbox' }) {
+    setBusy(true);
+    setNotice(null);
+    try {
+      const authUrl = await startOAuthAuthorization(mount.driverType, mount.id);
+      navigate(authUrl);
+    } catch (cause) {
+      setNotice(localizedApiError(cause, t, 'mount.unableSave'));
+    } finally {
+      setBusy(false);
+    }
+  }
+
   async function confirmDelete() {
     if (!deleting) return;
     setBusy(true);
@@ -228,8 +237,8 @@ export function MountManager(props: MountManagerProps) {
       <button className="button primary" type="button" onClick={() => setEditing(null)}><Plus aria-hidden="true" size={16} />{t('admin.addStorage')}</button>
     </header>
     {notice ? <div className="operationNotice" role="status">{notice}</div> : null}
-    {error && editing === undefined ? <div className="errorState" role="alert"><strong>{t('mount.unableLoad')}</strong><span>{error}</span><button className="button" onClick={() => void refresh()}><RefreshCw aria-hidden="true" size={16} />{t('action.retry')}</button></div> : null}
-    {loading ? <div className="mountLoading" aria-label={t('mount.loading')}>{t('mount.loading')}</div> : null}
+    {error && editing === undefined ? <div className="errorState" role="alert"><strong>{t('mount.unableLoad')}</strong><span>{error}</span><button className="button" type="button" onClick={() => void refresh()}><RefreshCw aria-hidden="true" size={16} />{t('action.retry')}</button></div> : null}
+    {loading ? <div className="mountLoading" role="status" aria-label={t('mount.loading')}>{t('mount.loading')}</div> : null}
     {!loading && !error && mounts.length === 0 ? <div className="mountEmpty"><Cloud aria-hidden="true" size={30} /><strong>{t('mount.empty')}</strong><span>{t('mount.emptyHint')}</span></div> : null}
     {!loading && mounts.length ? <div className="mountTableWrap"><table className="mountTable" aria-label={t('admin.storageTitle')}>
       <thead><tr><th scope="col">{t('mount.columnName')}</th><th scope="col">{t('mount.columnPath')}</th><th scope="col">{t('mount.columnConnection')}</th><th scope="col">{t('mount.columnState')}</th><th scope="col"><span className="srOnly">{t('mount.columnActions')}</span></th></tr></thead>
@@ -244,7 +253,7 @@ export function MountManager(props: MountManagerProps) {
             setOpenMenuId((current) => current === mount.id ? null : mount.id);
           }}><MoreHorizontal aria-hidden="true" size={17} /></summary><div>
             {isOAuthMount(mount) ? <>
-              <button type="button" onClick={(event) => selectMountAction(event, () => navigate(connectUrl(mount)))}><Link aria-hidden="true" size={16} />{mount.connected ? t('mount.reconnect') : t('mount.connect')}</button>
+              <button type="button" disabled={busy} onClick={(event) => selectMountAction(event, () => void connect(mount))}><Link aria-hidden="true" size={16} />{mount.connected ? t('mount.reconnect') : t('mount.connect')}</button>
               {mount.connected ? <button type="button" onClick={(event) => selectMountAction(event, () => setDisconnecting(mount))}><Link2Off aria-hidden="true" size={16} />{t('mount.disconnect')}</button> : null}
             </> : null}
             {!isRetiredMount(mount) ? <>

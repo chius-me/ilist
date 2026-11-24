@@ -10,11 +10,12 @@ import {
 } from '../../api/uploads';
 import { useI18n } from '../../i18n/I18nProvider';
 import { localizedApiError } from '../../i18n/apiErrors';
-import { uploadReducer, type UploadTask } from './upload-reducer';
+import { uploadReducer, type UploadAction, type UploadTask } from './upload-reducer';
 
 const RESERVED_ROOT_NAMES = new Set(['api', 'file', 'admin']);
 const CONTROL_CHARACTERS = /[\u0000-\u001f\u007f]/;
 const MAX_CONCURRENT_UPLOADS = 2;
+const PROGRESS_THROTTLE_MS = 100;
 const SESSION_STORAGE_KEY = 'ilist.upload.sessions.v1';
 
 interface PersistedUploadSession {
@@ -28,7 +29,14 @@ interface PersistedUploadSession {
   lastModified?: number;
 }
 
+export interface EnqueueUploadOptions {
+  canUpload?: boolean;
+  multipartUpload?: boolean;
+  existingNames?: Iterable<string>;
+}
+
 interface UploadQueueOptions {
+  enabled?: boolean;
   transport?: UploadTransport;
   onCompleted(parentId: string): void;
   canUpload?: boolean;
@@ -36,7 +44,13 @@ interface UploadQueueOptions {
   existingNames?: Iterable<string>;
 }
 
-function validationError(name: string, parentId: string, occupiedNames: Set<string>, canUpload: boolean, t: ReturnType<typeof useI18n>['t']): string | undefined {
+function validationError(
+  name: string,
+  parentId: string,
+  occupiedNames: Set<string>,
+  canUpload: boolean,
+  t: ReturnType<typeof useI18n>['t'],
+): string | undefined {
   if (!canUpload) return t('upload.permissionDenied');
   const byteLength = new TextEncoder().encode(name).byteLength;
   if (!name.trim() || name === '.' || name === '..' || name.includes('/') || CONTROL_CHARACTERS.test(name) || byteLength > 255 || (parentId === 'root' && RESERVED_ROOT_NAMES.has(name))) {
@@ -46,7 +60,7 @@ function validationError(name: string, parentId: string, occupiedNames: Set<stri
   return undefined;
 }
 
-function resumableControl(task: UploadTask, dispatch: Dispatch<import('./upload-reducer').UploadAction>): ResumableUploadControl {
+function resumableControl(task: UploadTask, dispatch: Dispatch<UploadAction>): ResumableUploadControl {
   return {
     sessionId: task.sessionId,
     paused: false,
@@ -58,8 +72,11 @@ function resumableControl(task: UploadTask, dispatch: Dispatch<import('./upload-
       partCount: Math.ceil(session.size / session.partSize),
       uploadedBytes: session.uploadedParts.reduce((total, part) => total + part.size, 0),
     }),
-    onPartConfirmed: (part) => dispatch({
-      type: 'partConfirmed', id: task.id, partNumber: part.partNumber, uploadedBytes: Math.min(task.file.size || Number.MAX_SAFE_INTEGER, part.partNumber * LARGE_UPLOAD_THRESHOLD_BYTES),
+    onPartConfirmed: (part, committedBytes) => dispatch({
+      type: 'partConfirmed',
+      id: task.id,
+      partNumber: part.partNumber,
+      uploadedBytes: committedBytes ?? Math.min(task.file.size || Number.MAX_SAFE_INTEGER, part.partNumber * LARGE_UPLOAD_THRESHOLD_BYTES),
     }),
     onCompleting: () => dispatch({ type: 'completing', id: task.id }),
   };
@@ -104,24 +121,53 @@ export function placeholderFile(name: string, size: number): File {
   return file;
 }
 
-export function useUploadQueue({ transport = uploadFile, onCompleted, canUpload = true, multipartUpload = false, existingNames = [] }: UploadQueueOptions) {
+export function useUploadQueue({
+  enabled = true,
+  transport = uploadFile,
+  onCompleted,
+  canUpload = true,
+  multipartUpload = false,
+  existingNames = [],
+}: UploadQueueOptions) {
   const { t } = useI18n();
+  const tRef = useRef(t);
+  tRef.current = t;
   const [tasks, dispatch] = useReducer(uploadReducer, []);
   const controllers = useRef(new Map<string, AbortController>());
   const controls = useRef(new Map<string, ResumableUploadControl>());
   const pendingResumes = useRef(new Set<string>());
+  const progressTimers = useRef(new Map<string, number>());
+  const lastProgressDispatch = useRef(new Map<string, number>());
+  const pendingProgressActions = useRef(new Map<string, UploadAction>());
   const transportRef = useRef(transport);
   const completedRef = useRef(onCompleted);
   const restoredRef = useRef(false);
   transportRef.current = transport;
   completedRef.current = onCompleted;
 
+  const clearProgressThrottle = useCallback((id: string) => {
+    const timer = progressTimers.current.get(id);
+    if (timer !== undefined) {
+      window.clearTimeout(timer);
+      progressTimers.current.delete(id);
+    }
+    pendingProgressActions.current.delete(id);
+    lastProgressDispatch.current.delete(id);
+  }, []);
+
   useEffect(() => () => {
-    controllers.current.forEach((controller) => controller.abort());
+    controllers.current.forEach((controller) => { controller.abort(); });
     controllers.current.clear();
+    progressTimers.current.forEach((timer) => { window.clearTimeout(timer); });
+    progressTimers.current.clear();
+    pendingProgressActions.current.clear();
   }, []);
 
   useEffect(() => {
+    if (!enabled) {
+      restoredRef.current = false;
+      return;
+    }
     if (restoredRef.current) return;
     restoredRef.current = true;
     void listUploadSessions().then((sessions) => {
@@ -132,7 +178,6 @@ export function useUploadQueue({ transport = uploadFile, onCompleted, canUpload 
           const local = persisted.get(session.id);
           const name = session.name ?? local?.name ?? 'upload.bin';
           const size = session.size;
-          // Prefer the explorer-encoded parent from local persistence; server now also returns encoded IDs.
           const parentId = local?.parentId || session.parentItemId || '';
           const uploadedBytes = session.uploadedBytes ?? local?.uploadedBytes ?? 0;
           const partCount = Math.ceil(size / session.partSize);
@@ -150,14 +195,13 @@ export function useUploadQueue({ transport = uploadFile, onCompleted, canUpload 
             needsRebind: true,
             fileName: name,
             expectedSize: size,
-            // Only trust lastModified when we persisted it from the original File selection.
             ...(typeof local?.lastModified === 'number' ? { expectedLastModified: local.lastModified } : {}),
-            error: t('upload.rebindRequired'),
+            error: tRef.current('upload.rebindRequired'),
           };
         });
       if (restored.length) dispatch({ type: 'enqueue', tasks: restored });
     }).catch(() => undefined);
-  }, [t]);
+  }, [enabled]);
 
   useEffect(() => {
     const next = tasks
@@ -183,12 +227,12 @@ export function useUploadQueue({ transport = uploadFile, onCompleted, canUpload 
     if (!needsWarning) return;
     const warn = (event: BeforeUnloadEvent) => {
       event.preventDefault();
-      event.returnValue = t('upload.leaveWarning');
+      event.returnValue = tRef.current('upload.leaveWarning');
       return event.returnValue;
     };
     window.addEventListener('beforeunload', warn);
     return () => window.removeEventListener('beforeunload', warn);
-  }, [t, tasks]);
+  }, [tasks]);
 
   useEffect(() => {
     const running = tasks.filter((task) => ['creating', 'uploading', 'completing'].includes(task.status)).length;
@@ -200,7 +244,6 @@ export function useUploadQueue({ transport = uploadFile, onCompleted, canUpload 
       const multipart = task.transport === 'multipart';
       const control = controls.current.get(task.id) ?? resumableControl(task, dispatch);
       control.paused = false;
-      // Restart sessions intentionally drop control.sessionId so parts are not mixed.
       if (task.restartSession) control.sessionId = undefined;
       else if (task.sessionId) control.sessionId = task.sessionId;
       controls.current.set(task.id, control);
@@ -216,18 +259,52 @@ export function useUploadQueue({ transport = uploadFile, onCompleted, canUpload 
         onProgress: (uploadedBytes, totalBytes) => {
           const partCount = Math.ceil(task.file.size / LARGE_UPLOAD_THRESHOLD_BYTES);
           const partNumber = multipart ? Math.min(partCount, Math.floor(uploadedBytes / LARGE_UPLOAD_THRESHOLD_BYTES) + 1) : undefined;
-          dispatch({ type: 'progress', id: task.id, uploadedBytes, totalBytes, partNumber, partCount: multipart ? partCount : undefined });
+          const action: UploadAction = {
+            type: 'progress',
+            id: task.id,
+            uploadedBytes,
+            totalBytes,
+            partNumber,
+            partCount: multipart ? partCount : undefined,
+          };
+          const now = Date.now();
+          const lastAt = lastProgressDispatch.current.get(task.id) ?? 0;
+          if (uploadedBytes === 0 || uploadedBytes >= totalBytes || now - lastAt >= PROGRESS_THROTTLE_MS) {
+            clearProgressThrottle(task.id);
+            lastProgressDispatch.current.set(task.id, now);
+            dispatch(action);
+            return;
+          }
+          pendingProgressActions.current.set(task.id, action);
+          if (!progressTimers.current.has(task.id)) {
+            const delay = Math.max(0, PROGRESS_THROTTLE_MS - (now - lastAt));
+            const timer = window.setTimeout(() => {
+              progressTimers.current.delete(task.id);
+              const pending = pendingProgressActions.current.get(task.id);
+              pendingProgressActions.current.delete(task.id);
+              if (pending && controllers.current.has(task.id)) {
+                lastProgressDispatch.current.set(task.id, Date.now());
+                dispatch(pending);
+              }
+            }, delay);
+            progressTimers.current.set(task.id, timer);
+          }
         },
       }).then(() => {
+        clearProgressThrottle(task.id);
         if (!controller.signal.aborted) {
           dispatch({ type: 'completed', id: task.id });
           controls.current.delete(task.id);
           completedRef.current(task.parentId);
         }
       }).catch((error: unknown) => {
+        clearProgressThrottle(task.id);
         if (error instanceof UploadPausedError || control.paused) return;
-        if (controller.signal.aborted || (error instanceof DOMException && error.name === 'AbortError')) dispatch({ type: 'cancelled', id: task.id });
-        else dispatch({ type: 'failed', id: task.id, error: localizedApiError(error, t, 'upload.failedMessage') });
+        if (controller.signal.aborted || (error instanceof DOMException && error.name === 'AbortError')) {
+          dispatch({ type: 'cancelled', id: task.id });
+        } else {
+          dispatch({ type: 'failed', id: task.id, error: localizedApiError(error, tRef.current, 'upload.failedMessage') });
+        }
       }).finally(() => {
         controllers.current.delete(task.id);
         if (pendingResumes.current.delete(task.id)) {
@@ -238,15 +315,18 @@ export function useUploadQueue({ transport = uploadFile, onCompleted, canUpload 
         }
       });
     });
-  }, [t, tasks]);
+  }, [clearProgressThrottle, tasks]);
 
-  const enqueue = useCallback((parentId: string, files: File[]) => {
-    const occupiedNames = new Set(existingNames);
-    tasks.filter((task) => task.parentId === parentId && task.status !== 'cancelled').forEach((task) => occupiedNames.add(task.file.name));
+  const enqueue = useCallback((parentId: string, files: File[], overrides?: EnqueueUploadOptions) => {
+    const effectiveCanUpload = overrides?.canUpload ?? canUpload;
+    const effectiveMultipartUpload = overrides?.multipartUpload ?? multipartUpload;
+    const effectiveExistingNames = overrides?.existingNames ?? existingNames;
+    const occupiedNames = new Set(effectiveExistingNames);
+    tasks.filter((task) => task.parentId === parentId && task.status !== 'cancelled').forEach((task) => { occupiedNames.add(task.file.name); });
     const additions: UploadTask[] = files.map((file) => {
-      const error = validationError(file.name, parentId, occupiedNames, canUpload, t);
+      const error = validationError(file.name, parentId, occupiedNames, effectiveCanUpload, tRef.current);
       if (!error) occupiedNames.add(file.name);
-      const transportKind = multipartUpload && file.size >= LARGE_UPLOAD_THRESHOLD_BYTES ? 'multipart' : 'single';
+      const transportKind = effectiveMultipartUpload && file.size >= LARGE_UPLOAD_THRESHOLD_BYTES ? 'multipart' : 'single';
       return {
         id: crypto.randomUUID(),
         parentId,
@@ -262,14 +342,15 @@ export function useUploadQueue({ transport = uploadFile, onCompleted, canUpload 
       };
     });
     if (additions.length) dispatch({ type: 'enqueue', tasks: additions });
-  }, [canUpload, existingNames, multipartUpload, t, tasks]);
+  }, [canUpload, existingNames, multipartUpload, tasks]);
 
   const pause = useCallback((id: string) => {
+    clearProgressThrottle(id);
     const control = controls.current.get(id);
     if (control) control.paused = true;
     dispatch({ type: 'paused', id });
     controllers.current.get(id)?.abort();
-  }, []);
+  }, [clearProgressThrottle]);
 
   const resume = useCallback((id: string) => {
     const control = controls.current.get(id);
@@ -282,6 +363,7 @@ export function useUploadQueue({ transport = uploadFile, onCompleted, canUpload 
   }, []);
 
   const cancel = useCallback((id: string) => {
+    clearProgressThrottle(id);
     const task = tasks.find((candidate) => candidate.id === id);
     const control = controls.current.get(id);
     if (control) control.paused = false;
@@ -293,22 +375,22 @@ export function useUploadQueue({ transport = uploadFile, onCompleted, canUpload 
     }
     dispatch({ type: 'cancelled', id });
     controls.current.delete(id);
-  }, [tasks]);
+  }, [clearProgressThrottle, tasks]);
 
   const retry = useCallback((id: string) => dispatch({ type: 'retry', id }), []);
   const rebind = useCallback((id: string, file: File) => {
     const task = tasks.find((candidate) => candidate.id === id);
-    // When identity cannot be proven, abort the old server session before starting clean.
     if (task?.sessionId && task.expectedLastModified === undefined) {
       void abortUploadSession(task.sessionId).catch(() => undefined);
     }
     dispatch({ type: 'rebind', id, file });
   }, [tasks]);
   const remove = useCallback((id: string) => {
+    clearProgressThrottle(id);
     controls.current.delete(id);
     pendingResumes.current.delete(id);
     dispatch({ type: 'remove', id });
-  }, []);
+  }, [clearProgressThrottle]);
   const clearCompleted = useCallback(() => dispatch({ type: 'clearCompleted' }), []);
 
   return { tasks, enqueue, pause, resume, cancel, retry, rebind, remove, clearCompleted };

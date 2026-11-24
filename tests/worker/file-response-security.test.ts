@@ -7,7 +7,7 @@ import {
 import { withApplicationSecurityHeaders } from '../../src/worker/response-security';
 
 const FILE_CSP = "sandbox; default-src 'none'; frame-ancestors 'none'";
-const APP_CSP = "default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data: blob: https:; media-src 'self' blob: https:; object-src 'none'; base-uri 'none'; frame-ancestors 'none'; form-action 'self'";
+const APP_CSP = "default-src 'self'; script-src 'self'; worker-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data: blob: https:; media-src 'self' blob: https:; object-src 'none'; base-uri 'none'; frame-ancestors 'none'; form-action 'self'";
 
 describe('secureFileResponse', () => {
   it.each([
@@ -55,7 +55,10 @@ describe('secureFileResponse', () => {
     expect(attachment.headers.get('content-type')).toBe('application/octet-stream');
     expect(attachment.headers.get('content-disposition')).toMatch(/^attachment;/);
     expect(attachment.headers.get('content-security-policy')).toBe(FILE_CSP);
-    expect(attachment.headers.get('x-frame-options')).toBeNull();
+    expect(attachment.headers.get('x-frame-options')).toBe('DENY');
+    expect(attachment.headers.get('permissions-policy')).toBe('camera=(), microphone=(), geolocation=()');
+    expect(attachment.headers.get('cross-origin-opener-policy')).toBe('same-origin');
+    expect(attachment.headers.get('strict-transport-security')).toBe('max-age=31536000; includeSubDomains');
 
     const preview = secureFileResponse(new Response('%PDF'), {
       filename: 'doc.pdf',
@@ -170,6 +173,29 @@ describe('secureFileResponse', () => {
     expect(conditional.headers.get('etag')).toBe('"current"');
     expect(head.headers.get('content-length')).toBe('12');
     await expect(head.text()).resolves.toBe('');
+  });
+
+  it('cancels discarded response streams on HEAD and oversized text errors', async () => {
+    let headCancelled = false;
+    const headStream = new ReadableStream({
+      cancel() { headCancelled = true; },
+    });
+    const head = secureFileResponse(new Response(headStream), {
+      filename: 'movie.mp4', contentType: 'video/mp4', download: false, publicFile: true, method: 'HEAD',
+    });
+    await expect(head.text()).resolves.toBe('');
+    expect(headCancelled).toBe(true);
+
+    let textCancelled = false;
+    const textStream = new ReadableStream({
+      cancel() { textCancelled = true; },
+    });
+    expect(() => secureFileResponse(new Response(textStream, {
+      headers: { 'content-length': String(TEXT_PREVIEW_MAX_BYTES + 1) },
+    }), {
+      filename: 'notes.txt', contentType: 'text/plain', download: false, publicFile: false, method: 'GET',
+    })).toThrow();
+    expect(textCancelled).toBe(true);
   });
 });
 

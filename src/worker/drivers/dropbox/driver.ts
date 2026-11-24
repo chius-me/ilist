@@ -1,4 +1,6 @@
 import { HttpError } from '../../http';
+import { isRecord } from '../../shared/encoding';
+import { headMetadataResponse } from '../../shared/http-client';
 import type { FileExportOption, Mount } from '../../types';
 import {
   UPLOAD_PART_SIZE_BYTES,
@@ -15,7 +17,7 @@ export const DROPBOX_ROOT_ID = 'dropbox-root';
 const UPLOAD_SESSION_TTL_MS = 6 * 24 * 60 * 60_000;
 
 export interface DropboxDriverClient {
-  list(path: string, cursor?: string): Promise<{ items: DropboxMetadata[]; nextCursor: string | null }>;
+  list(path: string, cursor?: string, limit?: number): Promise<{ items: DropboxMetadata[]; nextCursor: string | null }>;
   stat(path: string): Promise<DropboxMetadata>;
   download(path: string, range?: string | null): Promise<Response>;
   exportFile(path: string, format: string): Promise<Response>;
@@ -75,10 +77,6 @@ const CONTENT_TYPES: Record<string, string> = {
   webp: 'image/webp',
   xml: 'application/xml',
 };
-
-function isRecord(value: unknown): value is Record<string, unknown> {
-  return typeof value === 'object' && value !== null && !Array.isArray(value);
-}
 
 function validName(name: string): string {
   const normalized = name.trim();
@@ -148,6 +146,8 @@ function parentPath(path: string): string {
 export class DropboxDriver implements StorageDriver {
   readonly capabilities = new Set(['list', 'download', 'upload', 'multipartUpload', 'createFolder', 'rename', 'move', 'copy', 'delete'] as const);
   readonly rootId: string;
+  private cachedRootMetadata: DropboxMetadata | null = null;
+
   readonly resumableUpload: ResumableUploadAdapter = {
     create: async (input) => {
       await this.assertInScope(input.parentId);
@@ -198,18 +198,66 @@ export class DropboxDriver implements StorageDriver {
     this.rootId = mount.rootItemId ?? DROPBOX_ROOT_ID;
   }
 
-  async list(parentId: string, cursor?: string): Promise<ListResult> {
+  async list(parentId: string, cursor?: string, limit?: number): Promise<ListResult> {
     const parent = await this.requireFolderMetadata(parentId);
-    const result = await this.client.list(this.directoryReference(parentId, parent), cursor);
+    const ref = this.directoryReference(parentId, parent);
+    const result = limit === undefined
+      ? await this.client.list(ref, cursor)
+      : await this.client.list(ref, cursor, limit);
     return {
       items: result.items.map((item) => mapDropboxMetadata(item, parentId)),
       nextCursor: result.nextCursor,
     };
   }
 
+  async resolvePath(segments: string[]): Promise<StorageItem[]> {
+    const rootItem = await this.stat(this.rootId);
+    if (segments.length === 0) return [rootItem];
+
+    for (const segment of segments) {
+      if (!segment || segment === '.' || segment === '..' || /[/\\\u0000-\u001f\u007f]/.test(segment)) {
+        throw new HttpError(404, 'ENTRY_NOT_FOUND', 'Entry not found');
+      }
+    }
+
+    const rootMeta = this.rootId === DROPBOX_ROOT_ID
+      ? null
+      : await this.rootMetadata();
+    const basePath = rootMeta ? pathOf(rootMeta) : '';
+
+    const resolvedMetas = await Promise.all(
+      segments.map(async (_segment, index) => {
+        const targetPath = joinPath(basePath, segments.slice(0, index + 1).join('/'));
+        try {
+          return await this.client.stat(targetPath);
+        } catch (error) {
+          if (error instanceof HttpError && error.status === 404) {
+            throw new HttpError(404, 'ENTRY_NOT_FOUND', 'Entry not found');
+          }
+          throw error;
+        }
+      }),
+    );
+
+    const chain: StorageItem[] = [rootItem];
+    let parentId = this.rootId;
+    for (let index = 0; index < resolvedMetas.length; index += 1) {
+      const meta = resolvedMetas[index]!;
+      await this.assertInScope(meta.id, meta);
+      if (index < resolvedMetas.length - 1 && meta['.tag'] !== 'folder') {
+        throw new HttpError(404, 'ENTRY_NOT_FOUND', 'Entry not found');
+      }
+      const mapped = mapDropboxMetadata(meta, parentId);
+      chain.push(mapped);
+      parentId = mapped.id;
+    }
+    return chain;
+  }
+
   async stat(itemId: string): Promise<StorageItem> {
     if (itemId === DROPBOX_ROOT_ID && this.rootId === DROPBOX_ROOT_ID) return this.syntheticRoot();
     const metadata = await this.client.stat(itemId);
+    if (itemId === this.rootId) this.cachedRootMetadata = metadata;
     await this.assertInScope(itemId, metadata);
     if (itemId === this.rootId) return { ...mapDropboxMetadata(metadata, null), id: this.rootId, parentId: null };
     return mapDropboxMetadata(metadata, await this.parentId(metadata));
@@ -253,6 +301,9 @@ export class DropboxDriver implements StorageDriver {
     }
     if (metadata.is_downloadable === false && options?.length) {
       throw new HttpError(400, 'DROPBOX_EXPORT_REQUIRED', 'A Dropbox export format is required');
+    }
+    if (request.method.toUpperCase() === 'HEAD') {
+      return { kind: 'stream', response: headMetadataResponse(mapDropboxMetadata(metadata, null)) };
     }
     return { kind: 'stream', response: await this.client.download(itemId, request.headers.get('range')) };
   }
@@ -300,6 +351,11 @@ export class DropboxDriver implements StorageDriver {
     await this.client.remove(itemId);
   }
 
+  private async rootMetadata(): Promise<DropboxMetadata> {
+    this.cachedRootMetadata ??= await this.client.stat(this.rootId);
+    return this.cachedRootMetadata;
+  }
+
   private syntheticRoot(): StorageItem {
     return {
       id: this.rootId,
@@ -344,7 +400,7 @@ export class DropboxDriver implements StorageDriver {
     const parent = parentPath(path);
     if (this.rootId === DROPBOX_ROOT_ID && parent === '') return this.rootId;
     if (this.rootId !== DROPBOX_ROOT_ID) {
-      const root = await this.client.stat(this.rootId);
+      const root = await this.rootMetadata();
       if (root.path_lower === parent.toLowerCase()) return this.rootId;
     }
     if (!parent) return this.rootId;
@@ -355,7 +411,7 @@ export class DropboxDriver implements StorageDriver {
     if (itemId === this.rootId) return;
     if (this.rootId === DROPBOX_ROOT_ID) return;
     const item = known ?? await this.client.stat(itemId);
-    const root = await this.client.stat(this.rootId);
+    const root = await this.rootMetadata();
     if (
       typeof item.path_lower === 'string'
       && typeof root.path_lower === 'string'

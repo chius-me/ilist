@@ -1,4 +1,12 @@
 import { HttpError } from '../../http';
+import {
+  assertValidRange,
+  DEFAULT_METADATA_TIMEOUT_MS,
+  DEFAULT_TRANSFER_TIMEOUT_MS,
+  fetchWithRetry,
+  retryAfterDetails,
+  safeUpstreamResponse,
+} from '../../shared/http-client';
 import type { Env } from '../../types';
 import { GOOGLE_FOLDER_MIME_TYPE } from './items';
 import { getGoogleAccessToken, refreshGoogleAccessToken } from './tokens';
@@ -53,14 +61,6 @@ function escapeQueryLiteral(value: string): string {
   return value.replace(/\\/g, '\\\\').replace(/'/g, "\\'");
 }
 
-function validRange(value: string | null): string | null {
-  if (value === null) return null;
-  if (!/^bytes=(?:\d+-\d*|-\d+)$/.test(value.trim())) {
-    throw new HttpError(400, 'INVALID_RANGE', 'Range header is invalid');
-  }
-  return value.trim();
-}
-
 function validatedSessionUrl(value: unknown): string {
   if (typeof value !== 'string') throw new HttpError(502, 'GOOGLE_UPLOAD_SESSION_INVALID', 'Google upload session is invalid');
   try {
@@ -79,14 +79,8 @@ function validatedSessionUrl(value: unknown): string {
   }
 }
 
-function retryAfter(value: string | null): { retryAfter: number } | undefined {
-  if (value === null || !/^\d+$/.test(value.trim())) return undefined;
-  const seconds = Number(value.trim());
-  return Number.isSafeInteger(seconds) ? { retryAfter: seconds } : undefined;
-}
-
 function uploadSessionError(response: Response): HttpError {
-  const details = retryAfter(response.headers.get('retry-after'));
+  const details = retryAfterDetails(response.headers.get('retry-after'));
   if (response.status === 404 || response.status === 410) {
     return new HttpError(410, 'GOOGLE_UPLOAD_SESSION_EXPIRED', 'Google upload session has expired');
   }
@@ -99,19 +93,9 @@ function uploadSessionError(response: Response): HttpError {
   return new HttpError(502, 'GOOGLE_UPLOAD_SESSION_FAILED', 'Google upload session request failed', details);
 }
 
-function safeResponse(response: Response): Response {
-  const headers = new Headers();
-  for (const name of RESPONSE_HEADERS) {
-    const value = response.headers.get(name);
-    if (value !== null) headers.set(name, value);
-  }
-  return new Response(response.body, {
-    status: response.status,
-    statusText: response.statusText,
-    headers,
-  });
-}
-
+/**
+ * Pull-based multipart body stream so upstream write backpressure governs source reads.
+ */
 function multipartBody(
   boundary: string,
   metadata: Record<string, unknown>,
@@ -124,33 +108,52 @@ function multipartBody(
     + `\r\n--${boundary}\r\nContent-Type: ${contentType}\r\n\r\n`,
   );
   const suffix = encoder.encode(`\r\n--${boundary}--\r\n`);
+  let phase: 'prefix' | 'body' | 'done' = 'prefix';
   let reader: ReadableStreamDefaultReader<Uint8Array> | null = null;
   let cancelled = false;
+
   return new ReadableStream<Uint8Array>({
-    async start(controller) {
-      controller.enqueue(prefix);
-      const currentReader = body.getReader();
-      reader = currentReader;
+    async pull(controller) {
+      if (cancelled || phase === 'done') return;
+      if (phase === 'prefix') {
+        phase = 'body';
+        controller.enqueue(prefix);
+        return;
+      }
+      reader ??= body.getReader() as ReadableStreamDefaultReader<Uint8Array>;
       try {
-        while (true) {
-          const result = await currentReader.read();
-          if (result.done) break;
-          controller.enqueue(result.value);
-        }
-        if (!cancelled) {
+        const result = await reader.read();
+        if (cancelled) return;
+        if (result.done) {
+          phase = 'done';
+          reader.releaseLock();
+          reader = null;
           controller.enqueue(suffix);
           controller.close();
+          return;
         }
+        controller.enqueue(result.value);
       } catch (error) {
+        if (reader) {
+          try { reader.releaseLock(); } catch { /* Ignore release error on failed stream. */ }
+          reader = null;
+        }
         if (!cancelled) controller.error(error);
-      } finally {
-        currentReader.releaseLock();
-        if (reader === currentReader) reader = null;
       }
     },
-    cancel(reason) {
+    async cancel(reason) {
       cancelled = true;
-      return reader ? reader.cancel(reason) : body.cancel(reason);
+      phase = 'done';
+      if (reader) {
+        const active = reader;
+        reader = null;
+        try {
+          return await active.cancel(reason);
+        } finally {
+          try { active.releaseLock(); } catch { /* Ignore release error on cancel. */ }
+        }
+      }
+      return body.cancel(reason);
     },
   });
 }
@@ -177,6 +180,8 @@ async function googleError(response: Response): Promise<HttpError> {
 }
 
 export class GoogleDriveClient {
+  private cachedToken: string | null = null;
+
   constructor(
     private readonly env: Env,
     private readonly mountId: string,
@@ -185,12 +190,13 @@ export class GoogleDriveClient {
     private readonly tokenRefresher: AccessTokenRefresher = refreshGoogleAccessToken,
   ) {}
 
-  async list(parentId: string, cursor?: string): Promise<GoogleListResult> {
+  async list(parentId: string, cursor?: string, limit?: number): Promise<GoogleListResult> {
     const url = new URL(`${DRIVE_BASE}/files`);
     url.searchParams.set('q', `'${escapeQueryLiteral(parentId)}' in parents and trashed=false`);
     url.searchParams.set('spaces', 'drive');
     url.searchParams.set('fields', `nextPageToken,files(${FILE_FIELDS})`);
-    url.searchParams.set('pageSize', '1000');
+    const pageSize = limit === undefined ? 1000 : Math.min(Math.max(1, limit), 1000);
+    url.searchParams.set('pageSize', String(pageSize));
     if (cursor) url.searchParams.set('pageToken', cursor);
     const payload = await this.requestJson<GoogleListPayload>(url.toString());
     if (!Array.isArray(payload.files)) throw new HttpError(502, 'GOOGLE_UPSTREAM_INVALID', 'Google Drive response was invalid');
@@ -198,6 +204,25 @@ export class GoogleDriveClient {
       throw new HttpError(502, 'GOOGLE_UPSTREAM_INVALID', 'Google Drive response was invalid');
     }
     return { items: payload.files, nextCursor: payload.nextPageToken ?? null };
+  }
+
+  async findChildByName(parentId: string, name: string, folderOnly = false): Promise<GoogleFile | null> {
+    const url = new URL(`${DRIVE_BASE}/files`);
+    const folderFilter = folderOnly ? ` and mimeType='${GOOGLE_FOLDER_MIME_TYPE}'` : '';
+    url.searchParams.set(
+      'q',
+      `'${escapeQueryLiteral(parentId)}' in parents and name='${escapeQueryLiteral(name)}'${folderFilter} and trashed=false`,
+    );
+    url.searchParams.set('spaces', 'drive');
+    url.searchParams.set('fields', `files(${FILE_FIELDS})`);
+    url.searchParams.set('pageSize', '1');
+    const payload = await this.requestJson<GoogleListPayload>(url.toString());
+    if (!Array.isArray(payload.files)) throw new HttpError(502, 'GOOGLE_UPSTREAM_INVALID', 'Google Drive response was invalid');
+    return payload.files[0] ?? null;
+  }
+
+  async existsByName(parentId: string, name: string): Promise<boolean> {
+    return (await this.findChildByName(parentId, name, false)) !== null;
   }
 
   stat(itemId: string): Promise<GoogleFile> {
@@ -209,16 +234,22 @@ export class GoogleDriveClient {
   async download(itemId: string, range: string | null = null): Promise<Response> {
     const url = this.fileUrl(itemId);
     url.searchParams.set('alt', 'media');
-    const validatedRange = validRange(range);
+    const validatedRange = assertValidRange(range);
     const headers = new Headers();
     if (validatedRange) headers.set('range', validatedRange);
-    return safeResponse(await this.request(url.toString(), { headers }));
+    return safeUpstreamResponse(
+      await this.request(url.toString(), { headers }, false, DEFAULT_TRANSFER_TIMEOUT_MS),
+      RESPONSE_HEADERS,
+    );
   }
 
   async exportFile(itemId: string, contentType: string): Promise<Response> {
     const url = this.fileUrl(itemId, 'export');
     url.searchParams.set('mimeType', contentType);
-    return safeResponse(await this.request(url.toString()));
+    return safeUpstreamResponse(
+      await this.request(url.toString(), {}, false, DEFAULT_TRANSFER_TIMEOUT_MS),
+      RESPONSE_HEADERS,
+    );
   }
 
   createFolder(parentId: string, name: string): Promise<GoogleFile> {
@@ -235,16 +266,20 @@ export class GoogleDriveClient {
     const url = new URL(`${DRIVE_UPLOAD_BASE}/files`);
     url.searchParams.set('uploadType', 'multipart');
     url.searchParams.set('fields', FILE_FIELDS);
-    return this.requestJson<GoogleFile>(url.toString(), {
-      method: 'POST',
-      headers: { 'content-type': `multipart/related; boundary=${boundary}` },
-      body: multipartBody(
-        boundary,
-        { name, parents: [parentId] },
-        contentType ?? 'application/octet-stream',
-        body,
-      ) as BodyInit,
-    });
+    return this.requestJson<GoogleFile>(
+      url.toString(),
+      {
+        method: 'POST',
+        headers: { 'content-type': `multipart/related; boundary=${boundary}` },
+        body: multipartBody(
+          boundary,
+          { name, parents: [parentId] },
+          contentType ?? 'application/octet-stream',
+          body,
+        ) as BodyInit,
+      },
+      DEFAULT_TRANSFER_TIMEOUT_MS,
+    );
   }
 
   async createResumableUpload(
@@ -363,8 +398,17 @@ export class GoogleDriveClient {
     return new URL(`${DRIVE_BASE}${path}`);
   }
 
-  private async requestJson<T>(url: string, init: RequestInit = {}): Promise<T> {
-    const response = await this.request(url, init);
+  private async accessToken(): Promise<string> {
+    this.cachedToken ??= await this.tokenProvider(this.env, this.mountId);
+    return this.cachedToken;
+  }
+
+  private async requestJson<T>(
+    url: string,
+    init: RequestInit = {},
+    timeoutMs = DEFAULT_METADATA_TIMEOUT_MS,
+  ): Promise<T> {
+    const response = await this.request(url, init, false, timeoutMs);
     try {
       return await response.json<T>();
     } catch {
@@ -372,19 +416,29 @@ export class GoogleDriveClient {
     }
   }
 
-  private async request(url: string, init: RequestInit = {}, retried = false): Promise<Response> {
-    const accessToken = await this.tokenProvider(this.env, this.mountId);
+  private async request(
+    url: string,
+    init: RequestInit = {},
+    retried = false,
+    timeoutMs = DEFAULT_METADATA_TIMEOUT_MS,
+  ): Promise<Response> {
+    const accessToken = await this.accessToken();
     const headers = new Headers(init.headers);
     headers.set('authorization', `Bearer ${accessToken}`);
     let response: Response;
     try {
-      response = await this.fetcher.call(globalThis, url, { ...init, headers });
+      response = await fetchWithRetry(this.fetcher, url, { ...init, headers, timeoutMs });
     } catch {
       throw new HttpError(502, 'GOOGLE_UPSTREAM_FAILED', 'Google Drive request failed');
     }
     if (response.status === 401 && !retried) {
-      await this.tokenRefresher(this.env, this.mountId, accessToken, this.fetcher);
-      return this.request(url, init, true);
+      void response.body?.cancel();
+      this.cachedToken = null;
+      this.cachedToken = await this.tokenRefresher(this.env, this.mountId, accessToken, this.fetcher);
+      if (init.body instanceof ReadableStream) {
+        throw new HttpError(401, 'GOOGLE_AUTH_FAILED', 'Google Drive authentication failed');
+      }
+      return this.request(url, init, true, timeoutMs);
     }
     if (!response.ok) throw await googleError(response);
     return response;
@@ -400,7 +454,11 @@ export class GoogleDriveClient {
     headers.delete('authorization');
     let response: Response;
     try {
-      response = await this.fetcher.call(globalThis, url, { ...init, headers });
+      response = await fetchWithRetry(this.fetcher, url, {
+        ...init,
+        headers,
+        timeoutMs: DEFAULT_TRANSFER_TIMEOUT_MS,
+      });
     } catch {
       throw new HttpError(502, 'GOOGLE_UPLOAD_SESSION_FAILED', 'Google upload session request failed');
     }

@@ -1,7 +1,26 @@
 import { HttpError } from '../../http';
+import { base64UrlToBytes, bytesToBase64Url, isRecord } from '../../shared/encoding';
 import type { Mount } from '../../types';
-import { S3Client, S3Error, type GetObjectOptions, type ListObjectsV2Options, type PutObjectOptions, type S3ListObjectsResult, type S3RequestOptions, type S3UploadPartOptions } from './client';
-import { UPLOAD_PART_SIZE_BYTES, type CompletedUploadPart, type DownloadResult, type ListResult, type ResumableUploadAdapter, type StorageDriver, type StorageItem } from '../types';
+import {
+  mapWithConcurrency,
+  S3Client,
+  S3Error,
+  type GetObjectOptions,
+  type ListObjectsV2Options,
+  type PutObjectOptions,
+  type S3ListObjectsResult,
+  type S3RequestOptions,
+  type S3UploadPartOptions,
+} from './client';
+import {
+  UPLOAD_PART_SIZE_BYTES,
+  type CompletedUploadPart,
+  type DownloadResult,
+  type ListResult,
+  type ResumableUploadAdapter,
+  type StorageDriver,
+  type StorageItem,
+} from '../types';
 
 export interface S3DriverClient {
   listObjectsV2(options?: ListObjectsV2Options): Promise<S3ListObjectsResult>;
@@ -10,6 +29,7 @@ export interface S3DriverClient {
   putObject(key: string, body: BodyInit | null, options?: PutObjectOptions): Promise<Response>;
   copyObject(sourceKey: string, destinationKey: string, options?: S3RequestOptions): Promise<Response>;
   deleteObject(key: string): Promise<Response>;
+  deleteObjects?(keys: string[]): Promise<void>;
   createMultipartUpload(key: string, contentType: string | null, marker: string): Promise<{ uploadId: string }>;
   uploadPart(key: string, uploadId: string, partNumber: number, body: BodyInit, options?: S3UploadPartOptions): Promise<{ etag: string }>;
   completeMultipartUpload(key: string, uploadId: string, parts: CompletedUploadPart[]): Promise<{ etag: string }>;
@@ -28,20 +48,16 @@ interface S3MultipartUploadState {
 }
 
 const S3_RESUMABLE_UPLOAD_TTL_MS = 24 * 60 * 60 * 1000;
+const S3_BATCH_CONCURRENCY = 6;
+const S3_MULTIPART_CONCURRENCY = 3;
 
 function base64UrlEncode(value: string): string {
-  const bytes = new TextEncoder().encode(value);
-  let binary = '';
-  for (const byte of bytes) binary += String.fromCharCode(byte);
-  return btoa(binary).replace(/\+/g, '-').replace(/\//g, '_').replace(/=+$/, '');
+  return bytesToBase64Url(new TextEncoder().encode(value));
 }
 
 function base64UrlDecode(value: string): string {
-  if (!/^[A-Za-z0-9_-]+$/.test(value)) throw new HttpError(400, 'INVALID_ITEM_ID', 'Storage item ID is invalid');
-  const padded = value.replace(/-/g, '+').replace(/_/g, '/') + '='.repeat((4 - value.length % 4) % 4);
   try {
-    const binary = atob(padded);
-    return new TextDecoder('utf-8', { fatal: true }).decode(Uint8Array.from(binary, (character) => character.charCodeAt(0)));
+    return new TextDecoder('utf-8', { fatal: true, ignoreBOM: false }).decode(base64UrlToBytes(value));
   } catch {
     throw new HttpError(400, 'INVALID_ITEM_ID', 'Storage item ID is invalid');
   }
@@ -100,14 +116,28 @@ function isConditionalConflict(error: unknown): boolean {
       || error.code === 'PreconditionFailed' || error.code === 'ConditionalRequestConflict');
 }
 
-function isRecord(value: unknown): value is Record<string, unknown> {
-  return typeof value === 'object' && value !== null && !Array.isArray(value);
+function mapS3Error(error: unknown): never {
+  if (error instanceof HttpError) throw error;
+  if (error instanceof S3Error) {
+    if (error.status === 404 || error.code === 'NoSuchKey') throw notFound();
+    if (error.status === 403 || error.code === 'AccessDenied') {
+      throw new HttpError(403, 'S3_ACCESS_DENIED', 'S3 access was denied');
+    }
+    if (isConditionalConflict(error)) throw nameConflict();
+    const details = error.retryAfterSeconds !== null ? { retryAfter: error.retryAfterSeconds } : undefined;
+    if (error.status === 429 || error.code === 'SlowDown' || error.code === 'Throttling' || error.code === 'ThrottlingException') {
+      throw new HttpError(503, 'S3_RATE_LIMITED', 'S3 storage is temporarily rate limited', details);
+    }
+    throw new HttpError(502, 'S3_UPSTREAM_FAILED', 'S3 request failed', details);
+  }
+  throw error;
 }
 
 export class S3Driver implements StorageDriver {
   readonly capabilities = new Set(['list', 'download', 'upload', 'multipartUpload', 'createFolder', 'rename', 'move', 'copy', 'delete'] as const);
   readonly rootId: string;
   readonly resumableUpload: ResumableUploadAdapter = {
+    maxPartConcurrency: S3_MULTIPART_CONCURRENCY,
     create: async (input) => {
       const parent = this.requireFolder(input.parentId);
       const name = validateName(input.name);
@@ -196,32 +226,87 @@ export class S3Driver implements StorageDriver {
     return identity as ItemIdentity;
   }
 
-  async list(parentId: string, cursor?: string): Promise<ListResult> {
-    const parent = this.requireFolder(parentId);
-    const result = await this.client.listObjectsV2({ prefix: parent.key, delimiter: '/', ...(cursor ? { continuationToken: cursor } : {}) });
-    const folders = result.commonPrefixes
-      .filter((key) => key !== parent.key && key.startsWith(parent.key))
-      .map((key) => this.toItem(key, 'folder', parentId));
-    const files = result.objects
-      .filter((object) => object.key !== parent.key && !object.key.endsWith('/') && object.key.startsWith(parent.key))
-      .map((object) => ({
-        ...this.toItem(object.key, 'file', parentId),
-        size: object.size,
-        modifiedAt: object.lastModified,
-        etag: object.etag,
-      }));
-    return { items: [...folders, ...files], nextCursor: result.nextContinuationToken };
+  async list(parentId: string, cursor?: string, limit?: number): Promise<ListResult> {
+    try {
+      const parent = this.requireFolder(parentId);
+      const result = await this.client.listObjectsV2({
+        prefix: parent.key,
+        delimiter: '/',
+        ...(cursor ? { continuationToken: cursor } : {}),
+        ...(limit !== undefined ? { maxKeys: Math.min(Math.max(1, limit), 1000) } : {}),
+      });
+      const folders = result.commonPrefixes
+        .filter((key) => key !== parent.key && key.startsWith(parent.key))
+        .map((key) => this.toItem(key, 'folder', parentId));
+      const files = result.objects
+        .filter((object) => object.key !== parent.key && !object.key.endsWith('/') && object.key.startsWith(parent.key))
+        .map((object) => ({
+          ...this.toItem(object.key, 'file', parentId),
+          size: object.size,
+          modifiedAt: object.lastModified,
+          etag: object.etag,
+        }));
+      return { items: [...folders, ...files], nextCursor: result.nextContinuationToken };
+    } catch (error) {
+      mapS3Error(error);
+    }
+  }
+
+  async resolvePath(segments: string[]): Promise<StorageItem[]> {
+    try {
+      const rootItem = this.toItem(this.rootPrefix, 'folder', null);
+      if (segments.length === 0) return [rootItem];
+
+      const cleanSegments = segments.map((segment) => {
+        try {
+          return validateName(segment);
+        } catch {
+          throw new HttpError(404, 'ENTRY_NOT_FOUND', 'Entry not found');
+        }
+      });
+
+      const finalPrefix = `${this.rootPrefix}${cleanSegments.join('/')}/`;
+      const isFolder = await this.prefixExists(finalPrefix);
+      if (!isFolder) {
+        const finalFileKey = finalPrefix.slice(0, -1);
+        if (await this.objectExists(finalFileKey)) {
+          const chain: StorageItem[] = [rootItem];
+          let parentId = this.rootId;
+          for (let index = 0; index < cleanSegments.length - 1; index += 1) {
+            const key = `${this.rootPrefix}${cleanSegments.slice(0, index + 1).join('/')}/`;
+            const folder = this.toItem(key, 'folder', parentId);
+            chain.push(folder);
+            parentId = folder.id;
+          }
+          chain.push(this.toItem(finalFileKey, 'file', parentId));
+          return chain;
+        }
+        throw new HttpError(404, 'ENTRY_NOT_FOUND', 'Entry not found');
+      }
+
+      const chain: StorageItem[] = [rootItem];
+      let parentId = this.rootId;
+      for (let index = 0; index < cleanSegments.length; index += 1) {
+        const key = `${this.rootPrefix}${cleanSegments.slice(0, index + 1).join('/')}/`;
+        const folder = this.toItem(key, 'folder', parentId);
+        chain.push(folder);
+        parentId = folder.id;
+      }
+      return chain;
+    } catch (error) {
+      mapS3Error(error);
+    }
   }
 
   async stat(itemId: string): Promise<StorageItem> {
-    const identity = this.decodeItemId(itemId);
-    if (itemId === this.rootId) return this.toItem(identity.key, 'folder', null);
-    if (identity.kind === 'folder') {
-      const result = await this.client.listObjectsV2({ prefix: identity.key, maxKeys: 1 });
-      if (!result.objects.length && !result.commonPrefixes.length) throw notFound();
-      return this.toItem(identity.key, 'folder', this.parentId(identity.key));
-    }
     try {
+      const identity = this.decodeItemId(itemId);
+      if (itemId === this.rootId) return this.toItem(identity.key, 'folder', null);
+      if (identity.kind === 'folder') {
+        const result = await this.client.listObjectsV2({ prefix: identity.key, maxKeys: 1 });
+        if (!result.objects.length && !result.commonPrefixes.length) throw notFound();
+        return this.toItem(identity.key, 'folder', this.parentId(identity.key));
+      }
       const response = await this.client.headObject(identity.key);
       return {
         ...this.toItem(identity.key, 'file', this.parentId(identity.key)),
@@ -231,8 +316,7 @@ export class S3Driver implements StorageDriver {
         etag: response.headers.get('etag'),
       };
     } catch (error) {
-      if (error instanceof S3Error && error.status === 404) throw notFound();
-      throw error;
+      mapS3Error(error);
     }
   }
 
@@ -252,98 +336,117 @@ export class S3Driver implements StorageDriver {
   }
 
   async getDownload(itemId: string, request: Request): Promise<DownloadResult> {
-    const identity = this.decodeItemId(itemId);
-    if (identity.kind !== 'file') throw new HttpError(400, 'INVALID_STORAGE_OPERATION', 'Folders cannot be downloaded');
-    if (request.method === 'HEAD') {
-      const upstream = await this.client.headObject(identity.key);
-      return { kind: 'stream', response: new Response(null, { status: upstream.status, headers: upstream.headers }) };
+    try {
+      const identity = this.decodeItemId(itemId);
+      if (identity.kind !== 'file') throw new HttpError(400, 'INVALID_STORAGE_OPERATION', 'Folders cannot be downloaded');
+      if (request.method === 'HEAD') {
+        const upstream = await this.client.headObject(identity.key);
+        return { kind: 'stream', response: new Response(null, { status: upstream.status, headers: upstream.headers }) };
+      }
+      const range = request.headers.get('range') ?? undefined;
+      return { kind: 'stream', response: await this.client.getObject(identity.key, range ? { range } : {}) };
+    } catch (error) {
+      mapS3Error(error);
     }
-    const range = request.headers.get('range') ?? undefined;
-    return { kind: 'stream', response: await this.client.getObject(identity.key, range ? { range } : {}) };
   }
 
   async createFolder(parentId: string, name: string): Promise<StorageItem> {
-    const parent = this.requireFolder(parentId);
-    const key = `${parent.key}${validateName(name)}/`;
-    await this.assertNameAvailable(key, 'folder');
-    const marker = new ReadableStream({ start(controller) { controller.close(); } });
-    let response: Response;
     try {
-      response = await this.client.putObject(key, marker, {
+      const parent = this.requireFolder(parentId);
+      const key = `${parent.key}${validateName(name)}/`;
+      await this.assertNameAvailable(key, 'folder');
+      const marker = new ReadableStream({ start(controller) { controller.close(); } });
+      const response = await this.client.putObject(key, marker, {
         contentType: 'application/x-directory',
         headers: { 'if-none-match': '*' },
       });
+      return { ...this.toItem(key, 'folder', parentId), etag: response.headers.get('etag') };
     } catch (error) {
-      if (isConditionalConflict(error)) throw nameConflict();
-      throw error;
+      mapS3Error(error);
     }
-    return { ...this.toItem(key, 'folder', parentId), etag: response.headers.get('etag') };
   }
 
   async upload(parentId: string, name: string, body: ReadableStream, contentType: string | null): Promise<StorageItem> {
-    const parent = this.requireFolder(parentId);
-    const key = `${parent.key}${validateName(name)}`;
-    await this.assertNameAvailable(key, 'file');
-    let response: Response;
     try {
-      response = await this.client.putObject(key, body, {
+      const parent = this.requireFolder(parentId);
+      const key = `${parent.key}${validateName(name)}`;
+      await this.assertNameAvailable(key, 'file');
+      const response = await this.client.putObject(key, body, {
         ...(contentType ? { contentType } : {}),
         headers: { 'if-none-match': '*' },
       });
+      return { ...this.toItem(key, 'file', parentId), contentType, etag: response.headers.get('etag') };
     } catch (error) {
-      if (isConditionalConflict(error)) throw nameConflict();
-      throw error;
+      mapS3Error(error);
     }
-    return { ...this.toItem(key, 'file', parentId), contentType, etag: response.headers.get('etag') };
   }
 
   async rename(itemId: string, name: string): Promise<StorageItem> {
-    const identity = this.decodeItemId(itemId);
-    if (itemId === this.rootId) throw new HttpError(400, 'INVALID_STORAGE_OPERATION', 'Mount root cannot be renamed');
-    const destination = `${parentPrefix(identity.key)}${validateName(name)}${identity.kind === 'folder' ? '/' : ''}`;
-    await this.relocate(identity, destination);
-    return this.toItem(destination, identity.kind, this.parentId(destination));
+    try {
+      const identity = this.decodeItemId(itemId);
+      if (itemId === this.rootId) throw new HttpError(400, 'INVALID_STORAGE_OPERATION', 'Mount root cannot be renamed');
+      const destination = `${parentPrefix(identity.key)}${validateName(name)}${identity.kind === 'folder' ? '/' : ''}`;
+      await this.relocate(identity, destination);
+      return this.toItem(destination, identity.kind, this.parentId(destination));
+    } catch (error) {
+      mapS3Error(error);
+    }
   }
 
   async move(itemId: string, destinationId: string): Promise<StorageItem> {
-    const identity = this.decodeItemId(itemId);
-    const destination = this.requireFolder(destinationId);
-    if (itemId === this.rootId) throw new HttpError(400, 'INVALID_STORAGE_OPERATION', 'Mount root cannot be moved');
-    if (identity.kind === 'folder' && destination.key.startsWith(identity.key)) {
-      throw new HttpError(409, 'INVALID_STORAGE_DESTINATION', 'Folder cannot be moved inside itself');
+    try {
+      const identity = this.decodeItemId(itemId);
+      const destination = this.requireFolder(destinationId);
+      if (itemId === this.rootId) throw new HttpError(400, 'INVALID_STORAGE_OPERATION', 'Mount root cannot be moved');
+      if (identity.kind === 'folder' && destination.key.startsWith(identity.key)) {
+        throw new HttpError(409, 'INVALID_STORAGE_DESTINATION', 'Folder cannot be moved inside itself');
+      }
+      const target = `${destination.key}${basename(identity.key)}${identity.kind === 'folder' ? '/' : ''}`;
+      await this.relocate(identity, target);
+      return this.toItem(target, identity.kind, destinationId);
+    } catch (error) {
+      mapS3Error(error);
     }
-    const target = `${destination.key}${basename(identity.key)}${identity.kind === 'folder' ? '/' : ''}`;
-    await this.relocate(identity, target);
-    return this.toItem(target, identity.kind, destinationId);
   }
 
   async copy(itemId: string, destinationParentId: string): Promise<StorageItem> {
-    const identity = this.decodeItemId(itemId);
-    const destination = this.requireFolder(destinationParentId);
-    if (itemId === this.rootId) throw new HttpError(400, 'INVALID_STORAGE_OPERATION', 'Mount root cannot be copied');
-    if (identity.kind === 'folder' && destination.key.startsWith(identity.key)) {
-      throw new HttpError(409, 'INVALID_STORAGE_DESTINATION', 'Folder cannot be copied inside itself');
+    try {
+      const identity = this.decodeItemId(itemId);
+      const destination = this.requireFolder(destinationParentId);
+      if (itemId === this.rootId) throw new HttpError(400, 'INVALID_STORAGE_OPERATION', 'Mount root cannot be copied');
+      if (identity.kind === 'folder' && destination.key.startsWith(identity.key)) {
+        throw new HttpError(409, 'INVALID_STORAGE_DESTINATION', 'Folder cannot be copied inside itself');
+      }
+      const target = `${destination.key}${basename(identity.key)}${identity.kind === 'folder' ? '/' : ''}`;
+      this.assertScopedKey(target, identity.kind);
+      await this.assertNameAvailable(target, identity.kind);
+      if (identity.kind === 'file') {
+        await this.copyWithoutOverwrite(identity.key, target);
+        return this.toItem(target, 'file', destinationParentId);
+      }
+      const sources = await this.listAllKeys(identity.key);
+      await mapWithConcurrency(sources, S3_BATCH_CONCURRENCY, (source) =>
+        this.copyWithoutOverwrite(source, `${target}${source.slice(identity.key.length)}`),
+      );
+      return this.toItem(target, 'folder', destinationParentId);
+    } catch (error) {
+      mapS3Error(error);
     }
-    const target = `${destination.key}${basename(identity.key)}${identity.kind === 'folder' ? '/' : ''}`;
-    this.assertScopedKey(target, identity.kind);
-    await this.assertNameAvailable(target, identity.kind);
-    if (identity.kind === 'file') {
-      await this.copyWithoutOverwrite(identity.key, target);
-      return this.toItem(target, 'file', destinationParentId);
-    }
-    const sources = await this.listAllKeys(identity.key);
-    for (const source of sources) {
-      await this.copyWithoutOverwrite(source, `${target}${source.slice(identity.key.length)}`);
-    }
-    return this.toItem(target, 'folder', destinationParentId);
   }
 
   async remove(itemId: string): Promise<void> {
-    const identity = this.decodeItemId(itemId);
-    if (itemId === this.rootId) throw new HttpError(400, 'INVALID_STORAGE_OPERATION', 'Mount root cannot be deleted');
-    if (identity.kind === 'file') { await this.client.deleteObject(identity.key); return; }
-    const keys = await this.listAllKeys(identity.key);
-    for (const key of keys.sort((left, right) => right.length - left.length)) await this.client.deleteObject(key);
+    try {
+      const identity = this.decodeItemId(itemId);
+      if (itemId === this.rootId) throw new HttpError(400, 'INVALID_STORAGE_OPERATION', 'Mount root cannot be deleted');
+      if (identity.kind === 'file') {
+        await this.client.deleteObject(identity.key);
+        return;
+      }
+      const keys = await this.listAllKeys(identity.key);
+      await this.deleteKeys(keys);
+    } catch (error) {
+      mapS3Error(error);
+    }
   }
 
   private async relocate(identity: ItemIdentity, destination: string): Promise<void> {
@@ -358,8 +461,24 @@ export class S3Driver implements StorageDriver {
       return;
     }
     const sources = await this.listAllKeys(identity.key);
-    for (const source of sources) await this.copyWithoutOverwrite(source, `${destination}${source.slice(identity.key.length)}`);
-    for (const source of sources.sort((left, right) => right.length - left.length)) await this.client.deleteObject(source);
+    await mapWithConcurrency(sources, S3_BATCH_CONCURRENCY, (source) =>
+      this.copyWithoutOverwrite(source, `${destination}${source.slice(identity.key.length)}`),
+    );
+    await this.deleteKeys(sources);
+  }
+
+  private async deleteKeys(keys: string[]): Promise<void> {
+    if (keys.length === 0) return;
+    const unique = [...new Set(keys)].sort((left, right) => right.length - left.length);
+    if (unique.length === 1) {
+      await this.client.deleteObject(unique[0]!);
+      return;
+    }
+    if (this.client.deleteObjects) {
+      await this.client.deleteObjects(unique);
+      return;
+    }
+    await mapWithConcurrency(unique, S3_BATCH_CONCURRENCY, (key) => this.client.deleteObject(key));
   }
 
   private async copyWithoutOverwrite(source: string, destination: string): Promise<void> {
@@ -446,7 +565,7 @@ export class S3Driver implements StorageDriver {
 
   private requireContentType(value: unknown, fromState = false): string | null {
     if (value === null) return null;
-    if (typeof value === 'string' && !/[\u0000-\u001f]/.test(value)) return value;
+    if (typeof value === 'string' && !/[\u0000-\u001f\u007f]/.test(value)) return value;
     if (fromState) throw invalidUploadState();
     throw new HttpError(400, 'INVALID_UPLOAD_CONTENT_TYPE', 'S3 upload content type is invalid');
   }

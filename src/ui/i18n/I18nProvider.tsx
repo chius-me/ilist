@@ -1,9 +1,10 @@
-import { createContext, type PropsWithChildren, useContext, useMemo } from 'react';
+import { createContext, type PropsWithChildren, useContext, useEffect, useMemo, useState } from 'react';
 import { usePreferences } from '../preferences/PreferencesProvider';
 import type { Locale } from '../preferences/preferences';
-import { en, type MessageKey, zhCN } from './messages';
+import { en, type MessageKey } from './messages/en';
 
 type MessageValues = Record<string, string | number>;
+type MessageDictionary = Record<MessageKey, string>;
 
 interface I18nContextValue {
   locale: Locale;
@@ -13,14 +14,30 @@ interface I18nContextValue {
   formatNumber: (value: number) => string;
 }
 
-const I18nContext = createContext<I18nContextValue | null>(null);
+export const I18nContext = createContext<I18nContextValue | null>(null);
+let cachedZhMessages: MessageDictionary | null = null;
+
+export function useOptionalI18n(): I18nContextValue | null {
+  return useContext(I18nContext);
+}
 
 export function I18nProvider({ children }: PropsWithChildren) {
   const { preferences } = usePreferences();
   const { locale } = preferences;
+  const [zhMessages, setZhMessages] = useState<MessageDictionary | null>(() => cachedZhMessages);
+
+  useEffect(() => {
+    if (locale !== 'zh-CN' || cachedZhMessages) return;
+    let active = true;
+    void import('./messages/zh-CN').then((module) => {
+      cachedZhMessages = module.zhCN;
+      if (active) setZhMessages(module.zhCN);
+    });
+    return () => { active = false; };
+  }, [locale]);
 
   const value = useMemo<I18nContextValue>(() => {
-    const messages: Record<MessageKey, string> = locale === 'zh-CN' ? zhCN : en;
+    const messages: MessageDictionary = locale === 'zh-CN' ? (zhMessages ?? en) : en;
     const numberFormatter = new Intl.NumberFormat(locale);
     const dateFormatter = new Intl.DateTimeFormat(locale, {
       year: 'numeric',
@@ -52,7 +69,7 @@ export function I18nProvider({ children }: PropsWithChildren) {
       formatDate: (date) => dateFormatter.format(new Date(date)),
       formatNumber,
     };
-  }, [locale]);
+  }, [locale, zhMessages]);
 
   return <I18nContext.Provider value={value}>{children}</I18nContext.Provider>;
 }

@@ -40,8 +40,8 @@ export function UploadTaskRow({ task, onPause, onResume, onCancel, onRetry, onRe
                   ? t('upload.failed')
                   : t('upload.cancelled');
   const showProgress = !['completed', 'cancelled'].includes(task.status);
-  const canPause = ['creating', 'uploading'].includes(task.status);
-  const canResume = task.status === 'paused' && !task.needsRebind;
+  const canPause = task.transport === 'multipart' && ['creating', 'uploading'].includes(task.status);
+  const canResume = task.transport === 'multipart' && task.status === 'paused' && !task.needsRebind;
   const canCancel = ['queued', 'creating', 'uploading', 'paused', 'completing'].includes(task.status) || (task.status === 'failed' && Boolean(task.sessionId));
   const canRemove = ['completed', 'cancelled'].includes(task.status) || (task.status === 'failed' && !task.sessionId);
 

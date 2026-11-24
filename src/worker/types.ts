@@ -1,5 +1,4 @@
 export interface Env {
-  R2_BUCKET: R2Bucket;
   DB: D1Database;
   ASSETS: Fetcher;
   ADMIN_USERNAME?: string;
@@ -17,49 +16,11 @@ export interface Env {
   PUBLIC_ORIGIN: string;
 }
 
-export interface ObjectRow {
-  key: string;
-  name: string;
-  size: number;
-  content_type: string | null;
-  etag: string | null;
-  updated_at: string;
-  is_public: number;
-  sort_order: number;
-  description: string;
-}
-
-export interface DirectoryEntry {
-  name: string;
-  key: string;
-  type: 'directory';
-}
-
-export interface FileEntry {
-  key: string;
-  name: string;
-  size: number;
-  contentType: string | null;
-  etag: string | null;
-  updatedAt: string;
-  isPublic: boolean;
-  sortOrder: number;
-  description: string;
-  type: 'file';
-}
-
-export interface TreeResponse {
-  prefix: string;
-  directories: DirectoryEntry[];
-  files: FileEntry[];
-}
-
 export interface AdminUser {
   username: string;
 }
 
 export type EntryKind = 'file' | 'folder';
-export type EntryStatus = 'uploading' | 'ready' | 'deleting';
 
 export interface ShareRow {
   id: string;
@@ -97,44 +58,6 @@ export interface Share {
   accessCount: number;
   createdAt: string;
   updatedAt: string;
-}
-
-export interface EntryRow {
-  id: string;
-  parent_id: string | null;
-  name: string;
-  kind: EntryKind;
-  storage_key: string | null;
-  size: number;
-  content_type: string | null;
-  etag: string | null;
-  status: EntryStatus;
-  lifecycle_owner: string | null;
-  is_public: number;
-  sort_order: number;
-  description: string;
-  created_at: string;
-  updated_at: string;
-}
-
-export type StorageRecoveryOperationKind = 'upload_cleanup' | 'delete_tree';
-export type StorageRecoveryOperationState = 'held' | 'pending' | 'running' | 'retry' | 'completed';
-
-export interface StorageRecoveryOperationRow {
-  id: string;
-  entry_id: string;
-  operation_kind: StorageRecoveryOperationKind;
-  storage_key: string | null;
-  attempt_owner: string;
-  phase: string;
-  payload: string;
-  state: StorageRecoveryOperationState;
-  claim_owner: string | null;
-  claim_expires_at: number | null;
-  attempts: number;
-  last_error: string | null;
-  created_at: string;
-  updated_at: string;
 }
 
 export interface EntryCapabilities {
@@ -185,6 +108,7 @@ export interface DirectoryResponse {
   current: Entry;
   breadcrumbs: Breadcrumb[];
   items: Entry[];
+  nextCursor?: string | null;
 }
 
 export interface MountEntry extends Entry {
@@ -198,6 +122,7 @@ export interface VirtualDirectoryResponse {
   current: Entry | MountEntry;
   breadcrumbs: Breadcrumb[];
   items: Array<Entry | MountEntry>;
+  nextCursor?: string | null;
 }
 
 export interface BatchFailure {
@@ -211,7 +136,7 @@ export interface BatchResult {
   failed: BatchFailure[];
 }
 
-// `pikpak` remains only so legacy database rows can be listed and deleted safely.
+// `pikpak` and `native-r2` remain only so legacy database rows can be listed and deleted safely.
 export type MountDriverType = 's3' | 'onedrive' | 'google' | 'dropbox' | 'pikpak' | 'native-r2';
 
 export interface MountRow {

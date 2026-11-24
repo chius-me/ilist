@@ -1,10 +1,24 @@
 import { jsonRequest, unwrap } from './client';
 import type { BatchResult, DirectoryResponse, Entry, EntryPatch } from '../types/entries';
 
-export async function listDirectory(path: string, signal?: AbortSignal, nameFilter?: string): Promise<DirectoryResponse> {
+export interface ListDirectoryOptions {
+  cursor?: string | null;
+  limit?: number;
+  refresh?: boolean;
+}
+
+export async function listDirectory(
+  path: string,
+  signal?: AbortSignal,
+  nameFilter?: string,
+  options: ListDirectoryOptions = {},
+): Promise<DirectoryResponse> {
   const query = new URLSearchParams({ path });
   const needle = nameFilter?.trim();
   if (needle) query.set('q', needle);
+  if (options.cursor) query.set('cursor', options.cursor);
+  if (options.limit !== undefined) query.set('limit', String(options.limit));
+  if (options.refresh) query.set('refresh', '1');
   return unwrap<DirectoryResponse>(await fetch(`/api/fs/list?${query}`, { signal, credentials: 'same-origin' }));
 }
 
@@ -36,20 +50,7 @@ export function setVisibility(ids: string[], isPublic: boolean): Promise<BatchRe
   return jsonRequest('/api/admin/entries/visibility', { method: 'POST', body: JSON.stringify({ ids, isPublic }) });
 }
 
-export function fileUrl(
-  entry: Pick<Entry, 'id' | 'name'>,
-  download = false,
-  exportFormat?: string,
-  options?: { sandboxedPreview?: boolean },
-): string {
-  const url = `/file/${encodeURIComponent(entry.id)}/${encodeURIComponent(entry.name)}`;
-  const query = new URLSearchParams();
-  if (download) query.set('download', '1');
-  if (exportFormat) query.set('export', exportFormat);
-  if (options?.sandboxedPreview) query.set('preview', '1');
-  const suffix = query.toString();
-  return suffix ? `${url}?${suffix}` : url;
-}
+export { fileUrl } from '../lib/file-urls';
 
 export function childPath(parentPath: string, name: string): string {
   const base = parentPath === '/' ? '' : parentPath.replace(/\/$/, '');

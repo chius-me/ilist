@@ -164,7 +164,8 @@ describe('Google Drive API client', () => {
       cancel() { sourceCancelled = true; },
     });
     const fetcher = vi.fn(async (_input: RequestInfo | URL, init?: RequestInit) => {
-      const reader = (init?.body as ReadableStream<Uint8Array>).getReader();
+      if (!(init?.body instanceof ReadableStream)) throw new Error('Expected ReadableStream body');
+      const reader = (init.body as ReadableStream<Uint8Array>).getReader();
       await reader.read();
       await reader.cancel('request aborted');
       return Response.json(googleFile({ id: 'cancelled-upload' }));
@@ -259,5 +260,33 @@ describe('Google Drive API client', () => {
 
     expect(error).toMatchObject({ code, status });
     expect(String(error)).not.toContain('private provider response');
+  });
+
+  it('never retries unbuffered ReadableStream uploads and finds child items by name', async () => {
+    const stream = new ReadableStream<Uint8Array>({
+      start(controller) {
+        controller.enqueue(new TextEncoder().encode('hello'));
+        controller.close();
+      },
+    });
+    const streamFetcher = vi.fn(async () => new Response(null, { status: 401 }));
+    const client = new GoogleDriveClient(
+      workerEnv(),
+      'mount-google',
+      streamFetcher,
+      async () => 'test-access',
+      async () => 'refreshed-access',
+    );
+
+    await expect(client.upload('folder-1', 'hello.txt', stream, 'text/plain'))
+      .rejects.toMatchObject({ code: 'GOOGLE_AUTH_FAILED', status: 401 });
+    expect(streamFetcher).toHaveBeenCalledOnce();
+
+    const searchFetcher = vi.fn(async (_input: RequestInfo | URL) => Response.json({ files: [googleFile({ id: 'child-1', name: 'target.txt' })] }));
+    const searchClient = new GoogleDriveClient(workerEnv(), 'mount-google', searchFetcher, async () => 'test-access');
+    const found = await searchClient.findChildByName('folder-1', "a'b\\c", false);
+    expect(found?.id).toBe('child-1');
+    const url = new URL(String(searchFetcher.mock.calls[0]![0]));
+    expect(url.searchParams.get('q')).toContain("name='a\\'b\\\\c'");
   });
 });

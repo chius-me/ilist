@@ -28,7 +28,7 @@ describe('password hash CLI', () => {
     const result = run([], `${secret}\n`);
 
     expect(result.status).toBe(0);
-    expect(result.stdout).toMatch(/^pbkdf2-sha256:600000:[0-9a-f]{32}:[0-9a-f]{64}\n$/);
+    expect(result.stdout).toMatch(/^pbkdf2-sha256:100000:[0-9a-f]{32}:[0-9a-f]{64}\n$/);
     expect(result.stdout).not.toContain(secret);
     expect(result.stderr).toBe('');
   });

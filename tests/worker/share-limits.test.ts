@@ -1,6 +1,7 @@
 import { env } from 'cloudflare:test';
-import { describe, expect, it } from 'vitest';
+import { beforeEach, describe, expect, it } from 'vitest';
 import { sha256Hex } from '../../src/worker/auth';
+import { createMount } from '../../src/worker/mounts';
 import { routeRequest } from '../../src/worker/router';
 import {
   createShareRecord,
@@ -17,11 +18,21 @@ function workerEnv(): Env {
 }
 
 describe('share download limits and token rotation', () => {
+  beforeEach(async () => {
+    await workerEnv().DB.prepare('DELETE FROM mounts').run();
+  });
+
   it('atomically consumes downloads until the max is reached', async () => {
+    const mount = await createMount(workerEnv().DB, {
+      name: 'Limits Mount',
+      mountPath: '/limits-mount',
+      driverType: 's3',
+      provider: 'custom',
+    });
     const token = createShareToken();
     const share = await createShareRecord(workerEnv().DB, {
       tokenHash: await token.tokenHash,
-      mountId: 'native-r2',
+      mountId: mount.id,
       providerItemId: 'root',
       targetKind: 'file',
       name: 'limited.txt',
@@ -42,10 +53,16 @@ describe('share download limits and token rotation', () => {
   });
 
   it('rejects public access after token rotation while keeping policy fields', async () => {
+    const mount = await createMount(workerEnv().DB, {
+      name: 'Rotate Mount',
+      mountPath: '/rotate-mount',
+      driverType: 's3',
+      provider: 'custom',
+    });
     const first = createShareToken();
     const share = await createShareRecord(workerEnv().DB, {
       tokenHash: await first.tokenHash,
-      mountId: 'native-r2',
+      mountId: mount.id,
       providerItemId: 'root',
       targetKind: 'folder',
       name: 'rotate-me',

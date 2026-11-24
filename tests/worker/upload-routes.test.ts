@@ -148,7 +148,7 @@ describe('admin upload session routes', () => {
   beforeEach(async () => {
     await workerEnv().DB.prepare('DELETE FROM upload_sessions').run();
     await workerEnv().DB.prepare('DELETE FROM sessions').run();
-    await workerEnv().DB.prepare("DELETE FROM mounts WHERE id <> 'native-r2'").run();
+    await workerEnv().DB.prepare('DELETE FROM mounts').run();
   });
 
   afterEach(() => {
@@ -220,6 +220,7 @@ describe('admin upload session routes', () => {
       id: expect.any(String),
       kind: 'multipart',
       partSize: UPLOAD_PART_SIZE_BYTES,
+      maxPartConcurrency: 1,
       size: UPLOAD_PART_SIZE_BYTES,
       uploadedParts: [],
       expiresAt: expect.any(String),

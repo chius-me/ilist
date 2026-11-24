@@ -1,7 +1,8 @@
-import { ArrowDownAZ, Grid2X2, List, Plus, RefreshCw, Search, Upload } from 'lucide-react';
-import { useEffect, useRef, useState, type ChangeEvent } from 'react';
+import { ArrowDownAZ, FolderUp, Grid2X2, List, Plus, RefreshCw, Search, Upload } from 'lucide-react';
+import { useCallback, useEffect, useRef, useState, type ChangeEvent } from 'react';
 import type { SessionStatus } from '../../hooks/useSession';
 import { useI18n } from '../../i18n/I18nProvider';
+import { extractRelativeFilesFromFileList, type RelativeUploadFile } from '../../lib/folder-upload';
 import type { Breadcrumb } from '../../types/entries';
 import { Breadcrumbs } from './Breadcrumbs';
 
@@ -19,12 +20,15 @@ interface ExplorerToolbarProps {
   selectionCount: number;
   canUpload: boolean;
   canCreateFolder: boolean;
+  searchOpen?: boolean;
+  onSearchOpenChange?: (open: boolean) => void;
   onQuery: (query: string) => void;
   onOpenPath: (path: string) => void;
   onRefresh: () => void;
   onSort: (sort: ExplorerSort) => void;
   onView: (view: ExplorerView) => void;
   onUpload: (files: File[]) => void;
+  onUploadFolder?: (items: RelativeUploadFile[]) => void;
   onCreateFolder: () => void;
 }
 
@@ -35,15 +39,17 @@ export function ExplorerToolbar({
   view,
   refreshing,
   sessionStatus,
-  selectionCount,
   canUpload,
   canCreateFolder,
+  searchOpen: controlledSearchOpen,
+  onSearchOpenChange,
   onQuery,
   onOpenPath,
   onRefresh,
   onSort,
   onView,
   onUpload,
+  onUploadFolder,
   onCreateFolder,
 }: ExplorerToolbarProps) {
   const { t } = useI18n();
@@ -55,8 +61,14 @@ export function ExplorerToolbar({
   const adminMenuButton = useRef<HTMLButtonElement>(null);
   const adminMenu = useRef<HTMLDivElement>(null);
   const restoreSearchFocus = useRef(false);
-  const [searchOpen, setSearchOpen] = useState(false);
+  const [internalSearchOpen, setInternalSearchOpen] = useState(false);
   const [adminMenuOpen, setAdminMenuOpen] = useState(false);
+
+  const searchOpen = controlledSearchOpen ?? internalSearchOpen;
+  const updateSearchOpen = useCallback((next: boolean) => {
+    if (onSearchOpenChange) onSearchOpenChange(next);
+    else setInternalSearchOpen(next);
+  }, [onSearchOpenChange]);
 
   useEffect(() => {
     if (searchOpen) {
@@ -74,11 +86,11 @@ export function ExplorerToolbar({
     const closeOnOutsideClick = (event: MouseEvent) => {
       if (searchControl.current?.contains(event.target as Node)) return;
       restoreSearchFocus.current = true;
-      setSearchOpen(false);
+      updateSearchOpen(false);
     };
     document.addEventListener('mousedown', closeOnOutsideClick);
     return () => document.removeEventListener('mousedown', closeOnOutsideClick);
-  }, [searchOpen]);
+  }, [searchOpen, updateSearchOpen]);
 
   useEffect(() => {
     if (!adminMenuOpen) return;
@@ -121,12 +133,27 @@ export function ExplorerToolbar({
 
   function closeSearch() {
     restoreSearchFocus.current = true;
-    setSearchOpen(false);
+    updateSearchOpen(false);
   }
 
   function openUpload() {
     setAdminMenuOpen(false);
     uploadInput.current?.click();
+  }
+
+  function openFolderUpload() {
+    setAdminMenuOpen(false);
+    if (!onUploadFolder) return;
+    const picker = document.createElement('input');
+    picker.type = 'file';
+    picker.multiple = true;
+    (picker as HTMLInputElement & { webkitdirectory: boolean }).webkitdirectory = true;
+    picker.onchange = () => {
+      const items = extractRelativeFilesFromFileList(picker.files ?? []);
+      if (items.length > 0) onUploadFolder(items);
+      picker.onchange = null;
+    };
+    picker.click();
   }
 
   function createFolder() {
@@ -150,7 +177,7 @@ export function ExplorerToolbar({
                 closeSearch();
               }
             }} placeholder={t('toolbar.search')} />
-          </label> : <button ref={searchButton} className="iconButton" type="button" title={t('toolbar.search')} aria-label={t('toolbar.search')} onClick={() => setSearchOpen(true)}>
+          </label> : <button ref={searchButton} className="iconButton" type="button" title={t('toolbar.search')} aria-label={t('toolbar.search')} onClick={() => updateSearchOpen(true)}>
             <Search aria-hidden="true" size={17} />
           </button>}
         </div>
@@ -216,6 +243,9 @@ export function ExplorerToolbar({
               {canUpload ? <button className="iconButton" type="button" title={t('toolbar.upload')} aria-label={t('toolbar.upload')} onClick={openUpload}>
                 <Upload aria-hidden="true" size={17} />
               </button> : null}
+              {canUpload && onUploadFolder ? <button className="iconButton" type="button" title={t('upload.folderAction')} aria-label={t('upload.folderAction')} onClick={openFolderUpload}>
+                <FolderUp aria-hidden="true" size={17} />
+              </button> : null}
               {canCreateFolder ? <button className="iconButton" type="button" title={t('toolbar.createFolder')} aria-label={t('toolbar.createFolder')} onClick={createFolder}>
                 <Plus aria-hidden="true" size={17} />
               </button> : null}
@@ -226,10 +256,10 @@ export function ExplorerToolbar({
               </button>
               {adminMenuOpen ? <div ref={adminMenu} className="mobileAdminMenu" role="menu" aria-label={t('toolbar.adminMenu')}>
                 {canUpload ? <button type="button" role="menuitem" onClick={openUpload}><Upload aria-hidden="true" size={17} />{t('toolbar.upload')}</button> : null}
+                {canUpload && onUploadFolder ? <button type="button" role="menuitem" onClick={openFolderUpload}><FolderUp aria-hidden="true" size={17} />{t('upload.folderAction')}</button> : null}
                 {canCreateFolder ? <button type="button" role="menuitem" onClick={createFolder}><Plus aria-hidden="true" size={17} />{t('toolbar.createFolder')}</button> : null}
               </div> : null}
             </div> : null}
-            {selectionCount > 0 ? <span className="selectionCount">{t('selection.count', { count: selectionCount })}</span> : null}
           </>
         ) : null}
       </div>

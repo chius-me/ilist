@@ -24,21 +24,20 @@ Self-hosted file index and manager for Cloudflare Workers.
 ## Features
 
 - Virtual root with multiple independently named storage mounts
-- OneDrive Personal OAuth authorization with PKCE and encrypted refresh tokens
+- OneDrive Personal OAuth authorization with PKCE, POST start flow, and encrypted refresh tokens
 - Multiple OneDrive accounts, each mounted at a custom top-level path
 - Multiple Google My Drive accounts or roots, each independently authorized and mounted at a custom top-level path
 - Multiple Dropbox accounts or roots with PKCE OAuth and encrypted refresh tokens
 - Per-mount OAuth application credentials managed from `/admin/storages`, with legacy Worker-secret fallback
-- S3-compatible mounts with AWS Signature Version 4
-- Cloudflare R2 through either S3 credentials or the built-in Worker binding
-- Public directory browsing, stable file links, downloads, and common file previews
-- Revocable file and folder shares with optional passwords, expiration, and download policy
-- English and Simplified Chinese interface with system, light, and dark themes stored locally
-- List and grid views, breadcrumbs, sorting, search, keyboard selection, and responsive layout
-- Responsive storage and appearance administration for desktop, tablet, and mobile screens
-- Administrator login, upload, folder creation, rename, move, delete, and visibility controls
-- Resumable OneDrive, Google Drive, and Dropbox uploads plus multipart S3 uploads with pause, resume, retry, cancel, and progress controls
-- D1 migrations and compatibility support for legacy R2 object links
+- Cloudflare R2 and S3-compatible mounts with AWS Signature Version 4, concurrent multipart uploads, and batch object deletion (`DeleteObjects`)
+- Public directory browsing with cursor pagination, 60-second edge cache for guest listings (`?refresh=1` bypass), and 30-second client LRU navigation cache
+- Rich inline previews: PDF.js canvas viewer (`pdfjs-dist`), XSS-sanitized Markdown (`marked`), syntax-highlighted code (`highlight.js`), UTF-8/GB18030 text preview, zoomable/rotatable image viewer, and keyboard sibling navigation
+- File and folder uploads (`webkitdirectory` picker and recursive drag-and-drop), grid image thumbnails, list virtualization above 100 entries, interactive sort headers, select-all, and keyboard shortcuts (`/`, `Escape`, `Backspace`)
+- Revocable file and folder shares with optional passwords, expiration, download limits/policies, client search/sort/URL sync, and view/download counts
+- English and Simplified Chinese interface with lazy-loaded locale dictionaries and system/light/dark themes stored locally
+- Configurable header links via `VITE_REPO_URL` and `VITE_CONTACT_EMAIL`
+- Responsive explorer, storage, share, and appearance UI across desktop, tablet, and mobile screens
+- Scheduled Cron cleanup (`triggers.crons`) for expired sessions, OAuth states, rate limits, and abandoned upload records
 - Streamed provider responses without buffering complete files in Worker memory
 
 ## Supported Storage
@@ -48,35 +47,33 @@ Self-hosted file index and manager for Cloudflare Workers.
 | OneDrive Personal | ✓ | ✓ | ✓ | ✓ | Resumable upload; personal Microsoft accounts only |
 | Google My Drive | ✓ | ✓ | ✓ | ✓ | Range downloads, resumable upload, and Docs/Sheets/Slides export |
 | Dropbox | ✓ | ✓ | ✓ | ✓ | Range downloads, resumable upload, folder copy, and exportable cloud files |
-| Cloudflare R2 binding | ✓ | ✓ | ✓ | ✓ | Built-in compatibility mount; single-request upload only |
-| Cloudflare R2 through S3 | ✓ | ✓ | ✓ | ✓ | Multipart upload with the R2 S3 endpoint and scoped credentials |
+| Cloudflare R2 through S3 | ✓ | ✓ | ✓ | ✓ | Concurrent multipart upload and batch delete with scoped R2 S3 credentials |
 | Other S3-compatible storage | ✓ | ✓ | ✓ | ✓ | Multipart compatibility depends on the provider's S3 implementation |
 
-OneDrive Personal Vault is not exposed. Microsoft Graph returns the locked vault without a usable file or folder facet, so ilist skips it instead of failing the parent directory.
+OneDrive Personal Vault is not exposed. Microsoft Graph returns the locked vault without a usable file or folder facet, so ilist skips it instead of failing the parent directory. The legacy `native-r2` Worker binding driver is retired by migration `0020_retire_native_r2_mounts.sql`; use an S3-compatible R2 mount instead.
 
 ## Architecture
 
 ```text
 Browser
   |
-  +-- React + Vite UI (Workers Assets)
+  +-- React + Vite UI (Workers Assets, code-split chunks)
   |
-  +-- Cloudflare Worker
-        +-- Native request router and session authentication
-        +-- Virtual filesystem and storage driver registry
+  +-- Cloudflare Worker (Smart Placement + scheduled Cron cleanup)
+        +-- route modules (routes/auth, routes/fs, routes/admin-entries) & session auth
+        +-- virtual filesystem, cursor pagination, and lazy storage driver registry
         +-- OneDrive Personal driver -> Microsoft Graph
         +-- Google Drive driver -> Google Drive API v3
         +-- Dropbox driver -> Dropbox API v2
-        +-- S3 driver -> R2 or another S3-compatible provider
-        +-- D1 -> mounts, encrypted credentials, entries, sessions, shares
-        +-- R2 binding -> built-in compatibility storage
+        +-- S3 driver -> Cloudflare R2 (S3 API) or another S3-compatible provider
+        +-- D1 -> mounts, encrypted credentials, entries, upload sessions, shares
 ```
 
 The Worker acts as the control plane and streams or redirects file data where possible. Provider credentials are encrypted before they are written to D1.
 
 ## Quick Start
 
-1. **Prerequisites.** Install Node.js 22.12 or newer and npm 10 or newer. Have a Cloudflare account with Workers, D1, and R2 enabled, Wrangler authenticated with `npx wrangler login`, and OAuth applications for the cloud providers you intend to use.
+1. **Prerequisites.** Install Node.js 22.12 or newer and npm 10 or newer. Have a Cloudflare account with Workers and D1 enabled, Wrangler authenticated with `npx wrangler login`, and OAuth applications or R2/S3 credentials for the storage providers you intend to use.
 2. **Clone and install.**
 
    ```bash
@@ -85,17 +82,16 @@ The Worker acts as the control plane and streams or redirects file data where po
    npm install
    ```
 
-3. **Create D1 and R2 resources.**
+3. **Create the D1 database.**
 
    ```bash
    npx wrangler d1 create ilist-d1
-   npx wrangler r2 bucket create ilist-r2
    ```
 
-4. **Configure `wrangler.jsonc`, the custom domain, and D1 migrations.** Copy the D1 `database_id` returned by Wrangler into `wrangler.jsonc`, confirm the database and bucket names, and keep the configured `ilist.chius.dev` custom-domain route only when that hostname is in your Cloudflare zone. Then run:
+4. **Configure `wrangler.jsonc`, the custom domain, and D1 migrations.** Copy the D1 `database_id` returned by Wrangler into `wrangler.jsonc`, confirm the database name, and keep the configured `ilist.chius.dev` custom-domain route only when that hostname is in your Cloudflare zone. Then run:
 
    ```bash
-   npx wrangler d1 migrations apply ilist-d1 --remote
+   npx wrangler d1 migrations apply DB --remote --env production
    ```
 
 5. **Generate the administrator password hash and random keys.**
@@ -108,7 +104,7 @@ The Worker acts as the control plane and streams or redirects file data where po
 
    The password command rejects password arguments. On a terminal it disables character echo while reading the prompt. Automation may provide exactly one password line through non-TTY standard input; stdout contains only the generated hash, while prompts and errors use stderr.
 
-   New hashes use `pbkdf2-sha256:600000`. Legacy `pbkdf2` hashes remain valid for this release, but an administrator hash is a Cloudflare Secret and cannot be upgraded automatically. After a successful legacy login, rotate it with these exact commands:
+   New hashes use `pbkdf2-sha256:600000`. Legacy `pbkdf2` hashes remain valid for migration compatibility, but an administrator hash is a Cloudflare Secret and cannot be upgraded automatically. After signing in with a legacy hash, rotate it with:
 
    ```bash
    npm run hash-password
@@ -124,11 +120,12 @@ The Worker acts as the control plane and streams or redirects file data where po
    npx wrangler secret put PUBLIC_ORIGIN
    ```
 
-   The canonical production value is `https://ilist.chius.dev`. `PUBLIC_ORIGIN` must exactly match the deployed HTTPS origin and have no trailing slash.
+   The canonical production value is `https://ilist.chius.dev`. `PUBLIC_ORIGIN` must exactly match the deployed HTTPS origin and have no trailing slash. Optionally set `VITE_REPO_URL` and `VITE_CONTACT_EMAIL` at UI build time to override the header repository and contact links.
 
 7. **Run `npm run check` and `npm run deploy`.**
 
    ```bash
+   npm run lint
    npm run check
    npm run deploy
    ```
@@ -160,21 +157,21 @@ Use a bucket-scoped R2 API token with only the permissions ilist requires.
 
 ## Upload Behavior
 
-- Files smaller than `10 MiB` use the existing single-request upload path.
-- Files of exactly `10 MiB` or larger use resumable upload when the current OneDrive, Google Drive, Dropbox, or S3 mount advertises multipart support.
-- Parts are uploaded sequentially in `10 MiB` chunks. The queue runs at most two files concurrently.
+- Files smaller than `10 MiB` use the single-request upload path.
+- Files of `10 MiB` or larger use resumable upload when the OneDrive, Google Drive, Dropbox, or S3 mount advertises multipart support.
+- Parts are uploaded in `10 MiB` chunks. S3/R2 mounts upload up to 3 parts concurrently; OneDrive, Google Drive, and Dropbox upload parts sequentially. The queue runs at most two files concurrently.
 - Pause, resume, and retry preserve the opaque ilist upload session and server-confirmed parts while the page remains open. After a full page reload, unfinished multipart sessions reappear in the upload queue and require re-selecting the original local file before parts continue (browsers cannot silently re-read disk files).
+- Folder uploads (`Upload folder` or recursive directory drag-and-drop) create missing nested folders cleanly before queuing files under their resolved parent folder IDs.
 - Provider upload URLs, OneDrive session proofs, Google resumable session URLs, Dropbox session IDs, and S3 upload IDs remain encrypted or server-side and are never returned to the browser.
-- The built-in `R2` Worker binding remains compatible with existing deployments but does not implement resumable upload; use an S3-configured R2 mount for multipart uploads.
 - Configure an incomplete multipart upload lifecycle rule on S3-compatible buckets so abandoned provider uploads are removed if Worker cleanup cannot reach them.
 
-OneDrive resumable upload uses the same delegated `Files.ReadWrite` permission documented above. Google Drive uses the full Drive OAuth scope documented above. Apply all D1 migrations, including `0012_upload_sessions.sql`, `0013_upload_terminal_leases.sql`, `0014_shares.sql`, `0015_auth_rate_limits.sql`, `0016_mounts_private_default.sql`, `0017_share_auth_revision.sql`, and `0018_share_limits_and_counters.sql`, before deploying the current build.
+Apply all D1 migrations (through `0021_optimize_indexes.sql`) before deploying the current build.
 
 ## Controlled Shares
 
-Administrators can create a share from any file or folder action menu and manage existing shares at `/admin/shares`. A share may require a password, expire at a chosen time, block explicit downloads, or be disabled and re-enabled. Folder shares support nested browsing, list and grid views, and the same safe preview types as the main explorer.
+Administrators can create a share from any file or folder action menu and manage existing shares at `/admin/shares` (including view count and download usage stats). A share may require a password, expire at a chosen time, block explicit downloads, cap total downloads, or be disabled and re-enabled. Folder shares support nested browsing, list and grid views, client-side search and sorting, URL query synchronization, and the same safe preview types as the main explorer.
 
-Google Docs, Sheets, and Slides expose explicit export formats in both the main explorer and controlled shares. PDF is used for preview when available; downloads remain subject to the share's current download policy.
+Google Docs, Sheets, and Slides expose explicit export formats in both the main explorer and controlled shares. Manual PDF preview is available on demand without auto-embedding upstream PDFs. Downloads remain subject to the share's current download policy.
 
 The raw `/s/:token` URL is returned only once when the share is created or rotated. D1 stores only its SHA-256 hash, so the management page cannot recover or copy an existing link. Administrators can rotate the token, which immediately invalidates the previous public URL while keeping share policy. Optional maximum download counts are enforced server-side. Public item IDs are share-scoped encrypted handles rather than mount or provider IDs. Password authorization uses a short-lived, `HttpOnly`, `SameSite=Lax` cookie scoped to that share path. Changing or removing the share password revokes every authorization cookie issued under the previous password policy.
 
@@ -188,11 +185,11 @@ Create local secrets from the tracked template:
 
 ```bash
 cp .dev.vars.example .dev.vars
-npx wrangler d1 migrations apply ilist-d1 --local
+npx wrangler d1 migrations apply DB --local
 npm run dev
 ```
 
-Fill in test-only values before starting Wrangler. It normally serves the application at `http://localhost:8787`. OAuth cannot complete against that plain-HTTP origin; use a deployed Worker or an HTTPS development hostname for the callback flow. Local D1 and R2 data are isolated from production. Never put production credentials in `.dev.vars`.
+Fill in test-only values before starting Wrangler. It normally serves the application at `http://localhost:8787`. OAuth cannot complete against that plain-HTTP origin; use a deployed Worker or an HTTPS development hostname for the callback flow. Local D1 data is isolated from production. Never put production credentials in `.dev.vars`.
 
 ## Commands
 
@@ -201,29 +198,34 @@ Fill in test-only values before starting Wrangler. It normally serves the applic
 | `npm run dev` | Run the local Worker and UI |
 | `npm run dev:web` | Run the frontend-only Vite development server |
 | `npm run build` | Build the Vite frontend |
-| `npm run test:worker` | Run Worker runtime tests |
-| `npm run test:ui` | Run UI tests |
+| `npm run lint` | Run Biome linter checks across `src`, `tests`, and `scripts` |
+| `npm run lint:fix` | Apply safe Biome lint fixes |
+| `npm run typecheck` | Run strict isolated typechecks (`worker`, `ui`, and `node` tsconfigs) |
+| `npm run test:worker` | Run Worker runtime tests via `@cloudflare/vitest-plugin` |
+| `npm run test:ui` | Run UI unit and integration tests |
+| `npm run test:scripts` | Run CLI script tests |
 | `npm run test:e2e` | Run browser workflows in desktop, tablet, and mobile viewports |
+| `npm run test:e2e:ci` | Run non-visual browser E2E tests |
 | `npm run test:visual` | Run browser screenshot scenarios |
-| `npm run test` | Run all tests |
-| `npm run check` | Type-check, build, and run all tests |
-| `npm run deploy` | Build and deploy with Wrangler |
+| `npm run test` | Run all Worker, UI, and script test suites |
+| `npm run check` | Run split typechecks, Vite build, and all test suites |
+| `npm run deploy:d1` | Apply remote D1 migrations in production |
+| `npm run deploy` | Apply migrations, build, and deploy with Wrangler |
+| `npm run types` | Regenerate Worker bindings types in `src/worker/env.d.ts` |
 | `npm run hash-password` | Prompt for and generate an administrator password hash |
-| `npm run migrate:objects -- --local` | Import legacy object rows into the entry model locally |
-| `npm run migrate:objects -- --remote` | Import legacy object rows in production |
 
 ## Continuous Deployment
 
-[`.github/workflows/ci-cd.yml`](.github/workflows/ci-cd.yml) runs `npm run check` on every pull request and every push to `main`.
+[`.github/workflows/ci.yml`](.github/workflows/ci.yml) runs `npm audit --omit=dev --audit-level=high`, `npm run lint`, `npm run check`, and `npm run test:e2e:ci` on every pull request and every push to `main`.
 
-After a green check on `main` (or on manual `workflow_dispatch`), the same workflow applies pending remote D1 migrations, then deploys the Worker and Assets with Wrangler. Worker secrets set with `wrangler secret put` stay in Cloudflare and are not re-uploaded by CI.
+After a green check on `main` (or on manual `workflow_dispatch`), the deploy job applies pending remote D1 migrations, then deploys the Worker and Assets with Wrangler. Worker secrets set with `wrangler secret put` stay in Cloudflare and are not re-uploaded by CI.
 
 Configure these **repository secrets** (Settings → Secrets and variables → Actions) before the first automated deploy:
 
 | Secret | Purpose |
 | --- | --- |
 | `CLOUDFLARE_API_TOKEN` | API token with permission to edit Workers, Workers Routes / Custom Domains, and D1 for this account |
-| `CLOUDFLARE_ACCOUNT_ID` | Cloudflare account ID that owns the `ilist` Worker, `ilist-d1` D1 database, and `ilist-r2` R2 bucket |
+| `CLOUDFLARE_ACCOUNT_ID` | Cloudflare account ID that owns the `ilist` Worker and `ilist-d1` D1 database |
 
 Do not put `ADMIN_PASSWORD_HASH`, `CREDENTIAL_MASTER_KEY`, OAuth client secrets, or other secrets into GitHub. Keep infrastructure secrets in Cloudflare Worker secrets; provider credentials entered in the WebUI are encrypted in D1.
 
@@ -238,7 +240,7 @@ Do not put `ADMIN_PASSWORD_HASH`, `CREDENTIAL_MASTER_KEY`, OAuth client secrets,
 - Private mounts rely on ilist authorization; review Cloudflare logs, Access policies, and caching rules for your deployment.
 - Share links are bearer credentials. Send them through an appropriate private channel and add a password for sensitive targets.
 - Existing share URLs cannot be recovered from D1; create a replacement share if the original URL is lost.
-- Same-origin HTML, SVG, XML, PDF, and unknown file types are sent as attachments with a sandboxed file response policy. Only a narrow, exact image/audio/video MIME allowlist is previewed inline.
+- Application responses set strict security headers (`worker-src 'self'` for PDF.js worker); same-origin HTML, SVG, XML, and unknown file types are sent as attachments with a sandboxed file response policy (`sandbox; default-src 'none'`). PDF and text previews use strict in-app/client-side rendering.
 - New mounts are private by default. Publishing a mount requires explicit administrator confirmation because unauthenticated visitors can browse it.
 - Share item handles are checked against the live share root on every access. Moving an item outside the shared folder revokes its old handle immediately.
 - Failed administrator attempts are limited before PBKDF2 by both a five-per-minute IP-wide budget and a five-per-minute IP-plus-normalized-username budget. Share-password attempts remain limited to ten per minute per IP and share. Do not put a caching rule in front of share responses.
@@ -252,37 +254,25 @@ Do not put `ADMIN_PASSWORD_HASH`, `CREDENTIAL_MASTER_KEY`, OAuth client secrets,
 - Dropbox Business team impersonation and explicit team-space namespace selection are not implemented.
 - No WebDAV, FTP, SFTP, SMB, or local filesystem drivers
 - Upload resume after reload requires re-binding the original local file; silent recovery without re-selection is not possible in browsers
-- Built-in R2 binding uploads remain single-request below `10 MiB` and reject larger single-request uploads with a stable error; use an S3-configured R2 mount for multipart uploads
 - No cross-mount copy or move (same-mount copy is supported)
 - Shares do not support uploads, recipient accounts, or email notifications
-- No offline download, archive extraction, media transcoding, or background task system
-- Provider listings are fetched live; distributed directory caching is not implemented
-- Built-in R2 recursive deletion is bounded and reports per-entry failures; S3-compatible and OneDrive folder deletion follow provider-specific behavior
+- No offline download, archive extraction, media transcoding, or background job queue beyond Cron table cleanup
+- Guest directory listings use a 60-second edge Cache API layer (bypassed via `?refresh=1`) alongside a 30-second client LRU cache, not a shared global invalidation bus across regions
 - Google Shared Drives, Shared with me, OneDrive work/school accounts, multi-user ACL, and WebDAV remain out of scope
-
-## Legacy R2 Upgrade
-
-Before changing production, export D1 and keep the export outside Git:
-
-```bash
-npx wrangler d1 export ilist-d1 --remote --output /tmp/ilist-d1-before-multi-mount.sql
-npx wrangler d1 migrations apply ilist-d1 --remote
-npm run migrate:objects -- --remote
-npm run deploy
-```
-
-The `v0.1.x` releases are intended to remain compatible with legacy R2 object links. Migrations add the entry and mount model without deleting files or legacy rows. For the v0.1.7 security release, follow [the release abort procedure](docs/releases/v0.1.7.md#emergency-abort-and-rollback): do not return public traffic to v0.1.6, and retain `0015` and `0016`. Restore a D1 export only when data itself is damaged or a migration failed.
 
 ## Project Structure
 
 ```text
 src/
-  ui/                         React file explorer and admin UI
+  ui/                         React file explorer, rich previews, and admin UI
   worker/
-    index.ts                  Native Worker entry point
-    router.ts                 HTTP route dispatch
+    index.ts                  Native Worker entry point and scheduled Cron handler
+    router.ts                 Top-level HTTP route dispatch
+    routes/                   Modular auth, filesystem, and admin-entry route handlers
     file-system.ts            Virtual filesystem operations
+    shared/                   HTTP client, encoding, IP checks, and OAuth helpers
     drivers/
+      registry.ts             Lazy driver loader
       onedrive/               Microsoft Graph driver and OAuth tokens
       google/                 Google Drive API driver and OAuth tokens
       dropbox/                Dropbox API v2 driver and OAuth tokens
@@ -290,6 +280,8 @@ src/
 migrations/                   D1 schema migrations
 tests/worker/                 Worker runtime tests
 tests/ui/                     React component and interaction tests
+tests/e2e/                    Playwright end-to-end tests
+scripts/                      CLI utilities
 docs/                         Setup and implementation documentation
 ```
 
@@ -302,7 +294,7 @@ docs/                         Setup and implementation documentation
 
 ## Contributing
 
-Run `npm run check` before submitting a change. Keep provider credentials, local variables, D1 exports, and temporary uploads out of Git. Update the relevant documentation when changing storage behavior or deployment requirements.
+Run `npm run lint` and `npm run check` before submitting a change. Keep provider credentials, local variables, D1 exports, and temporary uploads out of Git. Update the relevant documentation when changing storage behavior or deployment requirements.
 
 ## 📄 License
 

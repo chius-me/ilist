@@ -53,5 +53,9 @@ export function useSession() {
     }
   }, []);
 
-  return { ...state, refresh, signIn, signOut };
+  const clearError = useCallback(() => {
+    setState((current) => (current.error ? { ...current, error: null } : current));
+  }, []);
+
+  return { ...state, refresh, signIn, signOut, clearError };
 }

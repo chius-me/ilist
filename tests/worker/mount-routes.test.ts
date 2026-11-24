@@ -3,6 +3,8 @@ import { SELF, env } from 'cloudflare:test';
 import { getCredentials, putCredentials } from '../../src/worker/credentials';
 import { driverRegistry } from '../../src/worker/drivers/registry';
 import { createMount, getMount } from '../../src/worker/mounts';
+import { routeRequest } from '../../src/worker/router';
+import { createUploadSessionRecord } from '../../src/worker/upload-session-store';
 import type { StorageDriver } from '../../src/worker/drivers/types';
 import type { Env } from '../../src/worker/types';
 
@@ -66,7 +68,6 @@ describe('mount administration API', () => {
     delete driverRegistry.onedrive;
     delete driverRegistry.google;
     delete driverRegistry.dropbox;
-    delete driverRegistry['native-r2'];
     await workerEnv().DB.prepare('DELETE FROM storage_credentials').run();
     await workerEnv().DB.prepare('DELETE FROM mounts').run();
   });
@@ -107,7 +108,7 @@ describe('mount administration API', () => {
   it.each([
     ['OneDrive', 'onedrive', 'microsoft-onedrive-personal'],
     ['Dropbox', 'dropbox', 'dropbox'],
-    ['native R2', 'native-r2', 'cloudflare-r2'],
+    ['Google Drive', 'google', 'google'],
   ] as const)('creates %s mounts as private when the HTTP request omits isPublic', async (name, driverType, provider) => {
     const response = await adminFetch('/api/admin/mounts', {
       method: 'POST',
@@ -212,25 +213,30 @@ describe('mount administration API', () => {
     expect(JSON.stringify(await response.json())).not.toContain('secretAccessKey');
   });
 
-  it('rejects creation of the retired PikPak driver', async () => {
-    const response = await adminFetch('/api/admin/mounts', {
+  it.each(['pikpak', 'native-r2'] as const)('rejects creation and modification of retired %s mounts while allowing deletion', async (retiredType) => {
+    const rejected = await adminFetch('/api/admin/mounts', {
       method: 'POST',
       headers: { 'content-type': 'application/json' },
       body: JSON.stringify({
-        name: 'Retired storage', mountPath: '/retired-storage', driverType: 'pikpak', provider: 'pikpak', config: {},
+        name: `Retired ${retiredType}`, mountPath: `/retired-${retiredType}`, driverType: retiredType, provider: retiredType, config: {},
       }),
     });
+    expect(rejected.status).toBe(400);
+    await expect(rejected.json()).resolves.toMatchObject({ error: { code: 'INVALID_MOUNT_DRIVER' } });
 
-    expect(response.status).toBe(400);
-    await expect(response.json()).resolves.toMatchObject({ error: { code: 'INVALID_MOUNT_DRIVER' } });
-  });
-
-  it('lists legacy PikPak mounts as disconnected and still allows their deletion', async () => {
     const mount = await createMount(workerEnv().DB, {
-      name: 'Legacy PikPak', mountPath: '/legacy-pikpak', driverType: 'pikpak', provider: 'pikpak',
-      enabled: false, isPublic: false, rootItemId: 'root', config: { useTrash: true },
+      name: `Legacy ${retiredType}`, mountPath: `/legacy-${retiredType}`, driverType: retiredType, provider: retiredType,
+      enabled: false, isPublic: false, rootItemId: 'root', config: {},
     });
     await putCredentials(workerEnv(), mount.id, { auth: { refreshToken: 'retired-refresh-token' } });
+
+    const patchRejected = await adminFetch(`/api/admin/mounts/${mount.id}`, {
+      method: 'PATCH',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ enabled: true, isPublic: true }),
+    });
+    expect(patchRejected.status).toBe(400);
+    await expect(patchRejected.json()).resolves.toMatchObject({ error: { code: 'DRIVER_RETIRED' } });
 
     const listResponse = await adminFetch('/api/admin/mounts');
     const listed = (await listResponse.json() as { data: Array<Record<string, unknown>> }).data
@@ -241,6 +247,19 @@ describe('mount administration API', () => {
     expect(deleteResponse.status).toBe(204);
     await expect(getMount(workerEnv().DB, mount.id)).resolves.toBeNull();
     await expect(getCredentials(workerEnv(), mount.id)).resolves.toBeNull();
+  });
+
+  it('rejects reserved mount paths including /s', async () => {
+    const response = await adminFetch('/api/admin/mounts', {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({
+        name: 'Share collision', mountPath: '/s', driverType: 's3', provider: 'custom',
+        config: s3Config, credentials: { accessKeyId: 'key', secretAccessKey: 'secret' },
+      }),
+    });
+    expect(response.status).toBe(400);
+    await expect(response.json()).resolves.toMatchObject({ error: { code: 'RESERVED_MOUNT_PATH' } });
   });
 
   it('validates S3 configuration and returns mount path conflicts', async () => {
@@ -276,10 +295,36 @@ describe('mount administration API', () => {
     expect((await collision.json() as { error: { code: string } }).error.code).toBe('MOUNT_PATH_CONFLICT');
   });
 
-  it('allows an IPv6 localhost S3 endpoint for local development', async () => {
-    const response = await adminFetch('/api/admin/mounts', {
+  it('blocks private/loopback S3 endpoints in HTTPS production while allowing localhost under local PUBLIC_ORIGIN', async () => {
+    for (const badConfig of [
+      { ...s3Config, endpoint: 'http://[::1]:9000' },
+      { ...s3Config, endpoint: 'https://169.254.169.254' },
+      { ...s3Config, endpoint: 'https://10.0.0.1:9000' },
+      { ...s3Config, endpoint: 'https://[::ffff:127.0.0.1]' },
+      { ...s3Config, bucket: '../bad-bucket' },
+      { ...s3Config, bucket: 'bad_bucket', addressingMode: 'virtual-hosted' },
+      { ...s3Config, region: 'us-east-1/evil' },
+    ]) {
+      const rejected = await adminFetch('/api/admin/mounts', {
+        method: 'POST',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({
+          name: `Bad ${crypto.randomUUID()}`,
+          mountPath: `/bad-${crypto.randomUUID()}`,
+          driverType: 's3',
+          provider: 'custom',
+          config: badConfig,
+          credentials: { accessKeyId: 'key', secretAccessKey: 'secret' },
+        }),
+      });
+      expect(rejected.status).toBe(400);
+    }
+
+    const cookie = await login();
+    const localEnv = { ...workerEnv(), PUBLIC_ORIGIN: 'http://localhost:8787' };
+    const localResponse = await routeRequest(new Request('http://localhost:8787/api/admin/mounts', {
       method: 'POST',
-      headers: { 'content-type': 'application/json' },
+      headers: { cookie, origin: 'http://localhost:8787', 'content-type': 'application/json' },
       body: JSON.stringify({
         name: 'IPv6 local',
         mountPath: '/ipv6-local',
@@ -288,9 +333,56 @@ describe('mount administration API', () => {
         config: { ...s3Config, endpoint: 'http://[::1]:9000' },
         credentials: { accessKeyId: 'key', secretAccessKey: 'secret' },
       }),
+    }), localEnv);
+
+    expect(localResponse.status).toBe(200);
+  });
+
+  it('aborts active remote multipart uploads before deleting a mount', async () => {
+    const mountId = await createS3Mount();
+    const abort = vi.fn(async () => undefined);
+    driverRegistry.s3 = () => ({
+      rootId: 'root',
+      capabilities: new Set(['list', 'upload', 'multipartUpload']),
+      resumableUpload: {
+        create: vi.fn(),
+        uploadPart: vi.fn(),
+        complete: vi.fn(),
+        abort,
+      },
+      list: vi.fn(),
+      stat: vi.fn(),
+      isWithin: vi.fn(),
+      getDownload: vi.fn(),
+      createFolder: vi.fn(),
+      upload: vi.fn(),
+      rename: vi.fn(),
+      move: vi.fn(),
+      copy: vi.fn(),
+      remove: vi.fn(),
+    } as unknown as StorageDriver);
+
+    const cookie = await login();
+    const me = await SELF.fetch(`${origin}/api/admin/me`, { headers: { cookie } });
+    expect(me.status).toBe(200);
+    const sessionRow = await workerEnv().DB.prepare('SELECT id FROM sessions ORDER BY created_at DESC LIMIT 1').first<{ id: string }>();
+    await createUploadSessionRecord(workerEnv(), sessionRow!.id, {
+      mountId,
+      parentItemId: 'root',
+      name: 'pending.bin',
+      size: 20 * 1024 * 1024,
+      contentType: 'application/octet-stream',
+      partSize: 10 * 1024 * 1024,
+      providerState: { uploadId: 's3-upload-id', key: 'pending.bin' },
+      expiresAt: Date.now() + 60_000,
     });
 
-    expect(response.status).toBe(200);
+    const deleted = await SELF.fetch(`${origin}/api/admin/mounts/${mountId}`, {
+      method: 'DELETE',
+      headers: { cookie, origin },
+    });
+    expect(deleted.status).toBe(204);
+    expect(abort).toHaveBeenCalledWith({ uploadId: 's3-upload-id', key: 'pending.bin' });
   });
 
   it('tests the selected mount through its registered driver', async () => {
@@ -351,7 +443,7 @@ describe('mount administration API', () => {
     const response = await adminFetch(`/api/admin/mounts/${mountId}`, {
       method: 'PATCH',
       headers: { 'content-type': 'application/json' },
-      body: JSON.stringify({ driverType: 'native-r2', config: {} }),
+      body: JSON.stringify({ driverType: 'onedrive', config: {} }),
     });
 
     expect(response.status).toBe(500);

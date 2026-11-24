@@ -26,14 +26,10 @@ export function disconnectMount(id: string): Promise<Mount> {
   return jsonRequest(`/api/admin/mounts/${encodeURIComponent(id)}/disconnect`, { method: 'POST', body: '{}' });
 }
 
-export function oneDriveConnectUrl(id: string): string {
-  return `/api/admin/oauth/onedrive/start?mountId=${encodeURIComponent(id)}`;
-}
-
-export function googleDriveConnectUrl(id: string): string {
-  return `/api/admin/oauth/google/start?mountId=${encodeURIComponent(id)}`;
-}
-
-export function dropboxConnectUrl(id: string): string {
-  return `/api/admin/oauth/dropbox/start?mountId=${encodeURIComponent(id)}`;
+export async function startOAuthAuthorization(driverType: 'onedrive' | 'google' | 'dropbox', mountId: string): Promise<string> {
+  const data = await jsonRequest<{ url: string }>(`/api/admin/oauth/${driverType}/start`, {
+    method: 'POST',
+    body: JSON.stringify({ mountId }),
+  });
+  return data.url;
 }

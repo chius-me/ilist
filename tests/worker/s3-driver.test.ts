@@ -136,7 +136,11 @@ describe('S3Driver', () => {
     const source = driver.itemId('tenant/root/file.txt', 'file');
     const destination = driver.itemId('tenant/root/destination/', 'folder');
 
-    await expect(driver.move(source, destination)).rejects.toThrow('copy failed');
+    await expect(driver.move(source, destination)).rejects.toMatchObject({
+      status: 502,
+      code: 'S3_UPSTREAM_FAILED',
+      message: 'S3 request failed',
+    });
     expect(api.deleteObject).not.toHaveBeenCalled();
   });
 
@@ -189,7 +193,7 @@ describe('S3Driver', () => {
     await expect(driver.move(
       driver.itemId('tenant/root/source/', 'folder'),
       driver.itemId('tenant/root/destination/', 'folder'),
-    )).rejects.toThrow('second copy failed');
+    )).rejects.toMatchObject({ status: 502, code: 'S3_UPSTREAM_FAILED', message: 'S3 request failed' });
     expect(api.deleteObject).not.toHaveBeenCalled();
   });
 
@@ -209,12 +213,14 @@ describe('S3Driver', () => {
 
     await driver.move(driver.itemId('tenant/root/source/', 'folder'), driver.itemId('tenant/root/dest/', 'folder'));
 
-    expect(order).toEqual([
+    expect(order.slice(0, 2)).toEqual(expect.arrayContaining([
       'copy:tenant/root/source/:tenant/root/dest/source/',
       'copy:tenant/root/source/a.txt:tenant/root/dest/source/a.txt',
+    ]));
+    expect(order.slice(2)).toEqual(expect.arrayContaining([
       'delete:tenant/root/source/a.txt',
       'delete:tenant/root/source/',
-    ]);
+    ]));
   });
 
   it('deletes folders recursively across list pages', async () => {
@@ -441,5 +447,34 @@ describe('S3Driver', () => {
     })).rejects.toMatchObject({ code: 'INVALID_UPLOAD_STATE' });
     expect(api.createMultipartUpload).not.toHaveBeenCalled();
     expect(api.uploadPart).not.toHaveBeenCalled();
+  });
+
+  it('resolves nested paths via prefix/object checks and uses batch deleteObjects when available', async () => {
+    const deleteObjects = vi.fn(async () => undefined);
+    const api = client({
+      listObjectsV2: vi.fn(async (options = {}) => {
+        if (options.prefix === 'tenant/root/docs/sub/') {
+          return listResult({ objects: [{ key: 'tenant/root/docs/sub/note.txt', lastModified: null, etag: null, size: 4, storageClass: null }] });
+        }
+        if (options.prefix === 'tenant/root/f/') {
+          return listResult({
+            objects: [
+              { key: 'tenant/root/f/a', lastModified: null, etag: null, size: 1, storageClass: null },
+              { key: 'tenant/root/f/b', lastModified: null, etag: null, size: 1, storageClass: null },
+            ],
+          });
+        }
+        return listResult();
+      }),
+      deleteObjects,
+    });
+    const driver = new S3Driver(mount, api);
+
+    const chain = await driver.resolvePath(['docs', 'sub']);
+    expect(chain.map((item) => item.name)).toEqual(['Archive', 'docs', 'sub']);
+    expect(chain[2]!.kind).toBe('folder');
+
+    await driver.remove(driver.itemId('tenant/root/f/', 'folder'));
+    expect(deleteObjects).toHaveBeenCalledWith(['tenant/root/f/a', 'tenant/root/f/b']);
   });
 });

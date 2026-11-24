@@ -136,13 +136,13 @@ function dbWithFailure(shouldFail: (sql: string) => boolean): D1Database {
   const wrap = (statement: D1PreparedStatement, sql: string): D1PreparedStatement => new Proxy(statement, {
     get(statementTarget, statementProperty) {
       if (statementProperty === 'bind') return (...values: unknown[]) => wrap(statementTarget.bind(...values), sql);
-      if (statementProperty === 'run') {
+      if (statementProperty === 'run' || statementProperty === 'first') {
         return async <T>() => {
           if (!failed && shouldFail(sql)) {
             failed = true;
             throw new Error('injected D1 failure');
           }
-          return statementTarget.run<T>();
+          return statementProperty === 'first' ? statementTarget.first<T>() : statementTarget.run<T>();
         };
       }
       const value = Reflect.get(statementTarget, statementProperty, statementTarget);
@@ -174,13 +174,13 @@ function envBeforePartClaim(action: () => Promise<void>): Env {
   const wrap = (statement: D1PreparedStatement, sql: string): D1PreparedStatement => new Proxy(statement, {
     get(statementTarget, statementProperty) {
       if (statementProperty === 'bind') return (...values: unknown[]) => wrap(statementTarget.bind(...values), sql);
-      if (statementProperty === 'run') {
+      if (statementProperty === 'run' || statementProperty === 'first') {
         return async <T>() => {
           if (!raced && sql.startsWith('UPDATE upload_sessions SET active_part_number = ?')) {
             raced = true;
             await action();
           }
-          return statementTarget.run<T>();
+          return statementProperty === 'first' ? statementTarget.first<T>() : statementTarget.run<T>();
         };
       }
       const value = Reflect.get(statementTarget, statementProperty, statementTarget);
@@ -227,7 +227,7 @@ describe('upload lifecycle service', () => {
   beforeEach(async () => {
     await workerEnv().DB.prepare('DELETE FROM upload_sessions').run();
     await workerEnv().DB.prepare('DELETE FROM sessions').run();
-    await workerEnv().DB.prepare("DELETE FROM mounts WHERE id <> 'native-r2'").run();
+    await workerEnv().DB.prepare('DELETE FROM mounts').run();
     await insertOwner(ownerSessionId);
     await insertOwner(otherOwnerSessionId);
   });
@@ -278,6 +278,7 @@ describe('upload lifecycle service', () => {
       id: expect.any(String),
       kind: 'multipart',
       partSize: 10 * 1024 * 1024,
+      maxPartConcurrency: 1,
       size: 25 * 1024 * 1024,
       uploadedParts: [],
       expiresAt: expect.any(String),
@@ -1025,5 +1026,57 @@ describe('upload lifecycle service', () => {
     ).bind(sessions[0]!.id, sessions[1]!.id).all<{ cleanup_attempted_at: number }>();
     expect(cleanupAttempts.results).toHaveLength(2);
     expect(cleanupAttempts.results.every((row) => row.cleanup_attempted_at > 0)).toBe(true);
+  });
+
+  it('rejects oversized upload sessions exceeding max parts or 100 GiB limit', async () => {
+    const mounted = await mount('s3', 'bounds');
+    driverRegistry.s3 = () => fakeDriver('bounds');
+
+    await expect(createResumableUpload(workerEnv(), ownerSessionId, createInput(mounted, {
+      size: 100 * 1024 * 1024 * 1024 + 1,
+    }))).rejects.toMatchObject({ code: 'UPLOAD_PART_INVALID' });
+    await expect(createResumableUpload(workerEnv(), ownerSessionId, createInput(mounted, {
+      size: 10_000 * UPLOAD_PART_SIZE_BYTES + 1,
+    }))).rejects.toMatchObject({ code: 'UPLOAD_PART_INVALID' });
+  });
+
+  it('uploads S3 parts in parallel without sequential part locks and completes cleanly', async () => {
+    const mounted = await mount('s3', 'parallel-s3');
+    let marker = '';
+    const api = s3Client({
+      createMultipartUpload: vi.fn(async (_key, _ct, value) => {
+        marker = value;
+        return { uploadId: 'u-parallel' };
+      }),
+      headObject: vi.fn()
+        .mockRejectedValueOnce(new S3Error(404, 'NoSuchKey', 'missing'))
+        .mockImplementation(async () => new Response(null, {
+          headers: {
+            'content-length': String(25 * 1024 * 1024),
+            'x-amz-meta-ilist-upload-marker': marker,
+            etag: '"done"',
+          },
+        })),
+    });
+    const driver = new S3Driver(mounted, api);
+    driverRegistry.s3 = () => driver;
+
+    const session = await createResumableUpload(workerEnv(), ownerSessionId, createInput(mounted, {
+      parentId: encodeExternalId(mounted.id, driver.rootId),
+    }));
+    expect(session.maxPartConcurrency).toBe(3);
+
+    await Promise.all([
+      uploadResumablePart(workerEnv(), ownerSessionId, session.id, 1, partRequest(UPLOAD_PART_SIZE_BYTES)),
+      uploadResumablePart(workerEnv(), ownerSessionId, session.id, 2, partRequest(UPLOAD_PART_SIZE_BYTES)),
+      uploadResumablePart(workerEnv(), ownerSessionId, session.id, 3, partRequest(5 * 1024 * 1024)),
+    ]);
+
+    const refreshed = await getResumableUpload(workerEnv(), ownerSessionId, session.id);
+    expect(refreshed.uploadedParts).toHaveLength(3);
+    expect(refreshed.uploadedBytes).toBe(25 * 1024 * 1024);
+
+    const completed = await completeResumableUpload(workerEnv(), ownerSessionId, session.id);
+    expect(completed.entry.name).toBe('archive.bin');
   });
 });

@@ -1,6 +1,6 @@
 import { HttpError } from './http';
 
-const INLINE_CONTENT_TYPES = new Set([
+export const INLINE_CONTENT_TYPES = new Set([
   'image/jpeg',
   'image/png',
   'image/gif',
@@ -55,10 +55,12 @@ export interface SecureFileResponseOptions {
   sandboxedPreview?: boolean;
   publicFile: boolean;
   method: string;
+  /** Set HSTS when the request arrived over HTTPS. Defaults to true when omitted. */
+  https?: boolean;
 }
 
-function normalizeContentType(contentType: string | null): string | null {
-  const normalized = contentType?.split(';', 1)[0].trim().toLowerCase();
+export function normalizeContentType(contentType: string | null): string | null {
+  const normalized = contentType?.split(';', 1)[0]?.trim().toLowerCase();
   return normalized || null;
 }
 
@@ -102,6 +104,7 @@ function baseSecurityHeaders(options: {
   publicFile: boolean;
   csp: string;
   frameSameOrigin: boolean;
+  https: boolean;
 }): Headers {
   const headers = new Headers();
   headers.set('content-type', options.contentType);
@@ -111,7 +114,12 @@ function baseSecurityHeaders(options: {
   headers.set('x-content-type-options', 'nosniff');
   headers.set('referrer-policy', 'no-referrer');
   headers.set('cross-origin-resource-policy', 'same-origin');
-  if (options.frameSameOrigin) headers.set('x-frame-options', 'SAMEORIGIN');
+  headers.set('permissions-policy', 'camera=(), microphone=(), geolocation=()');
+  headers.set('cross-origin-opener-policy', 'same-origin');
+  headers.set('x-frame-options', options.frameSameOrigin ? 'SAMEORIGIN' : 'DENY');
+  if (options.https) {
+    headers.set('strict-transport-security', 'max-age=31536000; includeSubDomains');
+  }
   return headers;
 }
 
@@ -134,6 +142,7 @@ export function secureFileResponse(
     try {
       assertTextPreviewSizeAllowed(response.headers.get('content-length'));
     } catch {
+      void response.body?.cancel();
       throw new HttpError(413, 'TEXT_PREVIEW_TOO_LARGE', 'Text is too large to preview safely');
     }
   }
@@ -145,6 +154,7 @@ export function secureFileResponse(
     publicFile: options.publicFile,
     csp: sandboxedPdf ? SANDBOXED_PDF_CONTENT_SECURITY_POLICY : FILE_CONTENT_SECURITY_POLICY,
     frameSameOrigin: sandboxedPdf,
+    https: options.https ?? true,
   });
 
   for (const name of PRESERVED_HEADERS) {
@@ -153,6 +163,9 @@ export function secureFileResponse(
   }
 
   const bodyAllowed = options.method.toUpperCase() !== 'HEAD' && ![204, 205, 304].includes(response.status);
+  if (!bodyAllowed) {
+    void response.body?.cancel();
+  }
   return new Response(bodyAllowed ? response.body : null, {
     status: response.status,
     statusText: response.statusText,

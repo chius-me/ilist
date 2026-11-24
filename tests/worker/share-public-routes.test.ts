@@ -1,9 +1,15 @@
 import { SELF, env } from 'cloudflare:test';
-import { describe, expect, it } from 'vitest';
+import { afterEach, describe, expect, it, vi } from 'vitest';
+import { driverRegistry } from '../../src/worker/drivers/registry';
+import type { StorageDriver, StorageItem } from '../../src/worker/drivers/types';
+import { encodeExternalId } from '../../src/worker/external-identity';
+import { HttpError } from '../../src/worker/http';
+import { createMount } from '../../src/worker/mounts';
 import { routeRequest } from '../../src/worker/router';
 import type { Env } from '../../src/worker/types';
 
 const origin = 'https://ilist.example';
+const originalS3Factory = driverRegistry.s3;
 const LEGACY_SHARE_PASSWORD_HASH =
   'pbkdf2:100000:00112233445566778899aabbccddeeff:b6969f61fc76d6202a99f47012dcd5b041024c4bbaa2c79a2f63e9a8e88bc4d8';
 
@@ -19,25 +25,132 @@ async function login(): Promise<string> {
   return response.headers.get('set-cookie')!.split(';')[0];
 }
 
-async function nativeTree(): Promise<{ folderId: string; fileId: string }> {
+interface TreeControl {
+  mountId: string;
+  folderId: string;
+  fileId: string;
+  statCalls: number;
+  isWithinCalls: number;
+  setFile: (patch: { name?: string; contentType?: string | null; body?: string }) => void;
+  deleteFile: () => void;
+  setDownloadFailure: (failure: (() => Response | Promise<Response>) | null) => void;
+}
+
+async function s3Tree(): Promise<TreeControl> {
   const db = workerEnv().DB;
   await db.prepare('DELETE FROM shares').run();
-  await db.prepare("UPDATE mounts SET enabled = 1 WHERE id = 'native-r2'").run();
-  await db.prepare("DELETE FROM entries WHERE id = 'share-public-file'").run();
-  await db.prepare("DELETE FROM entries WHERE id = 'share-public-folder'").run();
-  const now = new Date().toISOString();
-  await db.prepare(`INSERT INTO entries (
-    id, parent_id, name, kind, storage_key, size, content_type, etag, status,
-    lifecycle_owner, is_public, sort_order, description, created_at, updated_at
-  ) VALUES ('share-public-folder', 'root', 'Shared folder', 'folder', NULL, 0, NULL, NULL, 'ready', NULL, 0, 0, '', ?, ?)`)
-    .bind(now, now).run();
-  await db.prepare(`INSERT INTO entries (
-    id, parent_id, name, kind, storage_key, size, content_type, etag, status,
-    lifecycle_owner, is_public, sort_order, description, created_at, updated_at
-  ) VALUES ('share-public-file', 'share-public-folder', 'private.txt', 'file', 'shares/public.txt', 12, 'text/plain', 'etag', 'ready', NULL, 0, 0, '', ?, ?)`)
-    .bind(now, now).run();
-  await workerEnv().R2_BUCKET.put('shares/public.txt', 'private-data', { httpMetadata: { contentType: 'text/plain' } });
-  return { folderId: 'share-public-folder', fileId: 'share-public-file' };
+  await db.prepare('DELETE FROM mounts').run();
+  const mount = await createMount(db, {
+    name: 'Share Cloud',
+    mountPath: `/share-cloud-${crypto.randomUUID().slice(0, 8)}`,
+    driverType: 's3',
+    provider: 'custom',
+    isPublic: false,
+  });
+
+  const bodies = new Map<string, string>([['share-public-file', 'private-data']]);
+  const items = new Map<string, StorageItem>([
+    ['root', { id: 'root', parentId: null, name: 'Root', kind: 'folder', size: null, contentType: null, modifiedAt: null, etag: null }],
+    ['share-public-folder', { id: 'share-public-folder', parentId: 'root', name: 'Shared folder', kind: 'folder', size: null, contentType: null, modifiedAt: null, etag: null }],
+    ['share-public-file', { id: 'share-public-file', parentId: 'share-public-folder', name: 'private.txt', kind: 'file', size: 12, contentType: 'text/plain', modifiedAt: null, etag: 'etag' }],
+  ]);
+
+  let customDownload: (() => Response | Promise<Response>) | null = null;
+  const control: TreeControl = {
+    mountId: mount.id,
+    folderId: encodeExternalId(mount.id, 'share-public-folder'),
+    fileId: encodeExternalId(mount.id, 'share-public-file'),
+    statCalls: 0,
+    isWithinCalls: 0,
+    setFile(patch) {
+      const current = items.get('share-public-file');
+      if (!current) return;
+      const nextBody = patch.body ?? bodies.get('share-public-file') ?? '';
+      bodies.set('share-public-file', nextBody);
+      items.set('share-public-file', {
+        ...current,
+        name: patch.name ?? current.name,
+        contentType: patch.contentType !== undefined ? patch.contentType : current.contentType,
+        size: new TextEncoder().encode(nextBody).byteLength,
+      });
+    },
+    deleteFile() {
+      items.delete('share-public-file');
+      bodies.delete('share-public-file');
+    },
+    setDownloadFailure(failure) {
+      customDownload = failure;
+    },
+  };
+
+  const driver: StorageDriver = {
+    rootId: 'root',
+    capabilities: new Set(['list', 'download']),
+    isWithin: vi.fn(async (itemId: string, ancestorId: string) => {
+      control.isWithinCalls += 1;
+      const item = items.get(itemId);
+      if (!item || !items.has(ancestorId)) return false;
+      return itemId === ancestorId || item.parentId === ancestorId;
+    }),
+    list: vi.fn(async (parentId: string) => ({
+      items: [...items.values()].filter((candidate) => candidate.parentId === parentId),
+      nextCursor: null,
+    })),
+    stat: vi.fn(async (itemId: string) => {
+      control.statCalls += 1;
+      const item = items.get(itemId);
+      if (!item) throw new HttpError(404, 'NOT_FOUND', 'Missing');
+      return item;
+    }),
+    getDownload: vi.fn(async (itemId: string, request: Request) => {
+      if (customDownload) {
+        return { kind: 'stream' as const, response: await customDownload() };
+      }
+      const item = items.get(itemId);
+      const body = bodies.get(itemId);
+      if (!item || body === undefined) throw new HttpError(404, 'NOT_FOUND', 'Missing');
+      const bytes = new TextEncoder().encode(body);
+      const rangeHeader = request.headers.get('range');
+      if (rangeHeader) {
+        const match = /^bytes=(\d+)-(\d*)$/i.exec(rangeHeader.trim());
+        if (match) {
+          const start = Number(match[1]);
+          const end = match[2] ? Math.min(Number(match[2]), bytes.byteLength - 1) : bytes.byteLength - 1;
+          return {
+            kind: 'stream' as const,
+            response: new Response(bytes.slice(start, end + 1), {
+              status: 206,
+              headers: {
+                'accept-ranges': 'bytes',
+                'content-range': `bytes ${start}-${end}/${bytes.byteLength}`,
+                'content-length': String(end - start + 1),
+                'content-type': item.contentType ?? 'application/octet-stream',
+              },
+            }),
+          };
+        }
+      }
+      return {
+        kind: 'stream' as const,
+        response: new Response(bytes, {
+          status: 200,
+          headers: {
+            'content-length': String(bytes.byteLength),
+            'content-type': item.contentType ?? 'application/octet-stream',
+          },
+        }),
+      };
+    }),
+    createFolder: vi.fn(),
+    upload: vi.fn(),
+    rename: vi.fn(),
+    move: vi.fn(),
+    remove: vi.fn(),
+    copy: vi.fn(async () => { throw new Error('not implemented'); }),
+  };
+
+  driverRegistry.s3 = () => driver;
+  return control;
 }
 
 async function createShare(entryId: string, policy: Record<string, unknown> = {}): Promise<{ token: string; id: string }> {
@@ -52,8 +165,12 @@ async function createShare(entryId: string, policy: Record<string, unknown> = {}
 }
 
 describe('public share routes', () => {
+  afterEach(() => {
+    driverRegistry.s3 = originalS3Factory;
+  });
+
   it('limits share passwords before verification and returns an integer Retry-After', async () => {
-    const { fileId } = await nativeTree();
+    const { fileId } = await s3Tree();
     const { token } = await createShare(fileId, { password: 'share-password' });
     let now = 20_000;
     let verificationCalls = 0;
@@ -91,7 +208,7 @@ describe('public share routes', () => {
   });
 
   it('records malformed and oversized share passwords without verifying them', async () => {
-    const { fileId } = await nativeTree();
+    const { fileId } = await s3Tree();
     const { token } = await createShare(fileId, { password: 'share-password' });
     let verificationCalls = 0;
     const options = {
@@ -124,7 +241,7 @@ describe('public share routes', () => {
   });
 
   it('returns metadata for a private file without exposing its storage identity', async () => {
-    const { fileId } = await nativeTree();
+    const { fileId } = await s3Tree();
     const { token } = await createShare(fileId, { allowDownload: true });
     const response = await SELF.fetch(`${origin}/s/${token}/api`);
     const text = await response.text();
@@ -139,7 +256,7 @@ describe('public share routes', () => {
   });
 
   it('requires the correct password and scopes authorization to one share path', async () => {
-    const { fileId } = await nativeTree();
+    const { fileId } = await s3Tree();
     const { token } = await createShare(fileId, { password: 'share-password' });
     const blocked = await SELF.fetch(`${origin}/s/${token}/api`);
     expect(blocked.status).toBe(401);
@@ -162,7 +279,7 @@ describe('public share routes', () => {
   });
 
   it('revokes existing share authorization when the password changes', async () => {
-    const { fileId } = await nativeTree();
+    const { fileId } = await s3Tree();
     const { token, id } = await createShare(fileId, { password: 'old-password' });
     const unlocked = await SELF.fetch(`${origin}/s/${token}/auth`, {
       method: 'POST',
@@ -194,7 +311,7 @@ describe('public share routes', () => {
   });
 
   it('upgrades only a successfully verified legacy share password hash', async () => {
-    const { fileId } = await nativeTree();
+    const { fileId } = await s3Tree();
     const { token, id } = await createShare(fileId, { password: 'temporary-password' });
     await workerEnv().DB.prepare('UPDATE shares SET password_hash = ? WHERE id = ?')
       .bind(LEGACY_SHARE_PASSWORD_HASH, id).run();
@@ -217,12 +334,12 @@ describe('public share routes', () => {
     expect(verifiedHash).toBe(LEGACY_SHARE_PASSWORD_HASH);
     const upgraded = await workerEnv().DB.prepare('SELECT password_hash, auth_revision FROM shares WHERE id = ?')
       .bind(id).first<{ password_hash: string; auth_revision: number }>();
-    expect(upgraded?.password_hash).toMatch(/^pbkdf2-sha256:600000:[0-9a-f]{32}:[0-9a-f]{64}$/);
+    expect(upgraded?.password_hash).toMatch(/^pbkdf2-sha256:100000:[0-9a-f]{32}:[0-9a-f]{64}$/);
     expect(upgraded?.auth_revision).toBe(1);
   });
 
   it('never rewrites a legacy share password hash after failed authentication', async () => {
-    const { fileId } = await nativeTree();
+    const { fileId } = await s3Tree();
     const { token, id } = await createShare(fileId, { password: 'temporary-password' });
     await workerEnv().DB.prepare('UPDATE shares SET password_hash = ? WHERE id = ?')
       .bind(LEGACY_SHARE_PASSWORD_HASH, id).run();
@@ -240,7 +357,7 @@ describe('public share routes', () => {
   });
 
   it('releases the verification lease when a legacy share rehash throws', async () => {
-    const { fileId } = await nativeTree();
+    const { fileId } = await s3Tree();
     const { token, id } = await createShare(fileId, { password: 'temporary-password' });
     await workerEnv().DB.prepare('UPDATE shares SET password_hash = ? WHERE id = ?')
       .bind(LEGACY_SHARE_PASSWORD_HASH, id).run();
@@ -272,7 +389,7 @@ describe('public share routes', () => {
   });
 
   it('releases the verification lease when the legacy share hash CAS throws', async () => {
-    const { fileId } = await nativeTree();
+    const { fileId } = await s3Tree();
     const { token, id } = await createShare(fileId, { password: 'temporary-password' });
     await workerEnv().DB.prepare('UPDATE shares SET password_hash = ? WHERE id = ?')
       .bind(LEGACY_SHARE_PASSWORD_HASH, id).run();
@@ -286,7 +403,7 @@ describe('public share routes', () => {
       passwordAuthentication: {
         clientIp: '203.0.113.45',
         verifyPasswordDetailed: async () => ({ valid: true, needsUpgrade: true }),
-        hashPassword: async () => 'pbkdf2-sha256:600000:00112233445566778899aabbccddeeff:'.concat('00'.repeat(32)),
+        hashPassword: async () => 'pbkdf2-sha256:100000:00112233445566778899aabbccddeeff:'.concat('00'.repeat(32)),
         upgradeSharePasswordHash: async () => { throw new Error('D1 unavailable'); },
       },
     });
@@ -301,20 +418,23 @@ describe('public share routes', () => {
     expect(retry.status).toBe(401);
   });
 
-  it('lists a private folder, previews with Range, and enforces direct download policy', async () => {
-    const { folderId } = await nativeTree();
-    const { token } = await createShare(folderId, { allowDownload: false });
+  it('lists a private folder, previews safe text with Range, and enforces strict preview/download policy', async () => {
+    const tree = await s3Tree();
+    const { token } = await createShare(tree.folderId, { allowDownload: false });
     const listed = await SELF.fetch(`${origin}/s/${token}/api/list`);
     expect(listed.status).toBe(200);
-    const directory = (await listed.json() as { data: { items: Array<{ id: string; name: string }> } }).data;
+    const directory = (await listed.json() as { data: { items: Array<{ id: string; name: string; capabilities: Record<string, boolean> }> } }).data;
     expect(directory.items).toHaveLength(1);
-    const item = directory.items[0];
+    const item = directory.items[0]!;
     expect(item.id).not.toContain('share-public-file');
+    expect(item.capabilities.download).toBe(false);
 
+    tree.statCalls = 0;
     const preview = await SELF.fetch(`${origin}/s/${token}/file/${encodeURIComponent(item.id)}/private.txt`, {
       headers: { range: 'bytes=0-6' },
     });
     expect(preview.status).toBe(206);
+    expect(tree.statCalls).toBe(1);
     await expect(preview.text()).resolves.toBe('private');
 
     const denied = await SELF.fetch(`${origin}/s/${token}/file/${encodeURIComponent(item.id)}/private.txt?download=1`);
@@ -326,16 +446,22 @@ describe('public share routes', () => {
   it.each([
     ['HTML', 'unsafe.html', 'text/html', '<script>alert(1)</script>'],
     ['SVG', 'unsafe.svg', 'image/svg+xml', '<svg><script>alert(1)</script></svg>'],
-  ])('forces shared $s content to download', async (_label, name, contentType, body) => {
-    const { folderId } = await nativeTree();
-    await workerEnv().DB.prepare('UPDATE entries SET name = ?, content_type = ?, size = ? WHERE id = ?')
-      .bind(name, contentType, new TextEncoder().encode(body).byteLength, 'share-public-file').run();
-    await workerEnv().R2_BUCKET.put('shares/public.txt', body, { httpMetadata: { contentType } });
-    const { token } = await createShare(folderId, { allowDownload: false });
-    const listed = await SELF.fetch(`${origin}/s/${token}/api/list`);
-    const item = (await listed.json() as { data: { items: Array<{ id: string }> } }).data.items[0]!;
+    ['binary archive', 'archive.zip', 'application/zip', 'PK\x03\x04test'],
+  ])('blocks non-previewable %s when downloads are disabled and isolates it when downloads are allowed', async (_label, name, contentType, body) => {
+    const tree = await s3Tree();
+    tree.setFile({ name, contentType, body });
 
-    const response = await SELF.fetch(`${origin}/s/${token}/file/${encodeURIComponent(item.id)}/${encodeURIComponent(name)}`);
+    const { token: lockedToken } = await createShare(tree.folderId, { allowDownload: false });
+    const lockedList = await SELF.fetch(`${origin}/s/${lockedToken}/api/list`);
+    const lockedItem = (await lockedList.json() as { data: { items: Array<{ id: string }> } }).data.items[0]!;
+    const blocked = await SELF.fetch(`${origin}/s/${lockedToken}/file/${encodeURIComponent(lockedItem.id)}/${encodeURIComponent(name)}`);
+    expect(blocked.status).toBe(403);
+    expect(await blocked.json()).toMatchObject({ error: { code: 'SHARE_DOWNLOAD_DISABLED' } });
+
+    const { token: openToken } = await createShare(tree.folderId, { allowDownload: true });
+    const openList = await SELF.fetch(`${origin}/s/${openToken}/api/list`);
+    const openItem = (await openList.json() as { data: { items: Array<{ id: string }> } }).data.items[0]!;
+    const response = await SELF.fetch(`${origin}/s/${openToken}/file/${encodeURIComponent(openItem.id)}/${encodeURIComponent(name)}`);
 
     expect(response.status).toBe(200);
     expect(response.headers.get('content-type')).toBe('application/octet-stream');
@@ -346,8 +472,44 @@ describe('public share routes', () => {
     await expect(response.text()).resolves.toBe(body);
   });
 
+  it('counts maxDownloads once on full/byte-0 GETs, ignores continuation ranges, and refunds upstream errors', async () => {
+    const tree = await s3Tree();
+    tree.setFile({ name: 'bundle.bin', contentType: 'application/octet-stream', body: '0123456789abcdef' });
+    const { token } = await createShare(tree.folderId, { allowDownload: true, maxDownloads: 1 });
+    const listed = await SELF.fetch(`${origin}/s/${token}/api/list`);
+    const item = (await listed.json() as { data: { items: Array<{ id: string }> } }).data.items[0]!;
+    const fileUrl = `${origin}/s/${token}/file/${encodeURIComponent(item.id)}/bundle.bin`;
+
+    tree.setDownloadFailure(() => {
+      throw new HttpError(502, 'UPSTREAM_ERROR', 'upstream failed');
+    });
+    const failed = await SELF.fetch(fileUrl);
+    expect(failed.status).toBe(503);
+
+    tree.setDownloadFailure(null);
+    tree.statCalls = 0;
+    const firstChunk = await SELF.fetch(fileUrl, { headers: { range: 'bytes=0-4' } });
+    expect(firstChunk.status).toBe(206);
+    expect(tree.statCalls).toBe(1);
+    await expect(firstChunk.text()).resolves.toBe('01234');
+
+    const continuation = await SELF.fetch(fileUrl, { headers: { range: 'bytes=5-9' } });
+    expect(continuation.status).toBe(206);
+    await expect(continuation.text()).resolves.toBe('56789');
+
+    const exhaustedMeta = await (await SELF.fetch(`${origin}/s/${token}/api/list`)).json() as {
+      data: { items: Array<{ capabilities: { download: boolean } }> };
+    };
+    expect(exhaustedMeta.data.items[0]?.capabilities.download).toBe(false);
+
+    const limited = await SELF.fetch(fileUrl);
+    expect(limited.status).toBe(403);
+    expect(await limited.json()).toMatchObject({ error: { code: 'SHARE_DOWNLOAD_LIMIT' } });
+  });
+
   it('applies disabled, expired, deleted, missing-target, and provider-unavailable state immediately', async () => {
-    const { fileId } = await nativeTree();
+    const tree = await s3Tree();
+    const { fileId } = tree;
     const cookie = await login();
     const disabled = await createShare(fileId);
     await SELF.fetch(`${origin}/api/admin/shares/${disabled.id}`, {
@@ -362,12 +524,12 @@ describe('public share routes', () => {
 
     await workerEnv().DB.prepare('DELETE FROM shares').run();
     const missing = await createShare(fileId);
-    await workerEnv().DB.prepare("DELETE FROM entries WHERE id = 'share-public-file'").run();
+    tree.deleteFile();
     expect(await (await SELF.fetch(`${origin}/s/${missing.token}/api`)).json()).toMatchObject({ error: { code: 'SHARE_TARGET_MISSING' } });
 
-    await nativeTree();
-    const unavailable = await createShare(fileId);
-    await workerEnv().DB.prepare("UPDATE mounts SET enabled = 0 WHERE id = 'native-r2'").run();
+    const unavailableTree = await s3Tree();
+    const unavailable = await createShare(unavailableTree.fileId);
+    await workerEnv().DB.prepare('UPDATE mounts SET enabled = 0 WHERE id = ?').bind(unavailableTree.mountId).run();
     expect(await (await SELF.fetch(`${origin}/s/${unavailable.token}/api`)).json()).toMatchObject({ error: { code: 'SHARE_PROVIDER_UNAVAILABLE' } });
 
     await workerEnv().DB.prepare('DELETE FROM shares WHERE id = ?').bind(unavailable.id).run();

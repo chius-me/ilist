@@ -37,7 +37,7 @@ test('@visual explorer list, grid, themes, and locales', async ({ page }) => {
   await installApiFixtures(page, { admin: true });
   await page.goto('/');
   await expect(page.getByRole('list', { name: 'Files and folders' })).toBeVisible();
-  await expect(page.getByRole('button', { name: 'Path home' })).toBeVisible();
+  await expect(page.getByRole('link', { name: 'Path home' })).toBeVisible();
   await expect(page).toHaveTitle('iList');
   await expect(page.getByRole('button', { name: 'Open iList root' })).toBeVisible();
   await expectNoHorizontalOverflow(page);
@@ -51,7 +51,7 @@ test('@visual explorer list, grid, themes, and locales', async ({ page }) => {
   await expect.poll(() => toolbarActions.locator('button:visible, select:visible').evaluateAll((controls) => controls.map((control) => control.getAttribute('aria-label')))).toEqual(
     mobile
       ? ['Search this folder', 'Sort files', 'Sort ascending', 'Refresh', 'Switch to grid view', 'Administrator menu']
-      : ['Search this folder', 'Sort files', 'Sort ascending', 'Refresh', 'List view', 'Grid view', 'Upload files', 'Create folder'],
+      : ['Search this folder', 'Sort files', 'Sort ascending', 'Refresh', 'List view', 'Grid view', 'Upload files', 'Upload folder', 'Create folder'],
   );
   await expect(page).toHaveScreenshot('explorer-list-light-en.png', { fullPage: true });
 
@@ -74,7 +74,7 @@ test('@visual explorer list, grid, themes, and locales', async ({ page }) => {
     await adminMenuButton.click();
     const adminMenu = page.getByRole('menu', { name: 'Administrator menu' });
     await expect(adminMenu).toBeVisible();
-    await expect(adminMenu.getByRole('menuitem')).toHaveText(['Upload files', 'Create folder']);
+    await expect(adminMenu.getByRole('menuitem')).toHaveText(['Upload files', 'Upload folder', 'Create folder']);
     await expectInsideViewport(page, adminMenu);
     await expect(page).toHaveScreenshot('explorer-admin-menu.png', { fullPage: true });
     await adminMenuButton.click();
@@ -149,7 +149,7 @@ test('mobile command bar fits and search expands left from the search control', 
   expect(sortBefore).not.toBeNull();
   expect(sortAfter).not.toBeNull();
   await expect(path).toHaveCount(1);
-  await expect(path.getByRole('button', { name: 'Path home' })).toHaveCount(1);
+  await expect(path.getByRole('link', { name: 'Path home' })).toHaveCount(1);
   expect(await path.evaluate((el) => Boolean(el.querySelector('.searchControl')))).toBe(false);
   expect(searchBox!.x).toBeGreaterThanOrEqual(browserBox!.x - 1);
   expect(searchBox!.x + searchBox!.width).toBeLessThanOrEqual(sortAfter!.x + 1);
@@ -180,7 +180,7 @@ test('explorer chrome keeps search on the action side and sort labels unclipped'
   const sortAfter = await sort.boundingBox();
   const refreshAfter = await refresh.boundingBox();
   await expect(path).toHaveCount(1);
-  await expect(path.getByRole('button', { name: 'Path home' })).toHaveCount(1);
+  await expect(path.getByRole('link', { name: 'Path home' })).toHaveCount(1);
   await expect(search).toBeFocused();
   expect(searchBox).not.toBeNull();
   expect(sortAfter).not.toBeNull();
@@ -290,7 +290,7 @@ test('creates an OneDrive mount with a root folder id and enters its OAuth flow'
   await page.getByLabel('Root folder ID').fill('folder-root-id');
   await page.getByRole('button', { name: 'Create and connect' }).click();
 
-  await expect(page).toHaveURL(/\/api\/admin\/oauth\/onedrive\/start\?mountId=onedrive-e2e$/);
+  await expect(page).toHaveURL(/\/oauth-mock\/onedrive\?mountId=onedrive-e2e$/);
 });
 
 test('creates a Google Drive mount and enters its OAuth flow', async ({ page }) => {
@@ -304,7 +304,7 @@ test('creates a Google Drive mount and enters its OAuth flow', async ({ page }) 
   await page.getByLabel('Root folder ID').fill('folder-root-id');
   await page.getByRole('button', { name: 'Create and connect' }).click();
 
-  await expect(page).toHaveURL(/\/api\/admin\/oauth\/google\/start\?mountId=google-e2e$/);
+  await expect(page).toHaveURL(/\/oauth-mock\/google\?mountId=google-e2e$/);
 });
 
 test('creates a Dropbox mount and enters its OAuth flow', async ({ page }) => {
@@ -318,7 +318,7 @@ test('creates a Dropbox mount and enters its OAuth flow', async ({ page }) => {
   await page.getByLabel('Root folder ID').fill('id:folder-root');
   await page.getByRole('button', { name: 'Create and connect' }).click();
 
-  await expect(page).toHaveURL(/\/api\/admin\/oauth\/dropbox\/start\?mountId=dropbox-e2e$/);
+  await expect(page).toHaveURL(/\/oauth-mock\/dropbox\?mountId=dropbox-e2e$/);
 });
 
 test('storage management publishes a new mount only after confirmation', async ({ page }) => {
@@ -463,7 +463,7 @@ test('@visual resumable upload panel states stay in bounds', async ({ page }) =>
 test('@visual navigates folders and exposes loading, empty, and retry states', async ({ page }) => {
   await installApiFixtures(page, { admin: true });
   await page.goto('/');
-  await page.getByRole('button', { name: /Open 项目资料/ }).click();
+  await page.getByRole('link', { name: /Open 项目资料/ }).click();
   await expect(page).toHaveURL(/%E9%A1%B9%E7%9B%AE%E8%B5%84%E6%96%99/);
 
   const loadingPage = await page.context().newPage();

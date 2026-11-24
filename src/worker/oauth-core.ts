@@ -1,6 +1,10 @@
 import { decryptCredential, encryptCredential } from './crypto';
 import { HttpError } from './http';
+import { bytesToBase64Url } from './shared/encoding';
+import { publicOrigin } from './shared/origin';
 import type { Env } from './types';
+
+export { publicOrigin };
 
 const STATE_TTL_MS = 10 * 60_000;
 
@@ -11,31 +15,12 @@ interface OAuthStateRow {
   expires_at: number;
 }
 
-function base64Url(bytes: Uint8Array): string {
-  let binary = '';
-  for (const byte of bytes) binary += String.fromCharCode(byte);
-  return btoa(binary).replace(/\+/g, '-').replace(/\//g, '_').replace(/=+$/g, '');
-}
-
 function randomToken(): string {
-  return base64Url(crypto.getRandomValues(new Uint8Array(32)));
+  return bytesToBase64Url(crypto.getRandomValues(new Uint8Array(32)));
 }
 
 async function sha256(value: string): Promise<string> {
-  return base64Url(new Uint8Array(await crypto.subtle.digest('SHA-256', new TextEncoder().encode(value))));
-}
-
-export function publicOrigin(env: Env): string {
-  let url: URL;
-  try {
-    url = new URL(env.PUBLIC_ORIGIN);
-  } catch {
-    throw new Error('PUBLIC_ORIGIN is invalid');
-  }
-  if (url.protocol !== 'https:' || url.origin !== env.PUBLIC_ORIGIN || url.pathname !== '/' || url.search || url.hash) {
-    throw new Error('PUBLIC_ORIGIN must be an HTTPS origin');
-  }
-  return url.origin;
+  return bytesToBase64Url(new Uint8Array(await crypto.subtle.digest('SHA-256', new TextEncoder().encode(value))));
 }
 
 export async function createOAuthState(
@@ -47,7 +32,9 @@ export async function createOAuthState(
   const verifier = randomToken();
   const stateHash = await sha256(state);
   const challenge = await sha256(verifier);
-  const verifierCiphertext = await encryptCredential({ verifier }, env.CREDENTIAL_MASTER_KEY, `oauth-state:${stateHash}`);
+  const verifierCiphertext = await encryptCredential({ verifier }, env.CREDENTIAL_MASTER_KEY, `oauth-state:${stateHash}`, {
+    domain: 'oauth-states',
+  });
 
   await env.DB.batch([
     env.DB.prepare('DELETE FROM oauth_states WHERE mount_id = ? OR expires_at <= ?').bind(mountId, now),
@@ -79,9 +66,27 @@ export async function consumeOAuthState(
   if ((consumed.meta.changes ?? 0) !== 1) {
     throw new HttpError(400, 'OAUTH_STATE_INVALID', 'OAuth state is invalid');
   }
-  const decrypted = await decryptCredential(row.verifier_ciphertext, env.CREDENTIAL_MASTER_KEY, `oauth-state:${stateHash}`);
+  const decrypted = await decryptCredential(row.verifier_ciphertext, env.CREDENTIAL_MASTER_KEY, `oauth-state:${stateHash}`, {
+    domain: 'oauth-states',
+  });
   if (!decrypted || typeof decrypted !== 'object' || typeof (decrypted as { verifier?: unknown }).verifier !== 'string') {
     throw new HttpError(400, 'OAUTH_STATE_INVALID', 'OAuth state is invalid');
   }
   return { mountId: row.mount_id, verifier: (decrypted as { verifier: string }).verifier };
+}
+
+export async function deleteExpiredOAuthStates(
+  db: D1Database,
+  now = Date.now(),
+  limit = 100,
+): Promise<void> {
+  await db.prepare(
+    `DELETE FROM oauth_states
+     WHERE state_hash IN (
+       SELECT state_hash FROM oauth_states
+       WHERE expires_at <= ?
+       ORDER BY expires_at ASC
+       LIMIT ?
+     )`,
+  ).bind(now, limit).run();
 }

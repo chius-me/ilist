@@ -15,7 +15,7 @@ function Probe() {
     <>
       <span>{t('nav.files')}</span>
       <span data-testid="theme">{preferences.theme}</span>
-      <button onClick={() => updatePreferences({ locale: 'zh-CN', theme: 'dark' })}>change</button>
+      <button type="button" onClick={() => updatePreferences({ locale: 'zh-CN', theme: 'dark' })}>change</button>
     </>
   );
 }
@@ -32,7 +32,7 @@ describe('preferences and localization', () => {
 
     await userEvent.click(screen.getByRole('button', { name: 'change' }));
 
-    expect(screen.getByText('文件')).toBeVisible();
+    expect(await screen.findByText('文件')).toBeVisible();
     expect(document.documentElement).toHaveAttribute('lang', 'zh-CN');
     expect(document.documentElement).toHaveAttribute('data-theme', 'dark');
     expect(JSON.parse(window.localStorage.getItem('ilist.ui.preferences')!)).toMatchObject({
@@ -81,7 +81,7 @@ describe('preferences and localization', () => {
       await userEvent.click(screen.getByRole('button', { name: 'change' }));
 
       expect(screen.getByTestId('theme')).toHaveTextContent('dark');
-      expect(screen.getByText('文件')).toBeVisible();
+      expect(await screen.findByText('文件')).toBeVisible();
     } finally {
       Object.defineProperty(window, 'localStorage', descriptor!);
     }

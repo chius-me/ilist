@@ -1,4 +1,7 @@
+import { deleteSessionById, findActiveSession, insertSession } from './db/sessions';
 import { HttpError } from './http';
+import { bytesToHex, hexToBytes, timingSafeEqualStrings } from './shared/encoding';
+import { deriveSessionHmacKey } from './shared/keys';
 import type { AdminUser, Env } from './types';
 import {
   formatPasswordHash,
@@ -11,36 +14,30 @@ import {
 
 const COOKIE_NAME = 'ilist_session';
 const DEFAULT_TTL_SECONDS = 60 * 60 * 24 * 7;
+const encoder = new TextEncoder();
 
 export interface AdminSession {
   id: string;
   user: AdminUser;
 }
 
-function bytesToHex(bytes: ArrayBuffer | Uint8Array): string {
-  const view = bytes instanceof Uint8Array ? bytes : new Uint8Array(bytes);
-  return [...view].map((byte) => byte.toString(16).padStart(2, '0')).join('');
-}
-
-function hexToBytes(hex: string): Uint8Array {
-  if (!/^[0-9a-f]+$/i.test(hex) || hex.length % 2 !== 0) {
-    throw new Error('Invalid hex');
-  }
-  const bytes = new Uint8Array(hex.length / 2);
-  for (let index = 0; index < bytes.length; index += 1) {
-    bytes[index] = Number.parseInt(hex.slice(index * 2, index * 2 + 2), 16);
-  }
-  return bytes;
-}
-
 export async function sha256Hex(value: string): Promise<string> {
-  return bytesToHex(await crypto.subtle.digest('SHA-256', new TextEncoder().encode(value)));
+  return bytesToHex(await crypto.subtle.digest('SHA-256', encoder.encode(value)));
+}
+
+export async function sessionIdFromToken(env: Env, token: string): Promise<string> {
+  const key = await deriveSessionHmacKey(env.SESSION_SECRET, 'admin-session');
+  return bytesToHex(await crypto.subtle.sign('HMAC', key, encoder.encode(token)));
+}
+
+async function legacySessionIdFromToken(env: Env, token: string): Promise<string> {
+  return sha256Hex(`${env.SESSION_SECRET}:${token}`);
 }
 
 export async function hashPassword(password: string): Promise<string> {
   if (!passwordFitsPolicy(password)) throw new RangeError('Password exceeds the supported size');
   const salt = crypto.getRandomValues(new Uint8Array(PASSWORD_SALT_BYTES));
-  const keyMaterial = await crypto.subtle.importKey('raw', new TextEncoder().encode(password), 'PBKDF2', false, [
+  const keyMaterial = await crypto.subtle.importKey('raw', encoder.encode(password), 'PBKDF2', false, [
     'deriveBits',
   ]);
   const bits = await crypto.subtle.deriveBits(
@@ -49,15 +46,6 @@ export async function hashPassword(password: string): Promise<string> {
     PASSWORD_HASH_BYTES * 8,
   );
   return formatPasswordHash(bytesToHex(salt), bytesToHex(bits));
-}
-
-function timingSafeEqualHex(left: string, right: string): boolean {
-  if (left.length !== right.length) return false;
-  let result = 0;
-  for (let index = 0; index < left.length; index += 1) {
-    result |= left.charCodeAt(index) ^ right.charCodeAt(index);
-  }
-  return result === 0;
 }
 
 export interface PasswordVerification {
@@ -76,7 +64,7 @@ export async function verifyPasswordDetailed(password: string, storedHash: strin
     const salt = hexToBytes(parsed.saltHex);
     const keyMaterial = await crypto.subtle.importKey(
       'raw',
-      new TextEncoder().encode(password),
+      encoder.encode(password),
       'PBKDF2',
       false,
       ['deriveBits'],
@@ -86,9 +74,13 @@ export async function verifyPasswordDetailed(password: string, storedHash: strin
       keyMaterial,
       PASSWORD_HASH_BYTES * 8,
     );
-    const valid = timingSafeEqualHex(bytesToHex(bits), parsed.hashHex);
+    const valid = timingSafeEqualStrings(bytesToHex(bits), parsed.hashHex);
     return { valid, needsUpgrade: valid && parsed.needsUpgrade };
-  } catch {
+  } catch (error) {
+    console.error(JSON.stringify({
+      event: 'password_verify_error',
+      message: error instanceof Error ? error.message : String(error),
+    }));
     return INVALID_PASSWORD_VERIFICATION;
   }
 }
@@ -114,36 +106,48 @@ function sessionTtl(env: Env): number {
   return Number.isFinite(parsed) && parsed > 0 ? parsed : DEFAULT_TTL_SECONDS;
 }
 
-export async function createSession(env: Env): Promise<{ token: string; expiresAt: number }> {
+export async function createSession(env: Env): Promise<{ id: string; token: string; expiresAt: number }> {
   const random = crypto.getRandomValues(new Uint8Array(32));
   const token = bytesToHex(random);
-  const id = await sha256Hex(`${env.SESSION_SECRET}:${token}`);
+  const id = await sessionIdFromToken(env, token);
   const now = Math.floor(Date.now() / 1000);
   const expiresAt = now + sessionTtl(env);
 
-  await env.DB.prepare(`INSERT INTO sessions (id, expires_at, created_at) VALUES (?, ?, ?)`)
-    .bind(id, expiresAt, now)
-    .run();
+  await insertSession(env.DB, id, expiresAt, now);
 
-  return { token, expiresAt };
+  return { id, token, expiresAt };
 }
 
-export async function deleteSession(env: Env, request: Request): Promise<void> {
+export async function deleteSession(
+  env: Env,
+  request: Request,
+  options: { beforeDelete?: (sessionId: string) => Promise<void> } = {},
+): Promise<string | null> {
   const token = getCookie(request, COOKIE_NAME);
-  if (!token) return;
-  const id = await sha256Hex(`${env.SESSION_SECRET}:${token}`);
-  await env.DB.prepare(`DELETE FROM sessions WHERE id = ?`).bind(id).run();
+  if (!token) return null;
+  const [id, legacyId] = await Promise.all([
+    sessionIdFromToken(env, token),
+    legacySessionIdFromToken(env, token),
+  ]);
+  const existing = (await env.DB.prepare('SELECT id FROM sessions WHERE id IN (?, ?)')
+    .bind(id, legacyId)
+    .first<{ id: string }>()) ?? null;
+  if (existing) {
+    await options.beforeDelete?.(existing.id);
+    await deleteSessionById(env.DB, existing.id);
+    return existing.id;
+  }
+  return id;
 }
 
 export async function currentAdminSession(env: Env, request: Request): Promise<AdminSession | null> {
   const token = getCookie(request, COOKIE_NAME);
   if (!token) return null;
 
-  const id = await sha256Hex(`${env.SESSION_SECRET}:${token}`);
   const now = Math.floor(Date.now() / 1000);
-  const session = await env.DB.prepare(`SELECT id FROM sessions WHERE id = ? AND expires_at > ?`)
-    .bind(id, now)
-    .first<{ id: string }>();
+  const id = await sessionIdFromToken(env, token);
+  const session = await findActiveSession(env.DB, id, now)
+    ?? await findActiveSession(env.DB, await legacySessionIdFromToken(env, token), now);
   if (!session) return null;
 
   return {

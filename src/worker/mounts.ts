@@ -1,7 +1,7 @@
 import { HttpError } from './http';
 import type { Mount, MountDriverType, MountRow } from './types';
 
-const RESERVED_MOUNT_NAMES = new Set(['api', 'file', 'admin']);
+const RESERVED_MOUNT_NAMES = new Set(['api', 'file', 'admin', 's']);
 const CONTROL_CHARACTERS = /[\u0000-\u001f\u007f]/;
 
 export interface CreateMountInput {
@@ -121,7 +121,7 @@ async function assertNoConflict(db: D1Database, name: string, mountPath: string,
   const row = await db
     .prepare(
       `SELECT id, mount_path FROM mounts
-       WHERE (mount_path = ? OR LOWER(name) = LOWER(?))
+       WHERE (mount_path = ? OR LOWER(TRIM(name)) = LOWER(TRIM(?)))
          AND (? IS NULL OR id <> ?)`,
     )
     .bind(mountPath, name, excludeId ?? null, excludeId ?? null)
@@ -260,4 +260,16 @@ export function prepareMountDelete(db: D1Database, id: string): D1PreparedStatem
 
 export async function deleteMount(db: D1Database, id: string): Promise<void> {
   await prepareMountDelete(db, id).run();
+}
+
+export async function touchMountUpdatedAt(db: D1Database, id: string): Promise<void> {
+  const existing = await db.prepare('SELECT updated_at FROM mounts WHERE id = ?')
+    .bind(id)
+    .first<{ updated_at: string }>();
+  const prevMs = existing ? Date.parse(existing.updated_at) : Number.NaN;
+  const nowMs = Date.now();
+  const nextMs = Number.isFinite(prevMs) && prevMs >= nowMs ? prevMs + 1 : nowMs;
+  await db.prepare('UPDATE mounts SET updated_at = ? WHERE id = ?')
+    .bind(new Date(nextMs).toISOString(), id)
+    .run();
 }

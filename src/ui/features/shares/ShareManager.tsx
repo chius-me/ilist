@@ -12,7 +12,7 @@ function DeleteShareDialog({ share, busy, onClose, onConfirm }: { share: ShareVi
   const backdrop = useRef<HTMLDivElement>(null);
   const cancel = useRef<HTMLButtonElement>(null);
   useModalFocus({ active: true, containerRef: backdrop, initialFocusRef: cancel, onClose });
-  return <div ref={backdrop} className="dialogBackdrop overlayScrim" role="presentation" onMouseDown={onClose}><section className="confirmDialog overlaySurface" role="dialog" aria-modal="true" aria-label={t('share.deleteTitle')} onMouseDown={(event) => event.stopPropagation()}><h2>{t('share.deleteTitle')}</h2><p>{t('share.deleteMessage', { name: share.name })}</p><footer><button ref={cancel} className="button" onClick={onClose}>{t('action.cancel')}</button><button className="button danger" disabled={busy} onClick={onConfirm}>{t('share.delete')}</button></footer></section></div>;
+  return <div ref={backdrop} className="dialogBackdrop overlayScrim" role="presentation" onMouseDown={onClose}><section className="confirmDialog overlaySurface" role="dialog" aria-modal="true" aria-label={t('share.deleteTitle')} onMouseDown={(event) => event.stopPropagation()}><h2>{t('share.deleteTitle')}</h2><p>{t('share.deleteMessage', { name: share.name })}</p><footer><button ref={cancel} className="button" type="button" onClick={onClose}>{t('action.cancel')}</button><button className="button danger" type="button" disabled={busy} onClick={onConfirm}>{t('share.delete')}</button></footer></section></div>;
 }
 
 export function ShareManager() {
@@ -49,12 +49,12 @@ export function ShareManager() {
 
   return <main className="shareManager" id="share-manager">
     <header className="adminPageHeader"><div><h1>{t('admin.sharesTitle')}</h1><p>{t('admin.sharesDescription')}</p></div></header>
-    {error && !editing ? <div className="errorState" role="alert"><strong>{error}</strong><button className="button" onClick={() => void refresh()}><RefreshCw aria-hidden="true" size={16} />{t('action.retry')}</button></div> : null}
+    {error && !editing ? <div className="errorState" role="alert"><strong>{error}</strong><button className="button" type="button" onClick={() => void refresh()}><RefreshCw aria-hidden="true" size={16} />{t('action.retry')}</button></div> : null}
     {loading ? <div className="mountLoading">{t('share.loading')}</div> : null}
     {!loading && !error && shares.length === 0 ? <div className="mountEmpty"><Share2 aria-hidden="true" size={30} /><strong>{t('share.empty')}</strong><span>{t('share.emptyHint')}</span></div> : null}
     {!loading && shares.length ? <div className="mountTableWrap"><table className="mountTable shareTable" aria-label={t('admin.sharesTitle')}><thead><tr><th>{t('share.target')}</th><th>{t('share.policy')}</th><th>{t('share.expiration')}</th><th>{t('share.state')}</th><th><span className="srOnly">{t('share.actions')}</span></th></tr></thead><tbody>{shares.map((item) => <tr key={item.id}>
       <th scope="row"><span className="mountIdentity"><Share2 aria-hidden="true" size={19} /><span><strong>{item.name}</strong><small>{item.mountName}</small></span></span></th>
-      <td><span className="sharePolicySummary">{item.protected ? t('share.passwordProtected') : t('share.noPassword')}<small>{item.allowDownload ? t('share.downloadAllowed') : t('share.downloadBlocked')}</small></span></td>
+      <td><span className="sharePolicySummary">{item.protected ? t('share.passwordProtected') : t('share.noPassword')}<small>{item.allowDownload ? t('share.downloadAllowed') : t('share.downloadBlocked')}</small><small className="shareStatsLine">{t('share.accessCount', { count: item.accessCount })} · {item.maxDownloads !== null ? `${item.downloadCount} / ${item.maxDownloads}` : t('share.downloadCount', { count: item.downloadCount })}</small></span></td>
       <td>{item.expiresAt ? formatDate(item.expiresAt) : t('share.never')}</td>
       <td><span className={item.enabled ? 'statusOnline' : 'statusOffline'}>{item.enabled ? t('common.enabled') : t('common.disabled')}</span></td>
       <td className="shareActions"><button className="iconButton" type="button" aria-label={t('share.editFor', { name: item.name })} onClick={() => setEditing(item)}><Pencil aria-hidden="true" size={16} /></button><button className="iconButton" type="button" aria-label={item.enabled ? t('share.disableFor', { name: item.name }) : t('share.enableFor', { name: item.name })} onClick={() => void patch(item.id, { enabled: !item.enabled }).catch(() => undefined)}><CirclePower aria-hidden="true" size={16} /></button><button className="iconButton dangerIcon" type="button" aria-label={t('share.deleteFor', { name: item.name })} onClick={() => setDeleting(item)}><Trash2 aria-hidden="true" size={16} /></button></td>

@@ -1,38 +1,24 @@
-const AES_GCM_KEY_BYTES = 32;
+import { base64ToBytes, bytesToBase64 } from './shared/encoding';
+import { deriveCredentialAesKey, inferCredentialDomain, type CredentialDomain } from './shared/keys';
+
 const AES_GCM_IV_BYTES = 12;
 const AES_GCM_TAG_BYTES = 16;
 
-export const CREDENTIAL_ENVELOPE_VERSION = 1;
+export const CREDENTIAL_ENVELOPE_VERSION = 2;
 
 export interface CredentialEnvelope {
-  version: typeof CREDENTIAL_ENVELOPE_VERSION;
+  version: 1 | 2;
   iv: string;
   ciphertext: string;
 }
 
-function bytesToBase64(bytes: Uint8Array): string {
-  let binary = '';
-  for (const byte of bytes) binary += String.fromCharCode(byte);
-  return btoa(binary);
-}
-
-function base64ToBytes(value: string): Uint8Array {
-  if (!/^(?:[A-Za-z0-9+/]{4})*(?:[A-Za-z0-9+/]{2}==|[A-Za-z0-9+/]{3}=)?$/.test(value)) {
-    throw new Error('Invalid base64 data');
-  }
-
-  const binary = atob(value);
-  return Uint8Array.from(binary, (character) => character.charCodeAt(0));
+export interface CredentialCryptoOptions {
+  domain?: CredentialDomain;
+  expectedKeyVersion?: number;
 }
 
 function assertMountId(mountId: string): void {
   if (!mountId) throw new Error('Mount ID is required');
-}
-
-async function importMasterKey(masterKey: string): Promise<CryptoKey> {
-  const keyBytes = base64ToBytes(masterKey);
-  if (keyBytes.byteLength !== AES_GCM_KEY_BYTES) throw new Error('Credential master key must be 32 bytes');
-  return crypto.subtle.importKey('raw', keyBytes, 'AES-GCM', false, ['encrypt', 'decrypt']);
 }
 
 function parseEnvelope(envelope: string): CredentialEnvelope {
@@ -43,12 +29,13 @@ function parseEnvelope(envelope: string): CredentialEnvelope {
     throw new Error('Invalid credential envelope');
   }
 
+  const version = (parsed as Partial<CredentialEnvelope> | null)?.version;
   if (
-    !parsed ||
-    typeof parsed !== 'object' ||
-    (parsed as Partial<CredentialEnvelope>).version !== CREDENTIAL_ENVELOPE_VERSION ||
-    typeof (parsed as Partial<CredentialEnvelope>).iv !== 'string' ||
-    typeof (parsed as Partial<CredentialEnvelope>).ciphertext !== 'string'
+    !parsed
+    || typeof parsed !== 'object'
+    || (version !== 1 && version !== 2)
+    || typeof (parsed as Partial<CredentialEnvelope>).iv !== 'string'
+    || typeof (parsed as Partial<CredentialEnvelope>).ciphertext !== 'string'
   ) {
     throw new Error('Invalid credential envelope');
   }
@@ -56,7 +43,12 @@ function parseEnvelope(envelope: string): CredentialEnvelope {
   return parsed as CredentialEnvelope;
 }
 
-export async function encryptCredential(value: unknown, masterKey: string, mountId: string): Promise<string> {
+export async function encryptCredential(
+  value: unknown,
+  masterKey: string,
+  mountId: string,
+  options: CredentialCryptoOptions = {},
+): Promise<string> {
   assertMountId(mountId);
 
   let plaintext: string;
@@ -67,6 +59,7 @@ export async function encryptCredential(value: unknown, masterKey: string, mount
   }
   if (plaintext === undefined) throw new Error('Credential value must be JSON serializable');
 
+  const domain = options.domain ?? inferCredentialDomain(mountId);
   const iv = crypto.getRandomValues(new Uint8Array(AES_GCM_IV_BYTES));
   const ciphertext = await crypto.subtle.encrypt(
     {
@@ -74,7 +67,7 @@ export async function encryptCredential(value: unknown, masterKey: string, mount
       iv,
       additionalData: new TextEncoder().encode(mountId),
     },
-    await importMasterKey(masterKey),
+    await deriveCredentialAesKey(masterKey, domain, CREDENTIAL_ENVELOPE_VERSION),
     new TextEncoder().encode(plaintext),
   );
 
@@ -85,24 +78,42 @@ export async function encryptCredential(value: unknown, masterKey: string, mount
   } satisfies CredentialEnvelope);
 }
 
-export async function decryptCredential(envelope: string, masterKey: string, mountId: string): Promise<unknown> {
+export async function decryptCredential(
+  envelope: string,
+  masterKey: string,
+  mountId: string,
+  options: CredentialCryptoOptions = {},
+): Promise<unknown> {
   assertMountId(mountId);
 
   try {
     const parsed = parseEnvelope(envelope);
+    if (
+      options.expectedKeyVersion !== undefined
+      && options.expectedKeyVersion !== 1
+      && options.expectedKeyVersion !== 2
+    ) {
+      throw new Error('Unsupported key version');
+    }
+    if (options.expectedKeyVersion !== undefined && parsed.version !== options.expectedKeyVersion) {
+      throw new Error('Credential key version mismatch');
+    }
+
     const iv = base64ToBytes(parsed.iv);
     const ciphertext = base64ToBytes(parsed.ciphertext);
     if (iv.byteLength !== AES_GCM_IV_BYTES || ciphertext.byteLength < AES_GCM_TAG_BYTES) {
       throw new Error('Invalid credential envelope');
     }
 
+    const domain = options.domain ?? inferCredentialDomain(mountId);
+    const key = await deriveCredentialAesKey(masterKey, domain, parsed.version);
     const plaintext = await crypto.subtle.decrypt(
       {
         name: 'AES-GCM',
         iv,
         additionalData: new TextEncoder().encode(mountId),
       },
-      await importMasterKey(masterKey),
+      key,
       ciphertext,
     );
     return JSON.parse(new TextDecoder().decode(plaintext));

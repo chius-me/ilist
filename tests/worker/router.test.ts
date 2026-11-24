@@ -1,9 +1,17 @@
 import { SELF, env } from 'cloudflare:test';
-import { describe, expect, it, vi } from 'vitest';
+import { afterEach, describe, expect, it, vi } from 'vitest';
+import { sessionIdFromToken } from '../../src/worker/auth';
+import { driverRegistry } from '../../src/worker/drivers/registry';
+import type { StorageDriver, StorageItem } from '../../src/worker/drivers/types';
+import { encodeExternalId } from '../../src/worker/external-identity';
+import { HttpError } from '../../src/worker/http';
+import { createMount } from '../../src/worker/mounts';
 import { routeRequest } from '../../src/worker/router';
+import { createUploadSessionRecord } from '../../src/worker/upload-session-store';
 import type { Env } from '../../src/worker/types';
 
 const origin = 'https://ilist.example';
+const originalS3Factory = driverRegistry.s3;
 
 function workerEnv(): Env {
   return env as unknown as Env;
@@ -18,6 +26,142 @@ async function login(): Promise<string> {
   expect(response.status).toBe(200);
   return response.headers.get('set-cookie')!.split(';')[0];
 }
+
+async function setupS3Fixture(isPublic = true) {
+  const db = workerEnv().DB;
+  await db.prepare('DELETE FROM upload_sessions').run();
+  await db.prepare('DELETE FROM mounts').run();
+  const mount = await createMount(db, {
+    name: 'Cloud',
+    mountPath: '/cloud',
+    driverType: 's3',
+    provider: 'custom',
+    isPublic,
+  });
+
+  const items = new Map<string, StorageItem>([
+    ['root', { id: 'root', parentId: null, name: 'Cloud', kind: 'folder', size: null, contentType: null, modifiedAt: null, etag: null }],
+  ]);
+  const contents = new Map<string, { body: string; contentType: string }>();
+  const abortSpy = vi.fn(async () => undefined);
+
+  const driver: StorageDriver = {
+    rootId: 'root',
+    capabilities: new Set(['list', 'download', 'upload', 'multipartUpload', 'createFolder', 'rename', 'move', 'delete']),
+    isWithin: vi.fn(async (itemId, ancestorId) => {
+      let current = items.get(itemId);
+      const seen = new Set<string>();
+      while (current && !seen.has(current.id)) {
+        if (current.id === ancestorId) return true;
+        if (!current.parentId) return false;
+        seen.add(current.id);
+        current = items.get(current.parentId);
+      }
+      return false;
+    }),
+    list: vi.fn(async (parentId) => ({
+      items: [...items.values()].filter((candidate) => candidate.parentId === parentId),
+      nextCursor: null,
+    })),
+    stat: vi.fn(async (itemId) => {
+      const item = items.get(itemId);
+      if (!item) throw new HttpError(404, 'ENTRY_NOT_FOUND', 'Entry not found');
+      return item;
+    }),
+    getDownload: vi.fn(async (itemId, request) => {
+      const stored = contents.get(itemId);
+      if (!stored) throw new HttpError(404, 'ENTRY_NOT_FOUND', 'Entry not found');
+      const bytes = new TextEncoder().encode(stored.body);
+      const rangeHeader = request.headers.get('range');
+      if (rangeHeader) {
+        const match = /^bytes=(\d+)-(\d*)$/i.exec(rangeHeader.trim());
+        if (match) {
+          const start = Number(match[1]);
+          const end = match[2] ? Math.min(Number(match[2]), bytes.byteLength - 1) : bytes.byteLength - 1;
+          return {
+            kind: 'stream' as const,
+            response: new Response(bytes.slice(start, end + 1), {
+              status: 206,
+              headers: {
+                'accept-ranges': 'bytes',
+                'content-range': `bytes ${start}-${end}/${bytes.byteLength}`,
+                'content-length': String(end - start + 1),
+                'content-type': stored.contentType,
+              },
+            }),
+          };
+        }
+      }
+      return {
+        kind: 'stream' as const,
+        response: new Response(bytes, {
+          status: 200,
+          headers: { 'content-length': String(bytes.byteLength), 'content-type': stored.contentType },
+        }),
+      };
+    }),
+    createFolder: vi.fn(async (parentId, name) => {
+      const id = `folder-${crypto.randomUUID()}`;
+      const folder: StorageItem = { id, parentId, name, kind: 'folder', size: null, contentType: null, modifiedAt: null, etag: null };
+      items.set(id, folder);
+      return folder;
+    }),
+    upload: vi.fn(async (parentId, name, stream, contentType) => {
+      const text = await new Response(stream).text();
+      const id = `file-${name}`;
+      const file: StorageItem = {
+        id,
+        parentId,
+        name,
+        kind: 'file',
+        size: new TextEncoder().encode(text).byteLength,
+        contentType,
+        modifiedAt: null,
+        etag: 'etag',
+      };
+      items.set(id, file);
+      contents.set(id, { body: text, contentType });
+      return file;
+    }),
+    rename: vi.fn(async (itemId, name) => {
+      const item = items.get(itemId);
+      if (!item) throw new HttpError(404, 'ENTRY_NOT_FOUND', 'Entry not found');
+      const updated = { ...item, name };
+      items.set(itemId, updated);
+      return updated;
+    }),
+    move: vi.fn(async (itemId, destinationParentId) => {
+      const item = items.get(itemId);
+      if (!item) throw new HttpError(404, 'ENTRY_NOT_FOUND', 'Entry not found');
+      const updated = { ...item, parentId: destinationParentId };
+      items.set(itemId, updated);
+      return updated;
+    }),
+    copy: vi.fn(async () => { throw new Error('not implemented'); }),
+    remove: vi.fn(async (itemId) => {
+      items.delete(itemId);
+      contents.delete(itemId);
+    }),
+    resumableUpload: {
+      create: vi.fn(async () => ({ state: { uploadId: 'u1' }, expiresAt: Date.now() + 60_000 })),
+      uploadPart: vi.fn(async () => ({ part: { partNumber: 1, size: 1, etag: '"e1"' } })),
+      complete: vi.fn(),
+      abort: abortSpy,
+    },
+  };
+
+  driverRegistry.s3 = () => driver;
+  return {
+    mount,
+    driver,
+    abortSpy,
+    rootEntryId: encodeExternalId(mount.id, 'root'),
+  };
+}
+
+afterEach(() => {
+  driverRegistry.s3 = originalS3Factory;
+});
 
 describe('filesystem API', () => {
   it('serializes simultaneous login verification slots across rotating usernames before invoking the verifier', async () => {
@@ -234,66 +378,61 @@ describe('filesystem API', () => {
     expect(retry.status).toBe(401);
   });
 
-  it('lists the native R2 mount while stable and legacy file routes still work', async () => {
-    const db = (env as unknown as Env).DB;
+  it('lists external mounts while stable file routes serve content', async () => {
     const cookie = await login();
-    const id = 'compat-file-test';
-    const upload = await SELF.fetch(`${origin}/api/admin/files/${id}?parentId=root&name=compat.txt`, {
+    const { mount, rootEntryId } = await setupS3Fixture(true);
+    const upload = await SELF.fetch(`${origin}/api/admin/files/task-compat?parentId=${encodeURIComponent(rootEntryId)}&name=compat.txt`, {
       method: 'PUT',
       headers: { cookie, origin, 'content-type': 'text/plain' },
-      body: 'native-r2-data',
+      body: 'external-s3-data',
     });
     expect(upload.status).toBe(200);
+    const uploadedId = (await upload.json() as { data: { id: string } }).data.id;
 
     const guest = await SELF.fetch(`${origin}/api/fs/list?path=/`);
     expect(guest.status).toBe(200);
     expect(await guest.json()).toMatchObject({
       data: {
-        items: expect.arrayContaining([
-          expect.objectContaining({ id: 'native-r2', name: 'R2', kind: 'folder', mountId: 'native-r2' }),
-        ]),
+        items: [
+          expect.objectContaining({ id: mount.id, name: 'Cloud', kind: 'folder', mountId: mount.id }),
+        ],
       },
     });
 
-    const mounted = await SELF.fetch(`${origin}/api/fs/list?path=/R2`);
+    const mounted = await SELF.fetch(`${origin}/api/fs/list?path=/cloud`);
     expect(mounted.status).toBe(200);
     expect(await mounted.json()).toMatchObject({
-      data: { items: expect.arrayContaining([expect.objectContaining({ id, name: 'compat.txt' })]) },
+      data: { items: expect.arrayContaining([expect.objectContaining({ id: uploadedId, name: 'compat.txt' })]) },
     });
 
     const admin = await SELF.fetch(`${origin}/api/fs/list?path=/`, { headers: { cookie } });
     expect(admin.status).toBe(200);
     expect((await admin.json() as { data: { current: { capabilities: { rename: boolean } } } }).data.current.capabilities.rename).toBe(false);
 
-    const stable = await SELF.fetch(`${origin}/file/${id}/ignored-name`);
+    const stable = await SELF.fetch(`${origin}/file/${encodeURIComponent(uploadedId)}/ignored-name`);
     expect(stable.status).toBe(200);
-    await expect(stable.text()).resolves.toBe('native-r2-data');
-
-    const now = new Date().toISOString();
-    await db.prepare(`INSERT INTO objects (key, name, size, content_type, etag, updated_at, is_public, sort_order, description)
-      VALUES (?, ?, 14, 'text/plain', 'etag', ?, 1, 0, '')`).bind('legacy/compat.txt', 'compat.txt', now).run();
-    await db.prepare(`INSERT INTO entries (
-      id, parent_id, name, kind, storage_key, size, content_type, etag, status, lifecycle_owner, is_public, sort_order, description, created_at, updated_at
-    ) VALUES (?, 'root', ?, 'file', ?, 14, 'text/plain', 'etag', 'ready', NULL, 1, 0, '', ?, ?)`).bind(
-      'legacy-compat-id', 'legacy-compat.txt', 'legacy/compat.txt', now, now,
-    ).run();
-    const legacy = await SELF.fetch(`${origin}/file/legacy/compat.txt`, { redirect: 'manual' });
-    expect(legacy.status).toBe(302);
-    expect(legacy.headers.get('location')).toBe('/file/legacy-compat-id/legacy-compat.txt');
+    await expect(stable.text()).resolves.toBe('external-s3-data');
   });
 
-  it('creates, renames, moves, changes visibility, and deletes through admin routes', async () => {
+  it('creates, renames, moves, deletes through admin routes, and rejects retired visibility route', async () => {
     const cookie = await login();
+    const { rootEntryId } = await setupS3Fixture(true);
     const headers = { cookie, origin, 'content-type': 'application/json' };
     const created = await SELF.fetch(`${origin}/api/admin/folders`, {
-      method: 'POST', headers, body: JSON.stringify({ parentId: 'root', name: 'Docs' }),
+      method: 'POST', headers, body: JSON.stringify({ parentId: rootEntryId, name: 'Docs' }),
     });
     expect(created.status).toBe(200);
     const entry = (await created.json() as { data: { id: string } }).data;
-    const renamed = await SELF.fetch(`${origin}/api/admin/entries/${entry.id}`, {
+    const renamed = await SELF.fetch(`${origin}/api/admin/entries/${encodeURIComponent(entry.id)}`, {
       method: 'PATCH', headers, body: JSON.stringify({ name: 'Documents' }),
     });
     expect(renamed.status).toBe(200);
+
+    const visibility = await SELF.fetch(`${origin}/api/admin/entries/visibility`, {
+      method: 'POST', headers, body: JSON.stringify({ ids: [entry.id], isPublic: false }),
+    });
+    expect(visibility.status).toBe(405);
+
     const removed = await SELF.fetch(`${origin}/api/admin/entries/delete`, {
       method: 'POST', headers, body: JSON.stringify({ ids: [entry.id] }),
     });
@@ -301,10 +440,11 @@ describe('filesystem API', () => {
   });
 
   it('requires same-origin and authentication for mutations', async () => {
+    const { rootEntryId } = await setupS3Fixture(true);
     const unauthenticated = await SELF.fetch(`${origin}/api/admin/folders`, {
       method: 'POST',
       headers: { 'content-type': 'application/json', origin },
-      body: JSON.stringify({ parentId: 'root', name: 'Docs' }),
+      body: JSON.stringify({ parentId: rootEntryId, name: 'Docs' }),
     });
     expect(unauthenticated.status).toBe(401);
     expect((await unauthenticated.json() as { error: { code: string } }).error.code).toBe('AUTH_REQUIRED');
@@ -313,7 +453,7 @@ describe('filesystem API', () => {
     const response = await SELF.fetch(`${origin}/api/admin/folders`, {
       method: 'POST',
       headers: { cookie, 'content-type': 'application/json', origin: 'https://attacker.example' },
-      body: JSON.stringify({ parentId: 'root', name: 'Docs' }),
+      body: JSON.stringify({ parentId: rootEntryId, name: 'Docs' }),
     });
     expect(response.status).toBe(403);
   });
@@ -330,15 +470,16 @@ describe('filesystem API', () => {
 
   it('uploads and streams a stable entry URL with Range support', async () => {
     const cookie = await login();
-    const id = 'file-router-test';
-    const upload = await SELF.fetch(`${origin}/api/admin/files/${id}?parentId=root&name=hello.txt`, {
+    const { rootEntryId } = await setupS3Fixture(true);
+    const upload = await SELF.fetch(`${origin}/api/admin/files/task-hello?parentId=${encodeURIComponent(rootEntryId)}&name=hello.txt`, {
       method: 'PUT',
       headers: { cookie, origin, 'content-type': 'text/plain' },
       body: 'hello',
     });
     expect(upload.status).toBe(200);
+    const entryId = (await upload.json() as { data: { id: string } }).data.id;
 
-    const response = await SELF.fetch(`${origin}/file/${id}/ignored-name`, { headers: { range: 'bytes=0-1' } });
+    const response = await SELF.fetch(`${origin}/file/${encodeURIComponent(entryId)}/ignored-name`, { headers: { range: 'bytes=0-1' } });
     expect(response.status).toBe(206);
     expect(response.headers.get('content-range')).toBe('bytes 0-1/5');
     await expect(response.text()).resolves.toBe('he');
@@ -347,16 +488,17 @@ describe('filesystem API', () => {
   it.each([
     ['HTML', 'report.html', 'text/html; charset=utf-8', '<script>alert(1)</script>'],
     ['SVG', 'icon.svg', 'image/svg+xml', '<svg><script>alert(1)</script></svg>'],
-  ])('isolates active native R2 $s content without changing Range semantics', async (_label, name, contentType, body) => {
+  ])('isolates active external %s content without changing Range semantics', async (_label, name, contentType, body) => {
     const cookie = await login();
-    const id = `active-${name.replace('.', '-')}-test`;
-    await SELF.fetch(`${origin}/api/admin/files/${id}?parentId=root&name=${encodeURIComponent(name)}`, {
+    const { rootEntryId } = await setupS3Fixture(true);
+    const uploaded = await SELF.fetch(`${origin}/api/admin/files/task-active?parentId=${encodeURIComponent(rootEntryId)}&name=${encodeURIComponent(name)}`, {
       method: 'PUT',
       headers: { cookie, origin, 'content-type': contentType },
       body,
     });
+    const entryId = (await uploaded.json() as { data: { id: string } }).data.id;
 
-    const response = await SELF.fetch(`${origin}/file/${id}/${name}`, {
+    const response = await SELF.fetch(`${origin}/file/${encodeURIComponent(entryId)}/${name}`, {
       headers: { range: 'bytes=0-7' },
     });
 
@@ -370,61 +512,193 @@ describe('filesystem API', () => {
   });
 
   it('adds application security headers to APIs and Workers Assets', async () => {
-    const api = await SELF.fetch(`${origin}/api/public/tree`);
+    const api = await SELF.fetch(`${origin}/api/fs/list?path=/`);
     const asset = await SELF.fetch(`${origin}/`);
 
     for (const response of [api, asset]) {
       expect(response.headers.get('content-security-policy')).toContain("default-src 'self'");
+      expect(response.headers.get('content-security-policy')).toContain("worker-src 'self'");
       expect(response.headers.get('content-security-policy')).toContain("object-src 'none'");
       expect(response.headers.get('x-frame-options')).toBe('DENY');
       expect(response.headers.get('strict-transport-security')).toBe('max-age=31536000; includeSubDomains');
     }
   });
 
-  it('hides private files from guests while permitting administrators', async () => {
+  it('hides files on private mounts from guests while permitting administrators', async () => {
     const cookie = await login();
-    const id = 'file-private-test';
-    await SELF.fetch(`${origin}/api/admin/files/${id}?parentId=root&name=private.txt`, {
+    const { rootEntryId } = await setupS3Fixture(false);
+    const uploaded = await SELF.fetch(`${origin}/api/admin/files/task-private?parentId=${encodeURIComponent(rootEntryId)}&name=private.txt`, {
       method: 'PUT', headers: { cookie, origin, 'content-type': 'text/plain' }, body: 'private',
     });
-    await SELF.fetch(`${origin}/api/admin/entries/visibility`, {
-      method: 'POST', headers: { cookie, origin, 'content-type': 'application/json' }, body: JSON.stringify({ ids: [id], isPublic: false }),
-    });
+    const entryId = (await uploaded.json() as { data: { id: string } }).data.id;
 
-    const guest = await SELF.fetch(`${origin}/file/${id}/private.txt`);
+    const guest = await SELF.fetch(`${origin}/file/${encodeURIComponent(entryId)}/private.txt`);
     expect(guest.status).toBe(404);
     expect((await guest.json() as { error: { code: string } }).error.code).toBe('ENTRY_NOT_FOUND');
 
-    const admin = await SELF.fetch(`${origin}/file/${id}/private.txt`, { headers: { cookie } });
+    const admin = await SELF.fetch(`${origin}/file/${encodeURIComponent(entryId)}/private.txt`, { headers: { cookie } });
     expect(admin.status).toBe(200);
     expect(admin.headers.get('cache-control')).toBe('private, no-store');
   });
 
-  it('redirects a migrated legacy file URL to its stable entry URL', async () => {
-    const db = (env as unknown as Env).DB;
-    const now = new Date().toISOString();
-    await db.prepare(`INSERT INTO objects (key, name, size, content_type, etag, updated_at, is_public, sort_order, description)
-      VALUES (?, ?, 4, 'text/plain', 'etag', ?, 1, 0, '')`).bind('legacy/old.txt', 'old.txt', now).run();
-    await db.prepare(`INSERT INTO entries (
-      id, parent_id, name, kind, storage_key, size, content_type, etag, status, lifecycle_owner, is_public, sort_order, description, created_at, updated_at
-    ) VALUES (?, 'root', ?, 'file', ?, 4, 'text/plain', 'etag', 'ready', NULL, 1, 0, '', ?, ?)`)
-      .bind('legacy-file-id', 'old.txt', 'legacy/old.txt', now, now).run();
-
-    const response = await SELF.fetch(`${origin}/file/legacy/old.txt`, { redirect: 'manual' });
-    expect(response.status).toBe(302);
-    expect(response.headers.get('location')).toBe('/file/legacy-file-id/old.txt');
-  });
-
-  it('returns structured errors for malformed IDs and arrays', async () => {
+  it('returns structured errors for malformed IDs, percent-encoding, and arrays', async () => {
     const malformed = await SELF.fetch(`${origin}/api/fs/entries/bad%2Fid`);
     expect(malformed.status).toBe(404);
     expect((await malformed.json() as { error: { code: string } }).error.code).toBe('ENTRY_NOT_FOUND');
 
     const cookie = await login();
+    const badPercentPatch = await SELF.fetch(`${origin}/api/admin/entries/bad%ZZ`, {
+      method: 'PATCH',
+      headers: { cookie, origin, 'content-type': 'application/json' },
+      body: JSON.stringify({ name: 'x.txt' }),
+    });
+    expect(badPercentPatch.status).toBe(404);
+    expect((await badPercentPatch.json() as { error: { code: string } }).error.code).toBe('ENTRY_NOT_FOUND');
+
     const invalid = await SELF.fetch(`${origin}/api/admin/entries/delete`, {
       method: 'POST', headers: { cookie, origin, 'content-type': 'application/json' }, body: JSON.stringify({ ids: 'nope' }),
     });
     expect(invalid.status).toBe(400);
     expect((await invalid.json() as { error: { code: string } }).error.code).toBe('INVALID_REQUEST');
+  });
+
+  it('aborts active upload sessions before deleting the admin session on logout', async () => {
+    const cookie = await login();
+    const { mount, abortSpy } = await setupS3Fixture(false);
+    const activeSessionId = await sessionIdFromToken(workerEnv(), cookie.slice('ilist_session='.length));
+
+    await createUploadSessionRecord(workerEnv(), activeSessionId, {
+      mountId: mount.id,
+      parentItemId: 'root',
+      name: 'pending.bin',
+      size: 1024,
+      contentType: 'application/octet-stream',
+      partSize: 512,
+      providerState: { uploadId: 'u1' },
+      expiresAt: Date.now() + 60_000,
+    });
+
+    const logout = await SELF.fetch(`${origin}/api/admin/logout`, {
+      method: 'POST',
+      headers: { cookie, origin },
+    });
+    expect(logout.status).toBe(200);
+    expect(abortSpy).toHaveBeenCalledTimes(1);
+    const remaining = await workerEnv().DB.prepare('SELECT COUNT(*) AS count FROM upload_sessions').first<{ count: number }>();
+    expect(remaining?.count).toBe(0);
+  });
+
+  it('supports cursor/limit pagination, guest edge list cache, ?refresh=1 bypass, and admin cache busting', async () => {
+    const db = workerEnv().DB;
+    await db.prepare('DELETE FROM mounts').run();
+    const mount = await createMount(db, {
+      name: 'Cached Cloud',
+      mountPath: '/cached',
+      driverType: 's3',
+      provider: 'custom',
+      isPublic: true,
+    });
+    const listMock = vi.fn(async (_parentId: string, cursor?: string, limit?: number) => ({
+      items: [
+        { id: cursor ?? 'page1', parentId: 'root', name: `file-${cursor ?? '1'}-${limit ?? 200}.txt`, kind: 'file' as const, size: 1, contentType: 'text/plain', modifiedAt: null, etag: null },
+      ],
+      nextCursor: cursor ? null : 'cursor-2',
+    }));
+    const createFolderMock = vi.fn(async () => ({
+      id: 'new-folder', parentId: 'root', name: 'New', kind: 'folder' as const, size: null, contentType: null, modifiedAt: null, etag: null,
+    }));
+    driverRegistry.s3 = () => ({
+      rootId: 'root',
+      capabilities: new Set(['list', 'createFolder']),
+      isWithin: async () => true,
+      list: listMock,
+      stat: async () => ({ id: 'root', parentId: null, name: 'Cached Cloud', kind: 'folder', size: null, contentType: null, modifiedAt: null, etag: null }),
+      getDownload: async () => { throw new HttpError(404, 'ENTRY_NOT_FOUND', 'missing'); },
+      createFolder: createFolderMock,
+      upload: async () => { throw new HttpError(405, 'OPERATION_UNSUPPORTED', 'no'); },
+      rename: async () => { throw new HttpError(405, 'OPERATION_UNSUPPORTED', 'no'); },
+      move: async () => { throw new HttpError(405, 'OPERATION_UNSUPPORTED', 'no'); },
+      copy: async () => { throw new HttpError(405, 'OPERATION_UNSUPPORTED', 'no'); },
+      remove: async () => undefined,
+    });
+
+    const first = await SELF.fetch(`${origin}/api/fs/list?path=/cached&limit=5`);
+    expect(first.status).toBe(200);
+    const firstPayload = await first.json() as { data: { nextCursor: string | null; items: Array<{ name: string }> } };
+    expect(firstPayload.data.nextCursor).toBe('cursor-2');
+    expect(firstPayload.data.items[0]!.name).toBe('file-1-5.txt');
+
+    const second = await SELF.fetch(`${origin}/api/fs/list?path=/cached&limit=5`);
+    expect(second.status).toBe(200);
+    expect(listMock).toHaveBeenCalledTimes(1);
+
+    const bypassed = await SELF.fetch(`${origin}/api/fs/list?path=/cached&limit=5&refresh=1`);
+    expect(bypassed.status).toBe(200);
+    expect(listMock).toHaveBeenCalledTimes(2);
+
+    const paged = await SELF.fetch(`${origin}/api/fs/list?path=/cached&cursor=cursor-2&limit=5`);
+    expect(paged.status).toBe(200);
+    const pagedPayload = await paged.json() as { data: { nextCursor: string | null; items: Array<{ name: string }> } };
+    expect(pagedPayload.data.nextCursor).toBeNull();
+    expect(pagedPayload.data.items[0]!.name).toBe('file-cursor-2-5.txt');
+    expect(listMock).toHaveBeenCalledTimes(3);
+
+    const cookie = await login();
+    const createdFolder = await SELF.fetch(`${origin}/api/admin/folders`, {
+      method: 'POST',
+      headers: { cookie, origin, 'content-type': 'application/json' },
+      body: JSON.stringify({ parentId: encodeExternalId(mount.id, 'root'), name: 'New' }),
+    });
+    expect(createdFolder.status).toBe(200);
+
+    const afterMutation = await SELF.fetch(`${origin}/api/fs/list?path=/cached&limit=5`);
+    expect(afterMutation.status).toBe(200);
+    expect(listMock).toHaveBeenCalledTimes(4);
+  });
+
+  it('cleans expired sessions, oauth states, rate limits, and uploads in scheduled handler', async () => {
+    const db = workerEnv().DB;
+    const { mount, abortSpy } = await setupS3Fixture(false);
+    const nowSec = Math.floor(Date.now() / 1000);
+    const activeSessId = 'active-sess';
+    await db.prepare('INSERT INTO sessions (id, expires_at, created_at) VALUES (?, ?, ?)')
+      .bind(activeSessId, nowSec + 600, nowSec)
+      .run();
+    await db.prepare('INSERT INTO sessions (id, expires_at, created_at) VALUES (?, ?, ?)')
+      .bind('expired-sess', nowSec - 60, nowSec - 120)
+      .run();
+    await db.prepare('INSERT INTO oauth_states (state_hash, mount_id, verifier_ciphertext, expires_at, created_at) VALUES (?, ?, ?, ?, ?)')
+      .bind('expired-oauth-hash', mount.id, 'verifier', Date.now() - 60_000, new Date().toISOString())
+      .run();
+    await db.prepare(
+      `INSERT INTO auth_rate_limits (
+        key_hash, scope, window_started_at, failure_count, blocked_until,
+        reservation_token, reservation_expires_at, updated_at
+      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
+    )
+      .bind('old-rl', 'admin-login', nowSec - 48 * 60 * 60, 1, 0, null, 0, nowSec - 48 * 60 * 60)
+      .run();
+    const expiredUpload = await createUploadSessionRecord(workerEnv(), activeSessId, {
+      mountId: mount.id,
+      parentItemId: 'root',
+      name: 'expired.bin',
+      size: 1024,
+      contentType: 'application/octet-stream',
+      partSize: 512,
+      providerState: { uploadId: 'u-expired' },
+      expiresAt: Date.now() - 10_000,
+    });
+
+    const workerModule = (await import('../../src/worker/index')).default;
+    const pending: Promise<unknown>[] = [];
+    const ctx = { waitUntil: (promise: Promise<unknown>) => { pending.push(promise); } } as unknown as ExecutionContext;
+    await workerModule.scheduled({} as ScheduledController, workerEnv(), ctx);
+    await Promise.all(pending);
+
+    expect(abortSpy).toHaveBeenCalledTimes(1);
+    await expect(db.prepare('SELECT id FROM sessions WHERE id = ?').bind('expired-sess').first()).resolves.toBeNull();
+    await expect(db.prepare('SELECT state_hash FROM oauth_states WHERE state_hash = ?').bind('expired-oauth-hash').first()).resolves.toBeNull();
+    await expect(db.prepare('SELECT key_hash FROM auth_rate_limits WHERE key_hash = ?').bind('old-rl').first()).resolves.toBeNull();
+    await expect(db.prepare('SELECT status FROM upload_sessions WHERE id = ?').bind(expiredUpload.id).first()).resolves.toEqual({ status: 'aborted' });
   });
 });

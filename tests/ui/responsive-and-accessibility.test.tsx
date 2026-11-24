@@ -207,7 +207,7 @@ describe('responsive actions', () => {
       toolbar.getByRole('combobox', { name: 'Sort files' }),
       toolbar.getByRole('button', { name: 'Refresh' }),
       toolbar.getByRole('button', { name: 'Switch to grid view' }),
-      toolbar.getByRole('button', { name: 'Path home' }),
+      toolbar.getByRole('link', { name: 'Path home' }),
     ];
 
     for (const control of controls) {

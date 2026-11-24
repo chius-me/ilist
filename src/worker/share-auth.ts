@@ -1,4 +1,6 @@
 import { sha256Hex } from './auth';
+import { base64UrlToBytes, bytesToBase64Url, timingSafeEqualBytes } from './shared/encoding';
+import { deriveSessionHmacKey, legacyDigestHmacKey } from './shared/keys';
 import type { Env } from './types';
 
 const encoder = new TextEncoder();
@@ -10,36 +12,14 @@ interface AuthorizationPayload {
   exp: number;
 }
 
-function bytesToBase64Url(bytes: Uint8Array): string {
-  let binary = '';
-  for (const byte of bytes) binary += String.fromCharCode(byte);
-  return btoa(binary).replace(/\+/g, '-').replace(/\//g, '_').replace(/=+$/g, '');
-}
-
-function base64UrlToBytes(value: string): Uint8Array {
-  if (!/^[A-Za-z0-9_-]+$/.test(value)) throw new Error('Invalid base64url');
-  const normalized = value.replace(/-/g, '+').replace(/_/g, '/');
-  const binary = atob(normalized.padEnd(Math.ceil(normalized.length / 4) * 4, '='));
-  return Uint8Array.from(binary, (character) => character.charCodeAt(0));
-}
-
-async function signingKey(env: Env): Promise<CryptoKey> {
-  const key = await crypto.subtle.digest(
-    'SHA-256',
-    encoder.encode(`ilist:share-authorization:v1:${env.SESSION_SECRET}`),
-  );
-  return crypto.subtle.importKey('raw', key, { name: 'HMAC', hash: 'SHA-256' }, false, ['sign']);
-}
-
 async function signature(env: Env, payload: string): Promise<Uint8Array> {
-  return new Uint8Array(await crypto.subtle.sign('HMAC', await signingKey(env), encoder.encode(payload)));
+  const key = await deriveSessionHmacKey(env.SESSION_SECRET, 'share-auth');
+  return new Uint8Array(await crypto.subtle.sign('HMAC', key, encoder.encode(payload)));
 }
 
-function timingSafeEqual(left: Uint8Array, right: Uint8Array): boolean {
-  if (left.byteLength !== right.byteLength) return false;
-  let difference = 0;
-  for (let index = 0; index < left.byteLength; index += 1) difference |= left[index] ^ right[index];
-  return difference === 0;
+async function legacySignature(env: Env, payload: string): Promise<Uint8Array> {
+  const key = await legacyDigestHmacKey(`ilist:share-authorization:v1:${env.SESSION_SECRET}`);
+  return new Uint8Array(await crypto.subtle.sign('HMAC', key, encoder.encode(payload)));
 }
 
 function cookieValue(request: Request, name: string): string | null {
@@ -92,7 +72,10 @@ export async function hasShareAuthorization(
   try {
     const [encoded, encodedSignature, extra] = value.split('.');
     if (!encoded || !encodedSignature || extra !== undefined) return false;
-    if (!timingSafeEqual(await signature(env, encoded), base64UrlToBytes(encodedSignature))) return false;
+    const actualSignature = base64UrlToBytes(encodedSignature);
+    const matchesCurrent = timingSafeEqualBytes(await signature(env, encoded), actualSignature);
+    const matchesLegacy = !matchesCurrent && timingSafeEqualBytes(await legacySignature(env, encoded), actualSignature);
+    if (!matchesCurrent && !matchesLegacy) return false;
     const payload = JSON.parse(new TextDecoder().decode(base64UrlToBytes(encoded))) as AuthorizationPayload;
     return payload.v === 2
       && payload.shareId === shareId

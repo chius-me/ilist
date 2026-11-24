@@ -31,7 +31,7 @@ describe('administration layout', () => {
     expect(await screen.findByRole('navigation', { name: 'Administration' })).toBeVisible();
     await userEvent.click(screen.getByRole('link', { name: 'Appearance' }));
     expect(location.pathname).toBe('/admin/appearance');
-    expect(screen.getByRole('heading', { name: 'Appearance' })).toBeVisible();
+    expect(await screen.findByRole('heading', { name: 'Appearance' })).toBeVisible();
     await userEvent.click(screen.getByRole('link', { name: 'Files' }));
     expect(location.pathname).toBe('/');
   });

@@ -2,8 +2,7 @@ import { describe, expect, it, vi } from 'vitest';
 import type { StorageDriver, StorageItem } from '../../src/worker/drivers/types';
 import { externalEntry } from '../../src/worker/external-entries';
 import { decodeExternalId, encodeExternalId } from '../../src/worker/external-identity';
-import { fileUrl } from '../../src/ui/api/entries';
-import { publicShareFileUrl } from '../../src/ui/api/public-shares';
+import { fileUrl, publicShareFileUrl } from '../../src/ui/lib/file-urls';
 import type { Mount } from '../../src/worker/types';
 
 describe('external entry identity', () => {

@@ -3,7 +3,7 @@ import {
   passwordFitsPolicy,
   PASSWORD_MAX_UTF8_BYTES,
 } from '../../scripts/lib/password-policy.mjs';
-import { HttpError, noContent, ok, readJson } from './http';
+import { fail, HttpError, noContent, ok, readJson } from './http';
 import { getMount } from './mounts';
 import { createShareToken } from './share-crypto';
 import {
@@ -15,13 +15,15 @@ import {
   type UpdateShareRecordInput,
 } from './share-store';
 import { resolveShareCreationTarget } from './share-targets';
+import { isRecord } from './shared/encoding';
+import { publicOrigin } from './shared/origin';
 import type { Env, Share } from './types';
 
 const CREATE_KEYS = new Set(['entryId', 'password', 'expiresAt', 'allowDownload', 'enabled', 'maxDownloads']);
 const UPDATE_KEYS = new Set(['password', 'clearPassword', 'expiresAt', 'allowDownload', 'enabled', 'maxDownloads']);
 
-function isRecord(value: unknown): value is Record<string, unknown> {
-  return typeof value === 'object' && value !== null && !Array.isArray(value);
+function methodNotAllowed(): Response {
+  return fail(405, 'Method not allowed');
 }
 
 function invalid(message: string): never {
@@ -59,18 +61,8 @@ function maxDownloads(value: unknown): number | null {
   return value;
 }
 
-function publicOrigin(env: Env): string {
-  let url: URL;
-  try {
-    url = new URL(env.PUBLIC_ORIGIN);
-  } catch {
-    throw new HttpError(500, 'PUBLIC_ORIGIN_INVALID', 'Public origin is invalid');
-  }
-  const local = url.hostname === 'localhost' || url.hostname === '127.0.0.1';
-  if (url.protocol !== 'https:' && !(local && url.protocol === 'http:')) {
-    throw new HttpError(500, 'PUBLIC_ORIGIN_INVALID', 'Public origin is invalid');
-  }
-  return url.origin;
+function sharePublicOrigin(env: Env): string {
+  return publicOrigin(env, { allowLocalHttp: true, httpError: true });
 }
 
 async function toAdminView(env: Env, share: Share) {
@@ -118,7 +110,7 @@ async function createShare(request: Request, env: Env): Promise<Response> {
   });
   return ok({
     share: await toAdminView(env, share),
-    url: `${publicOrigin(env)}/s/${generated.token}`,
+    url: `${sharePublicOrigin(env)}/s/${generated.token}`,
   });
 }
 
@@ -154,7 +146,7 @@ async function rotateShareToken(env: Env, id: string): Promise<Response> {
   if (!updated) throw new HttpError(404, 'SHARE_NOT_FOUND', 'Share was not found');
   return ok({
     share: await toAdminView(env, updated),
-    url: `${publicOrigin(env)}/s/${generated.token}`,
+    url: `${sharePublicOrigin(env)}/s/${generated.token}`,
   });
 }
 
@@ -162,18 +154,18 @@ export async function handleShareAdminRoutes(request: Request, env: Env, url: UR
   if (url.pathname === '/api/admin/shares') {
     if (request.method === 'GET') return ok(await Promise.all((await listShares(env.DB)).map((share) => toAdminView(env, share))));
     if (request.method === 'POST') return createShare(request, env);
-    return new Response(null, { status: 405 });
+    return methodNotAllowed();
   }
 
   const rotateMatch = /^\/api\/admin\/shares\/([^/]+)\/rotate$/.exec(url.pathname);
   if (rotateMatch) {
     let id: string;
     try {
-      id = decodeURIComponent(rotateMatch[1]);
+      id = decodeURIComponent(rotateMatch[1]!);
     } catch {
       throw new HttpError(404, 'SHARE_NOT_FOUND', 'Share was not found');
     }
-    if (request.method !== 'POST') return new Response(null, { status: 405 });
+    if (request.method !== 'POST') return methodNotAllowed();
     return rotateShareToken(env, id);
   }
 
@@ -181,7 +173,7 @@ export async function handleShareAdminRoutes(request: Request, env: Env, url: UR
   if (!match) return null;
   let id: string;
   try {
-    id = decodeURIComponent(match[1]);
+    id = decodeURIComponent(match[1]!);
   } catch {
     throw new HttpError(404, 'SHARE_NOT_FOUND', 'Share was not found');
   }
@@ -190,5 +182,5 @@ export async function handleShareAdminRoutes(request: Request, env: Env, url: UR
     if (!await deleteShareRecord(env.DB, id)) throw new HttpError(404, 'SHARE_NOT_FOUND', 'Share was not found');
     return noContent();
   }
-  return new Response(null, { status: 405 });
+  return methodNotAllowed();
 }

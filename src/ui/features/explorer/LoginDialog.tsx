@@ -30,7 +30,7 @@ export function LoginDialog({
       return;
     }
     usernameInput.current?.focus();
-  }, [onClose, open]);
+  }, [open]);
 
   if (!open) return null;
 

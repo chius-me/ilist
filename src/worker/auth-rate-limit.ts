@@ -4,8 +4,11 @@ import {
   recordAuthRateLimitFailure,
   releaseAuthRateLimitVerification,
   reserveAuthRateLimitVerification,
-} from './db';
+} from './db/rate-limits';
 import { HttpError } from './http';
+import { bytesToHex } from './shared/encoding';
+import { normalizeClientIp } from './shared/ip';
+import { deriveSessionHmacKey } from './shared/keys';
 import type { Env } from './types';
 
 const encoder = new TextEncoder();
@@ -33,8 +36,12 @@ export interface AuthRateLimitAttempt {
   readonly policy: AuthRateLimitPolicy;
 }
 
-function bytesToHex(bytes: ArrayBuffer): string {
-  return [...new Uint8Array(bytes)].map((byte) => byte.toString(16).padStart(2, '0')).join('');
+export interface GlobalAuthRateLimitContext {
+  readonly db: D1Database;
+  readonly keyHash: string;
+  readonly scope: string;
+  readonly windowSeconds: number;
+  readonly now: number;
 }
 
 function normalizedSubject(subject: string): string {
@@ -43,8 +50,8 @@ function normalizedSubject(subject: string): string {
 
 function clientIp(request: Request, policy: AuthRateLimitPolicy): string {
   const cloudflareIp = request.headers.get('CF-Connecting-IP')?.trim();
-  if (cloudflareIp) return cloudflareIp;
-  if (policy.clientIp?.trim()) return policy.clientIp.trim();
+  if (cloudflareIp) return normalizeClientIp(cloudflareIp);
+  if (policy.clientIp?.trim()) return normalizeClientIp(policy.clientIp);
   throw new HttpError(500, 'AUTH_CLIENT_IP_UNAVAILABLE', 'Authentication client identity is unavailable');
 }
 
@@ -61,26 +68,70 @@ function validatePolicy(policy: AuthRateLimitPolicy): void {
 }
 
 async function rateLimitKey(env: Env, scope: string, ip: string, subject: string): Promise<string> {
-  const key = await crypto.subtle.importKey(
-    'raw',
-    encoder.encode(env.SESSION_SECRET),
-    { name: 'HMAC', hash: 'SHA-256' },
-    false,
-    ['sign'],
-  );
+  const key = await deriveSessionHmacKey(env.SESSION_SECRET, 'rate-limit');
   const identity = JSON.stringify([scope, ip, normalizedSubject(subject)]);
   return bytesToHex(await crypto.subtle.sign('HMAC', key, encoder.encode(identity)));
 }
 
 function reservationToken(): string {
-  const bytes = crypto.getRandomValues(new Uint8Array(16));
-  return [...bytes].map((byte) => byte.toString(16).padStart(2, '0')).join('');
+  return bytesToHex(crypto.getRandomValues(new Uint8Array(16)));
 }
 
 function rateLimited(retryAfter: number): HttpError {
   return new HttpError(429, 'AUTH_RATE_LIMITED', 'Too many authentication attempts', {
     retryAfter: Math.max(1, Math.ceil(retryAfter)),
   });
+}
+
+export async function assertGlobalAuthWindowAllowed(
+  env: Env,
+  scope: string,
+  policy: Pick<AuthRateLimitPolicy, 'maxFailures' | 'windowSeconds' | 'now'>,
+): Promise<GlobalAuthRateLimitContext> {
+  validatePolicy(policy);
+  const now = nowSeconds(policy);
+  const keyHash = await rateLimitKey(env, scope, 'global', 'global');
+  const existing = await getAuthRateLimit(env.DB, keyHash);
+  if (existing && now < existing.window_started_at + policy.windowSeconds && existing.failure_count >= policy.maxFailures) {
+    throw rateLimited(existing.window_started_at + policy.windowSeconds - now);
+  }
+  return { db: env.DB, keyHash, scope, windowSeconds: policy.windowSeconds, now };
+}
+
+export async function recordGlobalAuthFailure(context: GlobalAuthRateLimitContext): Promise<void> {
+  await context.db.prepare(
+    `INSERT INTO auth_rate_limits (
+       key_hash, scope, window_started_at, failure_count, blocked_until,
+       reservation_token, reservation_expires_at, updated_at
+     ) VALUES (?, ?, ?, 1, 0, NULL, 0, ?)
+     ON CONFLICT(key_hash) DO UPDATE SET
+       scope = excluded.scope,
+       window_started_at = CASE
+         WHEN excluded.updated_at >= auth_rate_limits.window_started_at + ? THEN excluded.window_started_at
+         ELSE auth_rate_limits.window_started_at
+       END,
+       failure_count = CASE
+         WHEN excluded.updated_at >= auth_rate_limits.window_started_at + ? THEN 1
+         ELSE auth_rate_limits.failure_count + 1
+       END,
+       blocked_until = 0,
+       reservation_token = NULL,
+       reservation_expires_at = 0,
+       updated_at = excluded.updated_at`,
+  )
+    .bind(
+      context.keyHash,
+      context.scope,
+      context.now,
+      context.now,
+      context.windowSeconds,
+      context.windowSeconds,
+    )
+    .run();
+}
+
+export async function clearGlobalAuthFailures(context: GlobalAuthRateLimitContext): Promise<void> {
+  await context.db.prepare('DELETE FROM auth_rate_limits WHERE key_hash = ?').bind(context.keyHash).run();
 }
 
 export async function assertAuthAllowed(
@@ -171,7 +222,7 @@ export async function releaseAuthReservationSafely(context: AuthRateLimitContext
 export async function recordAuthFailures(contexts: readonly AuthRateLimitContext[]): Promise<void> {
   let index = 0;
   try {
-    for (; index < contexts.length; index += 1) await recordAuthFailure(contexts[index]);
+    for (; index < contexts.length; index += 1) await recordAuthFailure(contexts[index]!);
   } catch (error) {
     await Promise.all(contexts.slice(index).map((context) => releaseAuthReservationSafely(context)));
     throw error;
@@ -182,7 +233,7 @@ export async function clearAuthFailureContexts(contexts: readonly AuthRateLimitC
   let index = 0;
   try {
     for (; index < contexts.length; index += 1) {
-      if (!await clearAuthFailures(contexts[index])) return false;
+      if (!await clearAuthFailures(contexts[index]!)) return false;
     }
     return true;
   } finally {

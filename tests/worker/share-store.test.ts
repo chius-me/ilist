@@ -1,6 +1,7 @@
 import { env } from 'cloudflare:test';
 import { describe, expect, it } from 'vitest';
 import { hashPassword, sha256Hex, verifyPassword } from '../../src/worker/auth';
+import { createMount } from '../../src/worker/mounts';
 import {
   createShareRecord,
   deleteShareRecord,
@@ -15,12 +16,23 @@ function workerEnv(): Env {
   return env as unknown as Env;
 }
 
+async function createS3Mount(suffix: string): Promise<string> {
+  const mount = await createMount(workerEnv().DB, {
+    name: `Share mount ${suffix}`,
+    mountPath: `/share-mount-${suffix}`,
+    driverType: 's3',
+    provider: 'custom',
+  });
+  return mount.id;
+}
+
 describe('share store', () => {
   it('creates and resolves a share without retaining the raw token', async () => {
+    const mountId = await createS3Mount('create');
     const tokenHash = await sha256Hex('raw-share-token');
     const share = await createShareRecord(workerEnv().DB, {
       tokenHash,
-      mountId: 'native-r2',
+      mountId,
       providerItemId: 'private-file',
       targetKind: 'file',
       name: 'private.txt',
@@ -31,7 +43,7 @@ describe('share store', () => {
     });
 
     expect(share).toMatchObject({
-      mountId: 'native-r2',
+      mountId,
       providerItemId: 'private-file',
       targetKind: 'file',
       name: 'private.txt',
@@ -47,10 +59,11 @@ describe('share store', () => {
   });
 
   it('lists, updates, and deletes share policy without changing the token hash', async () => {
+    const mountId = await createS3Mount('crud');
     const tokenHash = await sha256Hex('policy-token');
     const created = await createShareRecord(workerEnv().DB, {
       tokenHash,
-      mountId: 'native-r2',
+      mountId,
       providerItemId: 'folder-id',
       targetKind: 'folder',
       name: 'Folder',
@@ -84,9 +97,10 @@ describe('share store', () => {
   });
 
   it('revises password authorization only when the password policy changes', async () => {
+    const mountId = await createS3Mount('revise');
     const created = await createShareRecord(workerEnv().DB, {
       tokenHash: await sha256Hex('revision-token'),
-      mountId: 'native-r2',
+      mountId,
       providerItemId: 'folder-id',
       targetKind: 'folder',
       name: 'Folder',
@@ -107,9 +121,10 @@ describe('share store', () => {
   });
 
   it('cascades shares when their mount is deleted', async () => {
+    const mountId = await createS3Mount('cascade');
     const share = await createShareRecord(workerEnv().DB, {
       tokenHash: await sha256Hex('cascade-token'),
-      mountId: 'native-r2',
+      mountId,
       providerItemId: 'file-id',
       targetKind: 'file',
       name: 'file.txt',
@@ -119,13 +134,13 @@ describe('share store', () => {
       enabled: true,
     });
 
-    await workerEnv().DB.prepare("DELETE FROM mounts WHERE id = 'native-r2'").run();
+    await workerEnv().DB.prepare('DELETE FROM mounts WHERE id = ?').bind(mountId).run();
     await expect(getShareById(workerEnv().DB, share.id)).resolves.toBeNull();
   });
 
-  it('hashes optional share passwords using the existing verification format', async () => {
+  it('hashes optional share passwords using the updated PBKDF2 ceiling', async () => {
     const stored = await hashPassword('share-password');
-    expect(stored).toMatch(/^pbkdf2-sha256:600000:[0-9a-f]{32}:[0-9a-f]{64}$/);
+    expect(stored).toMatch(/^pbkdf2-sha256:100000:[0-9a-f]{32}:[0-9a-f]{64}$/);
     await expect(verifyPassword('share-password', stored)).resolves.toBe(true);
     await expect(verifyPassword('wrong-password', stored)).resolves.toBe(false);
   });

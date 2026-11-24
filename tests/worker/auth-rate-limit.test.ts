@@ -8,7 +8,7 @@ import {
   releaseAuthReservation,
   type AuthRateLimitPolicy,
 } from '../../src/worker/auth-rate-limit';
-import { deleteAuthRateLimitsBefore } from '../../src/worker/db';
+import { deleteAuthRateLimitsBefore } from '../../src/worker/db/rate-limits';
 import type { Env } from '../../src/worker/types';
 
 function workerEnv(): Env {
@@ -206,5 +206,25 @@ describe('authentication rate limiter', () => {
     await expect(deleteAuthRateLimitsBefore(db, 50, 2)).resolves.toBe(2);
     const remaining = await db.prepare('SELECT key_hash FROM auth_rate_limits ORDER BY updated_at').all<{ key_hash: string }>();
     expect(remaining.results).toEqual([{ key_hash: 'c' }, { key_hash: 'recent' }]);
+  });
+
+  it('normalizes IPv6 clients by /64 prefix while keeping IPv4-mapped addresses distinct', async () => {
+    const policy: AuthRateLimitPolicy = { maxFailures: 1, windowSeconds: 60, now: () => 8_000 };
+    const first = await assertAuthAllowed(workerEnv(), request('2001:db8:1:2::1'), 'admin-login', 'admin', policy);
+    await recordAuthFailure(first);
+
+    await expect(
+      assertAuthAllowed(workerEnv(), request('2001:db8:1:2:ffff::99'), 'admin-login', 'admin', policy),
+    ).rejects.toMatchObject({ status: 429, code: 'AUTH_RATE_LIMITED' });
+
+    await expect(
+      assertAuthAllowed(workerEnv(), request('2001:db8:1:3::1'), 'admin-login', 'admin', policy),
+    ).resolves.toBeDefined();
+
+    const mapped = await assertAuthAllowed(workerEnv(), request('::ffff:203.0.113.50'), 'admin-login', 'admin', policy);
+    await recordAuthFailure(mapped);
+    await expect(
+      assertAuthAllowed(workerEnv(), request('::ffff:203.0.113.51'), 'admin-login', 'admin', policy),
+    ).resolves.toBeDefined();
   });
 });

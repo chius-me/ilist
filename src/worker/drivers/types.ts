@@ -45,6 +45,7 @@ export interface ProviderUploadPartResult {
 }
 
 export interface ResumableUploadAdapter {
+  readonly maxPartConcurrency?: number;
   create(input: {
     parentId: string;
     name: string;
@@ -82,9 +83,10 @@ export interface StorageDriver {
   readonly rootId: string;
   readonly capabilities: ReadonlySet<DriverCapability>;
   readonly resumableUpload?: ResumableUploadAdapter;
-  list(parentId: string, cursor?: string): Promise<ListResult>;
+  list(parentId: string, cursor?: string, limit?: number): Promise<ListResult>;
   stat(itemId: string): Promise<StorageItem>;
   isWithin(itemId: string, ancestorId: string): Promise<boolean>;
+  resolvePath?(segments: string[]): Promise<StorageItem[]>;
   getDownload(itemId: string, request: Request): Promise<DownloadResult>;
   createFolder(parentId: string, name: string): Promise<StorageItem>;
   upload(parentId: string, name: string, body: ReadableStream, contentType: string | null): Promise<StorageItem>;

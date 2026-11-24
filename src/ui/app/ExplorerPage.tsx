@@ -1,24 +1,17 @@
-import { AlertCircle, LoaderCircle, RefreshCw } from 'lucide-react';
-import { useCallback, useEffect, useMemo, useRef, useState, type DragEvent } from 'react';
+import { CircleAlert, LoaderCircle, RefreshCw } from 'lucide-react';
+import { lazy, Suspense, useCallback, useEffect, useMemo, useRef, useState, type DragEvent } from 'react';
 import { copyEntries, createFolder, deleteEntries, entryPath, getEntry, moveEntries, patchEntry, setVisibility } from '../api/entries';
+import { createShare } from '../api/shares';
 import { ToastRegion, type ToastMessage, type ToastTone } from '../components/ToastRegion';
 import { EmptyState } from '../features/explorer/EmptyState';
 import { entryActions, EntryActionMenu, type EntryActionId } from '../features/explorer/EntryActionMenu';
+import type { EntryHandlers } from '../features/explorer/EntryRow';
 import { ExplorerCollection } from '../features/explorer/ExplorerCollection';
 import { ExplorerToolbar, type ExplorerSort, type ExplorerView } from '../features/explorer/ExplorerToolbar';
-import type { EntryHandlers } from '../features/explorer/EntryRow';
 import { MobileActionSheet, useMobileActions } from '../features/explorer/MobileActionSheet';
 import { SelectionToolbar } from '../features/explorer/SelectionToolbar';
-import { DeleteDialog } from '../features/operations/DeleteDialog';
-import { FolderPickerDialog } from '../features/operations/FolderPickerDialog';
-import { PropertiesDialog } from '../features/operations/PropertiesDialog';
-import { RenameDialog } from '../features/operations/RenameDialog';
-import { PreviewOverlay } from '../features/preview/PreviewOverlay';
-import { UploadPanel } from '../features/uploads/UploadPanel';
-import { ShareDialog } from '../features/shares/ShareDialog';
-import { createShare } from '../api/shares';
-import { useUploadQueue } from '../features/uploads/useUploadQueue';
-import { useDirectory } from '../hooks/useDirectory';
+import type { EnqueueUploadOptions } from '../features/uploads/useUploadQueue';
+import { useDirectory, clearDirectoryCache } from '../hooks/useDirectory';
 import { useSelection } from '../hooks/useSelection';
 import type { useSession } from '../hooks/useSession';
 import { useI18n } from '../i18n/I18nProvider';
@@ -27,17 +20,25 @@ import { scheduleDeferredFeedback } from '../lib/deferred-feedback';
 import { directoryErrorHint, directoryErrorTitle } from '../lib/directory-errors';
 import { DIRECTORY_QUERY_DEBOUNCE_MS, normalizeDirectoryQuery } from '../lib/directory-query';
 import { sortEntries } from '../lib/explorer-sort';
+import { enqueueFolderUpload, extractDroppedFiles, type RelativeUploadFile } from '../lib/folder-upload';
 import { usePreferences } from '../preferences/PreferencesProvider';
 import { isEntryMutable, type Entry } from '../types/entries';
 
+const DeleteDialog = lazy(() => import('../features/operations/DeleteDialog').then((module) => ({ default: module.DeleteDialog })));
+const FolderPickerDialog = lazy(() => import('../features/operations/FolderPickerDialog').then((module) => ({ default: module.FolderPickerDialog })));
+const PropertiesDialog = lazy(() => import('../features/operations/PropertiesDialog').then((module) => ({ default: module.PropertiesDialog })));
+const RenameDialog = lazy(() => import('../features/operations/RenameDialog').then((module) => ({ default: module.RenameDialog })));
+const PreviewOverlay = lazy(() => import('../features/preview/PreviewOverlay').then((module) => ({ default: module.PreviewOverlay })));
+const ShareDialog = lazy(() => import('../features/shares/ShareDialog').then((module) => ({ default: module.ShareDialog })));
+
 function LoadingCollection({ view, label }: { view: ExplorerView; label: string }) {
   if (view === 'grid') {
-    return <div className="loadingGrid" aria-label={label} aria-busy="true">
+    return <div className="loadingGrid" role="status" aria-label={label} aria-busy="true">
       {[0, 1, 2, 3, 4, 5].map((card) => <div className="loadingCard" key={card}><span /><span /><span /></div>)}
     </div>;
   }
   return (
-    <div className="loadingRows" aria-label={label} aria-busy="true">
+    <div className="loadingRows" role="status" aria-label={label} aria-busy="true">
       {[0, 1, 2, 3, 4].map((row) => <div className="loadingRow" key={row}><span /><span /><span /></div>)}
     </div>
   );
@@ -47,6 +48,9 @@ export interface ExplorerPageProps {
   path: string;
   previewId: string | null;
   session: ReturnType<typeof useSession>;
+  suppressSessionError?: boolean;
+  onEnqueueUpload?: (parentId: string, files: File[], options?: EnqueueUploadOptions) => void;
+  onSubscribeUploadCompleted?: (listener: (parentId: string) => void) => () => void;
   onOpenPath(path: string): void;
   onOpenPreview(id: string): void;
   onClosePreview(): void;
@@ -57,16 +61,22 @@ export function ExplorerPage({
   path,
   previewId,
   session,
+  suppressSessionError = false,
+  onEnqueueUpload,
+  onSubscribeUploadCompleted,
   onOpenPath,
   onOpenPreview,
   onClosePreview,
 }: ExplorerPageProps) {
   const selection = useSelection();
   const { t } = useI18n();
+  const tRef = useRef(t);
+  tRef.current = t;
   const { preferences, updatePreferences } = usePreferences();
   const view: ExplorerView = preferences.defaultView;
   const [query, setQuery] = useState('');
   const [serverQuery, setServerQuery] = useState('');
+  const [searchOpen, setSearchOpen] = useState(false);
   const directory = useDirectory(path, session.status, serverQuery);
   const [sort, setSort] = useState<ExplorerSort>({ field: 'name', order: 'asc' });
   const [previewEntry, setPreviewEntry] = useState<Entry | null>(null);
@@ -78,6 +88,7 @@ export function ExplorerPage({
   const [shareError, setShareError] = useState<string | null>(null);
   const [toasts, setToasts] = useState<ToastMessage[]>([]);
   const toastSequence = useRef(0);
+  const reportedSessionError = useRef<Error | null>(null);
   const [dragOver, setDragOver] = useState(false);
   const dragDepth = useRef(0);
   const mobileActions = useMobileActions();
@@ -86,6 +97,16 @@ export function ExplorerPage({
     toastSequence.current += 1;
     setToasts((current) => [...current, { id: `toast-${toastSequence.current}`, tone, message }].slice(-4));
   }, []);
+
+  useEffect(() => {
+    if (suppressSessionError || !session.error) {
+      if (!session.error) reportedSessionError.current = null;
+      return;
+    }
+    if (reportedSessionError.current === session.error) return;
+    reportedSessionError.current = session.error;
+    pushToast('error', localizedApiError(session.error, tRef.current, 'feedback.sessionError'));
+  }, [pushToast, session.error, suppressSessionError]);
 
   useEffect(() => {
     if (!previewId) {
@@ -100,46 +121,75 @@ export function ExplorerPage({
     setPreviewLoading(true);
     void getEntry(previewId, controller.signal).then(setPreviewEntry).catch((error: unknown) => {
       if (!(error instanceof DOMException && error.name === 'AbortError')) {
-        setPreviewError(new Error(localizedApiError(error, t, 'preview.unavailable')));
+        setPreviewError(new Error(localizedApiError(error, tRef.current, 'preview.unavailable')));
       }
     }).finally(() => {
       if (!controller.signal.aborted) setPreviewLoading(false);
     });
     return () => controller.abort();
-  }, [previewId, t]);
+  }, [previewId]);
 
   useEffect(() => {
+    void path;
     selection.clear();
     setQuery('');
     setServerQuery('');
+    setSearchOpen(false);
     setMenu(null);
   }, [path, selection.clear]);
 
   useEffect(() => {
+    const normalized = normalizeDirectoryQuery(query);
+    if (!normalized) {
+      if (!serverQuery) return;
+      const clearHandle = window.setTimeout(() => setServerQuery(''), DIRECTORY_QUERY_DEBOUNCE_MS);
+      return () => window.clearTimeout(clearHandle);
+    }
+    if (!directory.hasMore && !serverQuery) return;
     const handle = window.setTimeout(
-      () => setServerQuery(normalizeDirectoryQuery(query)),
+      () => setServerQuery(normalized),
       DIRECTORY_QUERY_DEBOUNCE_MS,
     );
     return () => window.clearTimeout(handle);
-  }, [query]);
+  }, [directory.hasMore, query, serverQuery]);
 
-  const entries = useMemo(
-    () => sortEntries(directory.data?.items ?? [], sort),
-    [directory.data, sort],
-  );
+  const currentFolderId = directory.data?.current.id;
+  const refreshDirectory = directory.refresh;
+  useEffect(() => {
+    if (!onSubscribeUploadCompleted) return;
+    return onSubscribeUploadCompleted((parentId) => {
+      clearDirectoryCache();
+      if (currentFolderId === parentId) refreshDirectory();
+    });
+  }, [currentFolderId, onSubscribeUploadCompleted, refreshDirectory]);
+
+  useEffect(() => {
+    if (previewEntry?.name) {
+      document.title = `${previewEntry.name} · iList`;
+      return;
+    }
+    const currentName = directory.data?.current.name;
+    document.title = path === '/' || !currentName || currentName === 'iList'
+      ? 'iList'
+      : `${currentName} · iList`;
+  }, [directory.data?.current.name, path, previewEntry?.name]);
+
+  const normalizedQuery = normalizeDirectoryQuery(query);
+  const entries = useMemo(() => {
+    const items = directory.data?.items ?? [];
+    const filtered = normalizedQuery && !serverQuery
+      ? items.filter((entry) => entry.name.toLowerCase().includes(normalizedQuery.toLowerCase()))
+      : items;
+    return sortEntries(filtered, sort);
+  }, [directory.data, normalizedQuery, serverQuery, sort]);
 
   const admin = session.status === 'admin';
   const mutableVisibleIds = useMemo(() => admin ? entries.filter(isEntryMutable).map((entry) => entry.id) : [], [admin, entries]);
+  const allSelected = mutableVisibleIds.length > 0 && mutableVisibleIds.every((id) => selection.selectedIds.has(id));
+  const someSelected = mutableVisibleIds.some((id) => selection.selectedIds.has(id));
   const canUpload = admin && directory.data?.current.capabilities.upload === true;
   const canCreateFolder = admin && directory.data?.current.capabilities.createFolder === true;
-  const uploads = useUploadQueue({
-    canUpload,
-    multipartUpload: directory.data?.current.capabilities.multipartUpload === true,
-    existingNames: directory.data?.items.map((entry) => entry.name) ?? [],
-    onCompleted: (parentId) => {
-      if (directory.data?.current.id === parentId) directory.refresh();
-    },
-  });
+  const breadcrumbs = directory.data?.breadcrumbs ?? [];
   const handlers: EntryHandlers = {
     onOpen: (entry) => onOpenPath(entryPath(path, entry)),
     onPreview: (entry) => onOpenPreview(entry.id),
@@ -149,7 +199,40 @@ export function ExplorerPage({
       else selection.toggle(entry.id);
     },
     onMenu: (entry, anchor) => setMenu({ entry, anchor: anchor ?? null }),
+    folderHrefFor: (entry) => entryPath(path, entry),
   };
+
+  useEffect(() => {
+    const handleGlobalKey = (event: KeyboardEvent) => {
+      if (previewId || dialog || menu || event.metaKey || event.ctrlKey || event.altKey) return;
+      const target = event.target as HTMLElement | null;
+      if (target && (target.tagName === 'INPUT' || target.tagName === 'TEXTAREA' || target.tagName === 'SELECT' || target.isContentEditable)) {
+        return;
+      }
+      if (event.key === '/') {
+        event.preventDefault();
+        setSearchOpen(true);
+        return;
+      }
+      if (event.key === 'Escape') {
+        if (selection.selectedIds.size > 0) {
+          event.preventDefault();
+          selection.clear();
+        } else if (query) {
+          event.preventDefault();
+          setQuery('');
+          setSearchOpen(false);
+        }
+        return;
+      }
+      if (event.key === 'Backspace' && path !== '/' && breadcrumbs.length >= 2) {
+        event.preventDefault();
+        onOpenPath(breadcrumbs[breadcrumbs.length - 2]!.path);
+      }
+    };
+    window.addEventListener('keydown', handleGlobalKey);
+    return () => window.removeEventListener('keydown', handleGlobalKey);
+  }, [breadcrumbs, dialog, menu, onOpenPath, path, previewId, query, selection]);
   const selectedEntries = entries.filter((entry) => selection.selectedIds.has(entry.id) && isEntryMutable(entry));
   const selectionCapabilities = useMemo(() => ({
     canMove: selectedEntries.length > 0 && selectedEntries.every((entry) => entry.capabilities.move),
@@ -159,8 +242,36 @@ export function ExplorerPage({
     canDelete: selectedEntries.length > 0 && selectedEntries.every((entry) => entry.capabilities.delete),
   }), [selectedEntries]);
 
+  function enqueueFilesFor(parentId: string, files: File[]) {
+    if (directory.data && canUpload && onEnqueueUpload) {
+      onEnqueueUpload(parentId, files, {
+        canUpload,
+        multipartUpload: directory.data.current.capabilities.multipartUpload === true,
+        existingNames: parentId === directory.data.current.id ? directory.data.items.map((entry) => entry.name) : [],
+      });
+    }
+  }
+
   function enqueueFiles(files: File[]) {
-    if (directory.data && canUpload) uploads.enqueue(directory.data.current.id, files);
+    if (directory.data) {
+      enqueueFilesFor(directory.data.current.id, files);
+    }
+  }
+
+  async function uploadRelativeFiles(items: RelativeUploadFile[]) {
+    if (!directory.data || !canUpload || !onEnqueueUpload || items.length === 0) return;
+    try {
+      const outcome = await enqueueFolderUpload(items, directory.data.current.id, {
+        createFolder,
+        existingEntries: directory.data.items,
+        enqueueFiles: enqueueFilesFor,
+      });
+      if (outcome.foldersCreated > 0) {
+        directory.refresh();
+      }
+    } catch (error) {
+      pushToast('error', localizedApiError(error, t, 'feedback.operationFailed'));
+    }
   }
 
   function acceptsFiles(event: DragEvent<HTMLElement>): boolean {
@@ -189,7 +300,17 @@ export function ExplorerPage({
     event.preventDefault();
     dragDepth.current = 0;
     setDragOver(false);
-    enqueueFiles(Array.from(event.dataTransfer.files));
+    const plainFiles = Array.from(event.dataTransfer.files);
+    const hasDirectoryEntry = Array.from(event.dataTransfer.items ?? []).some(
+      (item) => typeof item.webkitGetAsEntry === 'function' && item.webkitGetAsEntry()?.isDirectory === true,
+    );
+    if (hasDirectoryEntry) {
+      void extractDroppedFiles(event.dataTransfer)
+        .then(({ files }) => uploadRelativeFiles(files))
+        .catch((error: unknown) => pushToast('error', localizedApiError(error, t, 'feedback.operationFailed')));
+      return;
+    }
+    enqueueFiles(plainFiles);
   }
 
   async function runBatch(
@@ -234,7 +355,14 @@ export function ExplorerPage({
     if (action === 'publish' || action === 'hide') void runBatch(() => setVisibility([entry.id], action === 'publish'));
   }
 
-  const currentEntryActions = menu ? entryActions(menu.entry, { onOpen: handlers.onOpen, onPreview: handlers.onPreview, onAction: openEntryAction, onCopyFailure: () => pushToast('error', t('feedback.copyFailed')), canShare: admin }) : [];
+  const currentEntryActions = menu ? entryActions(menu.entry, {
+    onOpen: handlers.onOpen,
+    onPreview: handlers.onPreview,
+    onAction: openEntryAction,
+    onCopySuccess: () => pushToast('success', t('feedback.linkCopied')),
+    onCopyFailure: () => pushToast('error', t('feedback.copyFailed')),
+    canShare: admin,
+  }) : [];
 
   return (
     <>
@@ -265,20 +393,23 @@ export function ExplorerPage({
               selectionCount={selectedEntries.length}
               canUpload={canUpload}
               canCreateFolder={canCreateFolder}
+              searchOpen={searchOpen}
+              onSearchOpenChange={setSearchOpen}
               onQuery={setQuery}
               onOpenPath={onOpenPath}
               onRefresh={directory.refresh}
               onSort={setSort}
               onView={(nextView) => updatePreferences({ defaultView: nextView })}
               onUpload={enqueueFiles}
+              onUploadFolder={(items) => void uploadRelativeFiles(items)}
               onCreateFolder={() => setDialog({ type: 'create', entries: [] })}
             />}
           </div>
           <section className={`explorerContent${dragOver ? ' isDragOver' : ''}`} id="file-list" tabIndex={-1} aria-label={previewId ? t('explorer.filesWithPreview', { id: previewId }) : t('nav.files')} onDragEnter={onDragEnter} onDragOver={onDragOver} onDragLeave={onDragLeave} onDrop={onDrop}>
-            {directory.error && directory.data ? <div className="retryBanner" role="alert"><AlertCircle aria-hidden="true" size={18} /><span>{directoryErrorHint(directory.error, t)}</span><button type="button" onClick={directory.refresh}><RefreshCw aria-hidden="true" size={15} />{t('action.retry')}</button></div> : null}
+            {directory.error && directory.data ? <div className="retryBanner" role="alert"><CircleAlert aria-hidden="true" size={18} /><span>{directoryErrorHint(directory.error, t)}</span><button type="button" onClick={directory.refresh}><RefreshCw aria-hidden="true" size={15} />{t('action.retry')}</button></div> : null}
             {directory.loading && !directory.data ? <LoadingCollection view={view} label={t('state.loadingFiles')} /> : null}
-            {directory.error && !directory.data ? <div className="errorState" role="alert"><AlertCircle aria-hidden="true" size={32} /><strong>{directoryErrorTitle(directory.error, t)}</strong><span>{directoryErrorHint(directory.error, t)}</span><button className="button" type="button" onClick={directory.refresh}><RefreshCw aria-hidden="true" size={16} />{t('action.retry')}</button></div> : null}
-            {directory.data && !directory.loading && !directory.error && entries.length === 0 ? <EmptyState query={serverQuery} admin={admin} /> : null}
+            {directory.error && !directory.data ? <div className="errorState" role="alert"><CircleAlert aria-hidden="true" size={32} /><strong>{directoryErrorTitle(directory.error, t)}</strong><span>{directoryErrorHint(directory.error, t)}</span><button className="button" type="button" onClick={directory.refresh}><RefreshCw aria-hidden="true" size={16} />{t('action.retry')}</button></div> : null}
+            {directory.data && !directory.loading && !directory.error && entries.length === 0 ? <EmptyState query={normalizedQuery || serverQuery} admin={admin} /> : null}
             {directory.data && entries.length > 0 ? <ExplorerCollection
               view={view}
               entries={entries}
@@ -288,36 +419,75 @@ export function ExplorerPage({
               onSelectAll={selection.selectAll}
               onReplaceSelection={selection.replace}
               onClearSelection={selection.clear}
+              sort={sort}
+              onSort={setSort}
+              allSelected={allSelected}
+              someSelected={someSelected}
+              onToggleSelectAll={(checked) => checked ? selection.selectAll(mutableVisibleIds) : selection.clear()}
             /> : null}
+            {directory.data && directory.hasMore && !normalizedQuery ? (
+              <div className="explorerFooter">
+                <button
+                  className="button"
+                  type="button"
+                  disabled={directory.loadingMore}
+                  onClick={directory.loadMore}
+                >
+                  {directory.loadingMore ? t('status.loadingMore') : t('action.loadMore')}
+                </button>
+              </div>
+            ) : null}
             {directory.loading && directory.data ? <div className="refreshing" role="status" aria-label={t('state.refreshing')}><LoaderCircle aria-hidden="true" size={16} />{t('state.refreshing')}</div> : null}
           </section>
         </div>
       </main>
-      <UploadPanel tasks={uploads.tasks} onPause={uploads.pause} onResume={uploads.resume} onCancel={uploads.cancel} onRetry={uploads.retry} onRebind={uploads.rebind} onRemove={uploads.remove} onClearCompleted={uploads.clearCompleted} />
       <ToastRegion toasts={toasts} onDismiss={dismissToast} />
       {menu && !mobileActions ? <EntryActionMenu entry={menu.entry} anchor={menu.anchor} actions={currentEntryActions} onClose={() => setMenu(null)} /> : null}
       {menu && mobileActions ? <MobileActionSheet open title={t('entry.actions', { name: menu.entry.name })} anchor={menu.anchor} actions={currentEntryActions} translate={t} cancelLabel={t('action.cancel')} onClose={() => setMenu(null)} /> : null}
-      {dialog?.type === 'rename' ? <RenameDialog open title={t('dialog.renameTitle', { name: dialog.entries[0].name })} initialName={dialog.entries[0].name} onClose={() => setDialog(null)} onSubmit={async (name) => {
-        await patchEntry(dialog.entries[0].id, { name });
-        directory.refresh();
-        // Defer toast until after RenameDialog closes and clears modal inert.
-        scheduleDeferredFeedback(() => { pushToast('success', t('feedback.renamed')); });
-      }} /> : null}
-      {dialog?.type === 'create' && directory.data && canCreateFolder ? <RenameDialog open title={t('toolbar.createFolder')} submitLabel={t('common.save')} onClose={() => setDialog(null)} onSubmit={async (name) => {
-        await createFolder(directory.data!.current.id, name);
-        directory.refresh();
-        scheduleDeferredFeedback(() => { pushToast('success', t('feedback.folderCreated')); });
-      }} /> : null}
-      {dialog?.type === 'move' ? <FolderPickerDialog mode="move" entries={dialog.entries} onClose={() => setDialog(null)} onSubmit={(destinationId) => runBatch(() => moveEntries(dialog.entries.map((entry) => entry.id), destinationId), { errorSurface: 'throw' })} /> : null}
-      {dialog?.type === 'copy' ? <FolderPickerDialog mode="copy" entries={dialog.entries} onClose={() => setDialog(null)} onSubmit={(destinationId) => runBatch(() => copyEntries(dialog.entries.map((entry) => entry.id), destinationId), { errorSurface: 'throw' })} /> : null}
-      {dialog?.type === 'delete' ? <DeleteDialog entries={dialog.entries} onClose={() => setDialog(null)} onSubmit={() => runBatch(() => deleteEntries(dialog.entries.map((entry) => entry.id)), { errorSurface: 'throw' })} /> : null}
-      {dialog?.type === 'properties' ? <PropertiesDialog entry={dialog.entries[0]} onClose={() => setDialog(null)} onSubmit={async (entryPatch) => {
-        await patchEntry(dialog.entries[0].id, entryPatch);
-        directory.refresh();
-        scheduleDeferredFeedback(() => { pushToast('success', t('feedback.propertiesSaved')); });
-      }} /> : null}
-      {dialog?.type === 'share' ? <ShareDialog entry={dialog.entries[0]} busy={operationPending} error={shareError} onClose={() => { setDialog(null); setShareError(null); }} onCreate={async (input) => { setOperationPending(true); setShareError(null); try { return await createShare(input); } catch (error) { setShareError(localizedApiError(error, t, 'share.unableSave')); throw error; } finally { setOperationPending(false); } }} /> : null}
-      {previewId ? <PreviewOverlay entry={previewEntry} loading={previewLoading} error={previewError} onClose={onClosePreview} /> : null}
+      <Suspense fallback={null}>
+        {dialog?.type === 'rename' ? <RenameDialog open title={t('dialog.renameTitle', { name: dialog.entries[0].name })} initialName={dialog.entries[0].name} onClose={() => setDialog(null)} onSubmit={async (name) => {
+          const targetId = dialog.entries[0].id;
+          directory.applyLocalUpdate((current) => ({
+            ...current,
+            items: current.items.map((item) => item.id === targetId ? { ...item, name } : item),
+          }));
+          try {
+            await patchEntry(targetId, { name });
+          } finally {
+            directory.refresh();
+          }
+          // Defer toast until after RenameDialog closes and clears modal inert.
+          scheduleDeferredFeedback(() => { pushToast('success', t('feedback.renamed')); });
+        }} /> : null}
+        {dialog?.type === 'create' && directory.data && canCreateFolder ? <RenameDialog open title={t('toolbar.createFolder')} submitLabel={t('common.save')} onClose={() => setDialog(null)} onSubmit={async (name) => {
+          await createFolder(directory.data!.current.id, name);
+          directory.refresh();
+          scheduleDeferredFeedback(() => { pushToast('success', t('feedback.folderCreated')); });
+        }} /> : null}
+        {dialog?.type === 'move' ? <FolderPickerDialog mode="move" entries={dialog.entries} onClose={() => setDialog(null)} onSubmit={(destinationId) => runBatch(() => moveEntries(dialog.entries.map((entry) => entry.id), destinationId), { errorSurface: 'throw' })} /> : null}
+        {dialog?.type === 'copy' ? <FolderPickerDialog mode="copy" entries={dialog.entries} onClose={() => setDialog(null)} onSubmit={(destinationId) => runBatch(() => copyEntries(dialog.entries.map((entry) => entry.id), destinationId), { errorSurface: 'throw' })} /> : null}
+        {dialog?.type === 'delete' ? <DeleteDialog entries={dialog.entries} onClose={() => setDialog(null)} onSubmit={async () => {
+          const targetIds = dialog.entries.map((entry) => entry.id);
+          await runBatch(async () => {
+            const result = await deleteEntries(targetIds);
+            if (result.succeeded.length > 0) {
+              const removed = new Set(result.succeeded);
+              directory.applyLocalUpdate((current) => ({
+                ...current,
+                items: current.items.filter((item) => !removed.has(item.id)),
+              }));
+            }
+            return result;
+          }, { errorSurface: 'throw' });
+        }} /> : null}
+        {dialog?.type === 'properties' ? <PropertiesDialog entry={dialog.entries[0]} onClose={() => setDialog(null)} onSubmit={async (entryPatch) => {
+          await patchEntry(dialog.entries[0].id, entryPatch);
+          directory.refresh();
+          scheduleDeferredFeedback(() => { pushToast('success', t('feedback.propertiesSaved')); });
+        }} /> : null}
+        {dialog?.type === 'share' ? <ShareDialog entry={dialog.entries[0]} busy={operationPending} error={shareError} onClose={() => { setDialog(null); setShareError(null); }} onCreate={async (input) => { setOperationPending(true); setShareError(null); try { return await createShare(input); } catch (error) { setShareError(localizedApiError(error, t, 'share.unableSave')); throw error; } finally { setOperationPending(false); } }} /> : null}
+        {previewId ? <PreviewOverlay entry={previewEntry} entries={entries} onSelectEntry={(next) => onOpenPreview(next.id)} loading={previewLoading} error={previewError} onClose={onClosePreview} /> : null}
+      </Suspense>
     </>
   );
 }

@@ -1,15 +1,20 @@
 import { HttpError } from '../../http';
+import { isRecord } from '../../shared/encoding';
+import { headMetadataResponse } from '../../shared/http-client';
 import type { Mount } from '../../types';
 import { UPLOAD_PART_SIZE_BYTES, type DownloadResult, type ListResult, type ResumableUploadAdapter, type StorageDriver, type StorageItem } from '../types';
 import type { GraphDriveItem, GraphItemUpdate, GraphListResult, GraphUploadPartResult, GraphUploadSession, UploadSessionRequestOptions } from './client';
 import { graphItemKind, hasSupportedGraphItemType, mapGraphItem } from './mapper';
 
 export interface OneDriveDriverClient {
-  list(parentId: string, cursor?: string): Promise<GraphListResult>;
+  list(parentId: string, cursor?: string, limit?: number): Promise<GraphListResult>;
   stat(itemId: string): Promise<GraphDriveItem>;
+  statByPath?(rootId: string, segments: string[]): Promise<GraphDriveItem>;
   getDownloadUrl(itemId: string): Promise<string>;
+  download?(itemId: string, range?: string | null): Promise<Response>;
   createFolder(parentId: string, name: string): Promise<GraphDriveItem>;
   upload(parentId: string, name: string, body: ReadableStream, contentType: string | null): Promise<GraphDriveItem>;
+  copy?(itemId: string, destinationParentId: string, name: string): Promise<GraphDriveItem>;
   createUploadSession(parentId: string, name: string): Promise<GraphUploadSession>;
   uploadSessionPart(session: GraphUploadSession, body: ReadableStream, contentRange: string, contentLength: number, options?: UploadSessionRequestOptions): Promise<GraphUploadPartResult>;
   getUploadSessionStatus(session: GraphUploadSession): Promise<GraphUploadSession>;
@@ -36,13 +41,12 @@ function invalidUploadState(): HttpError {
   return new HttpError(400, 'INVALID_UPLOAD_STATE', 'OneDrive upload session state is invalid');
 }
 
-function isRecord(value: unknown): value is Record<string, unknown> {
-  return typeof value === 'object' && value !== null && !Array.isArray(value);
-}
-
 export class OneDriveDriver implements StorageDriver {
   readonly capabilities = new Set(['list', 'download', 'upload', 'multipartUpload', 'createFolder', 'rename', 'move', 'copy', 'delete'] as const);
   readonly rootId: string;
+  private canonicalRootId: string | null = null;
+  private readonly verifiedInScope = new Set<string>();
+
   readonly resumableUpload: ResumableUploadAdapter = {
     create: async (input) => {
       await this.assertInScope(input.parentId);
@@ -99,17 +103,81 @@ export class OneDriveDriver implements StorageDriver {
     },
   };
 
-  constructor(private readonly mount: Mount, private readonly client: OneDriveDriverClient) {
+  constructor(mount: Mount, private readonly client: OneDriveDriverClient) {
     this.rootId = mount.rootItemId ?? 'root';
   }
 
-  async list(parentId: string, cursor?: string): Promise<ListResult> {
+  async list(parentId: string, cursor?: string, limit?: number): Promise<ListResult> {
     await this.assertInScope(parentId);
-    const result = await this.client.list(parentId, cursor);
+    const result = limit === undefined
+      ? await this.client.list(parentId, cursor)
+      : await this.client.list(parentId, cursor, limit);
+    const items = result.items.filter(hasSupportedGraphItemType).map((item) => {
+      if (graphItemKind(item) === 'folder') this.verifiedInScope.add(item.id);
+      return mapGraphItem(item, parentId);
+    });
     return {
-      items: result.items.filter(hasSupportedGraphItemType).map((item) => mapGraphItem(item, parentId)),
+      items,
       nextCursor: result.nextCursor,
     };
+  }
+
+  async resolvePath(segments: string[]): Promise<StorageItem[]> {
+    const rootRaw = await this.client.stat(this.rootId);
+    this.canonicalRootId = rootRaw.id;
+    this.verifiedInScope.add(this.rootId);
+    this.verifiedInScope.add(rootRaw.id);
+    const rootItem = mapGraphItem(rootRaw, null);
+    if (segments.length === 0) return [rootItem];
+
+    for (const segment of segments) {
+      if (!segment || segment === '.' || segment === '..' || /[/\\:\u0000-\u001f\u007f]/.test(segment)) {
+        throw new HttpError(404, 'ENTRY_NOT_FOUND', 'Entry not found');
+      }
+    }
+
+    if (this.client.statByPath) {
+      const resolvedRaw = await Promise.all(
+        segments.map(async (_segment, index) => {
+          try {
+            return await this.client.statByPath!(this.rootId, segments.slice(0, index + 1));
+          } catch (error) {
+            if (error instanceof HttpError && error.status === 404) {
+              throw new HttpError(404, 'ENTRY_NOT_FOUND', 'Entry not found');
+            }
+            throw error;
+          }
+        }),
+      );
+      const chain: StorageItem[] = [rootItem];
+      let parentId = rootItem.id;
+      for (let index = 0; index < resolvedRaw.length; index += 1) {
+        const raw = resolvedRaw[index]!;
+        if (!hasSupportedGraphItemType(raw)) throw new HttpError(404, 'ENTRY_NOT_FOUND', 'Entry not found');
+        if (index < resolvedRaw.length - 1 && graphItemKind(raw) !== 'folder') {
+          throw new HttpError(404, 'ENTRY_NOT_FOUND', 'Entry not found');
+        }
+        await this.assertInScope(raw.id, raw);
+        this.verifiedInScope.add(raw.id);
+        const mapped = mapGraphItem(raw, parentId);
+        chain.push(mapped);
+        parentId = mapped.id;
+      }
+      return chain;
+    }
+
+    const chain: StorageItem[] = [rootItem];
+    let current = rootItem;
+    for (let index = 0; index < segments.length; index += 1) {
+      const segment = segments[index]!;
+      const folderOnly = index < segments.length - 1;
+      const items = await this.listAll(current.id);
+      const child = items.find((entry) => entry.name === segment && (!folderOnly || entry.kind === 'folder'));
+      if (!child) throw new HttpError(404, 'ENTRY_NOT_FOUND', 'Entry not found');
+      chain.push(child);
+      current = child;
+    }
+    return chain;
   }
 
   async stat(itemId: string): Promise<StorageItem> {
@@ -122,10 +190,17 @@ export class OneDriveDriver implements StorageDriver {
     return this.isWithinAncestor(itemId, ancestorId);
   }
 
-  async getDownload(itemId: string, _request: Request): Promise<DownloadResult> {
+  async getDownload(itemId: string, request: Request): Promise<DownloadResult> {
     const item = await this.client.stat(itemId);
     await this.assertInScope(itemId, item);
-    if (graphItemKind(item) !== 'file') throw new HttpError(400, 'INVALID_STORAGE_OPERATION', 'Folders cannot be downloaded');
+    const mapped = mapGraphItem(item, null);
+    if (mapped.kind !== 'file') throw new HttpError(400, 'INVALID_STORAGE_OPERATION', 'Folders cannot be downloaded');
+    if (request.method.toUpperCase() === 'HEAD') {
+      return { kind: 'stream', response: headMetadataResponse(mapped) };
+    }
+    if (this.client.download) {
+      return { kind: 'stream', response: await this.client.download(itemId, request.headers.get('range')) };
+    }
     return { kind: 'redirect', url: await this.client.getDownloadUrl(itemId) };
   }
 
@@ -149,6 +224,7 @@ export class OneDriveDriver implements StorageDriver {
     if (itemId === this.rootId) throw new HttpError(400, 'INVALID_STORAGE_OPERATION', 'Mount root cannot be moved');
     await this.assertInScope(itemId);
     await this.assertInScope(destinationId);
+    this.verifiedInScope.delete(itemId);
     return mapGraphItem(await this.client.update(itemId, { parentReference: { id: destinationId } }), destinationId);
   }
 
@@ -159,6 +235,9 @@ export class OneDriveDriver implements StorageDriver {
     const source = await this.client.stat(itemId);
     if (graphItemKind(source) === 'folder') {
       throw new HttpError(405, 'OPERATION_UNSUPPORTED', 'OneDrive folder copy is not supported');
+    }
+    if (this.client.copy) {
+      return mapGraphItem(await this.client.copy(itemId, destinationParentId, source.name), destinationParentId);
     }
     const downloadUrl = await this.client.getDownloadUrl(itemId);
     const response = await fetch(downloadUrl);
@@ -179,7 +258,20 @@ export class OneDriveDriver implements StorageDriver {
   async remove(itemId: string): Promise<void> {
     if (itemId === this.rootId) throw new HttpError(400, 'INVALID_STORAGE_OPERATION', 'Mount root cannot be deleted');
     await this.assertInScope(itemId);
+    this.verifiedInScope.delete(itemId);
     await this.client.remove(itemId);
+  }
+
+  private async listAll(parentId: string): Promise<StorageItem[]> {
+    const items: StorageItem[] = [];
+    let cursor: string | undefined;
+    for (let page = 0; page < 100; page += 1) {
+      const result = await this.list(parentId, cursor);
+      items.push(...result.items);
+      if (!result.nextCursor) return items;
+      cursor = result.nextCursor;
+    }
+    throw new HttpError(502, 'PROVIDER_PAGINATION_LIMIT', 'Storage provider returned too many pages');
   }
 
   private requireUploadSessionState(state: Record<string, unknown>): OneDriveUploadSessionState {
@@ -213,20 +305,37 @@ export class OneDriveDriver implements StorageDriver {
     return { uploadUrl: state.uploadUrl, expirationDateTime: state.expirationDateTime, integrityProof: state.integrityProof };
   }
 
+  private async resolveCanonicalRootId(knownItem?: GraphDriveItem): Promise<string> {
+    if (this.canonicalRootId) return this.canonicalRootId;
+    const ancestor = this.rootId && knownItem && this.rootId === knownItem.id
+      ? knownItem
+      : await this.client.stat(this.rootId);
+    this.canonicalRootId = ancestor.id;
+    return ancestor.id;
+  }
+
   private async assertInScope(itemId: string, knownItem?: GraphDriveItem): Promise<void> {
-    if (await this.isWithinAncestor(itemId, this.rootId, knownItem)) return;
+    if (this.verifiedInScope.has(itemId)) return;
+    if (await this.isWithinAncestor(itemId, this.rootId, knownItem)) {
+      this.verifiedInScope.add(itemId);
+      return;
+    }
     throw new HttpError(404, 'STORAGE_ITEM_NOT_FOUND', 'OneDrive item was not found');
   }
 
   private async isWithinAncestor(itemId: string, ancestorId: string, knownItem?: GraphDriveItem): Promise<boolean> {
-    let ancestor: GraphDriveItem;
+    let canonicalAncestorId: string;
     try {
-      ancestor = itemId === ancestorId && knownItem ? knownItem : await this.client.stat(ancestorId);
+      if (ancestorId === this.rootId) {
+        canonicalAncestorId = await this.resolveCanonicalRootId(itemId === ancestorId ? knownItem : undefined);
+      } else {
+        const ancestor = itemId === ancestorId && knownItem ? knownItem : await this.client.stat(ancestorId);
+        canonicalAncestorId = ancestor.id;
+      }
     } catch (error) {
       if (error instanceof HttpError && error.status === 404) return false;
       throw error;
     }
-    const canonicalAncestorId = ancestor.id;
     if (itemId === ancestorId || knownItem?.id === canonicalAncestorId) return true;
 
     let item: GraphDriveItem;
@@ -241,6 +350,7 @@ export class OneDriveDriver implements StorageDriver {
     for (let depth = 0; depth < 256; depth += 1) {
       const parentId = item.parentReference?.id;
       if (parentId === canonicalAncestorId) return true;
+      if (ancestorId === this.rootId && parentId && this.verifiedInScope.has(parentId)) return true;
       if (!parentId || visited.has(parentId)) return false;
       visited.add(parentId);
       try {

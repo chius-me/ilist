@@ -49,11 +49,14 @@ const parser = new XMLParser({
   parseTagValue: false,
   trimValues: false,
   processEntities: true,
+  htmlEntities: false,
   removeNSPrefix: true,
 });
 
 function parseDocument(xml: string): XmlRecord {
-  if (!xml.trim() || XMLValidator.validate(xml) !== true) throw new S3XmlError();
+  if (!xml.trim() || /<!(?:DOCTYPE|ENTITY)\b/i.test(xml) || XMLValidator.validate(xml) !== true) {
+    throw new S3XmlError();
+  }
   const parsed: unknown = parser.parse(xml);
   if (!isRecord(parsed)) throw new S3XmlError();
   return parsed;
@@ -175,4 +178,20 @@ export function parseCompleteMultipartUploadResponseXml(xml: string): ParsedComp
 
   const root = record(document.CompleteMultipartUploadResult);
   return { kind: 'result', etag: requiredTrimmedText(root, 'ETag') };
+}
+
+export function parseDeleteObjectsResponseXml(xml: string): ParsedS3Error[] {
+  if (!xml.trim()) return [];
+  const document = parseDocument(xml);
+  if (document.Error !== undefined) {
+    return [parseS3ErrorRoot(record(document.Error))];
+  }
+  if (document.DeleteResult === undefined) {
+    throw new S3XmlError();
+  }
+  if (document.DeleteResult === '' || document.DeleteResult === null) {
+    return [];
+  }
+  const root = record(document.DeleteResult);
+  return asArray(root.Error).map((value) => parseS3ErrorRoot(record(value)));
 }

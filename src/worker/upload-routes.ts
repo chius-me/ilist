@@ -29,12 +29,13 @@ export async function handleUploadRoutes(
   env: Env,
   url: URL,
   ownerSessionId: string,
+  ctx?: ExecutionContext,
 ): Promise<Response | null> {
   if (url.pathname === SESSION_PATH) {
-    if (request.method === 'GET') return ok(await listResumableUploads(env, ownerSessionId));
+    if (request.method === 'GET') return ok(await listResumableUploads(env, ownerSessionId, ctx));
     if (request.method !== 'POST') return methodNotAllowed();
     const body = await readJson<unknown>(request);
-    return ok(await createResumableUpload(env, ownerSessionId, body as CreateUploadSessionBody));
+    return ok(await createResumableUpload(env, ownerSessionId, body as CreateUploadSessionBody, ctx));
   }
 
   const partMatch = /^\/api\/admin\/uploads\/sessions\/([^/]+)\/parts\/([^/]+)$/.exec(url.pathname);

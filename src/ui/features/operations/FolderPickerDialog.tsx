@@ -24,7 +24,7 @@ export function FolderPickerDialog({
   onClose: () => void;
   onSubmit: (destinationId: string) => Promise<void>;
 }) {
-  const { locale, t } = useFeedbackI18n();
+  const { t } = useFeedbackI18n();
   // Keep a stable effect deps list: fallback t from useFeedbackI18n is a new function every render
   // when I18nProvider is absent (unit tests), and must not retrigger directory loads.
   const tRef = useRef(t);
@@ -38,6 +38,7 @@ export function FolderPickerDialog({
   const backdrop = useRef<HTMLDivElement>(null);
   useModalFocus({ active: true, containerRef: backdrop, initialFocusRef: closeButton, onClose });
   useEffect(() => {
+    void refreshVersion;
     let active = true;
     setDirectory(null);
     setError(null);
@@ -45,7 +46,7 @@ export function FolderPickerDialog({
       if (active) setError(localizedApiError(reason, tRef.current, 'dialog.unableLoadFolders'));
     });
     return () => { active = false; };
-  }, [locale, path, refreshVersion]);
+  }, [path, refreshVersion]);
   const selected = new Set(entries.map((entry) => entry.id));
   const canDropHere = canAcceptDestination(directory);
   const isCopy = mode === 'copy';

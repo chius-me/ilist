@@ -4,11 +4,19 @@ import {
   signS3Headers,
   type S3SigningCredentials,
 } from './signing';
+import { bytesToBase64 } from '../../shared/encoding';
+import {
+  DEFAULT_METADATA_TIMEOUT_MS,
+  DEFAULT_TRANSFER_TIMEOUT_MS,
+  fetchWithRetry,
+  retryAfterSeconds as parseRetryAfterSecondsHeader,
+} from '../../shared/http-client';
 import type { CompletedUploadPart } from '../types';
 import {
   parseCompleteMultipartUploadResponseXml,
   parseCopyObjectResponseXml,
   parseCreateMultipartUploadResponseXml,
+  parseDeleteObjectsResponseXml,
   parseListObjectsV2Xml,
   parseS3ErrorXml,
   type S3ListObjectsResult,
@@ -24,6 +32,7 @@ export interface S3ClientOptions {
   credentials: S3SigningCredentials;
   fetch?: typeof fetch;
   now?: () => Date;
+  maxRetries?: number;
 }
 
 export interface ListObjectsV2Options {
@@ -50,6 +59,30 @@ export interface S3UploadPartOptions {
 }
 
 const MAX_S3_XML_BYTES = 1024 * 1024;
+const DELETE_OBJECTS_BATCH_SIZE = 1000;
+
+export async function mapWithConcurrency<T, R>(
+  items: readonly T[],
+  concurrency: number,
+  worker: (item: T, index: number) => Promise<R>,
+): Promise<R[]> {
+  if (items.length === 0) return [];
+  const limit = Math.max(1, Math.min(concurrency, items.length));
+  const results = new Array<R>(items.length);
+  let nextIndex = 0;
+
+  async function runWorker(): Promise<void> {
+    while (true) {
+      const current = nextIndex;
+      nextIndex += 1;
+      if (current >= items.length) return;
+      results[current] = await worker(items[current]!, current);
+    }
+  }
+
+  await Promise.all(Array.from({ length: limit }, () => runWorker()));
+  return results;
+}
 
 export class S3Error extends Error {
   readonly status: number;
@@ -76,7 +109,7 @@ export class S3Error extends Error {
   }
 
   static async fromResponse(response: Response): Promise<S3Error> {
-    const retryAfterSeconds = parseRetryAfterSeconds(response.headers.get('retry-after'));
+    const retryAfterSeconds = parseRetryAfterSecondsHeader(response.headers.get('retry-after'));
     const fallback = new S3Error(
       response.status,
       `S3_HTTP_${response.status}`,
@@ -117,6 +150,7 @@ export class S3Client {
   private readonly credentials: S3SigningCredentials;
   private readonly fetcher: typeof fetch;
   private readonly now: () => Date;
+  private readonly maxRetries: number;
 
   constructor(options: S3ClientOptions) {
     this.endpoint = new URL(options.endpoint);
@@ -128,6 +162,7 @@ export class S3Client {
     this.credentials = options.credentials;
     this.fetcher = options.fetch ?? fetch;
     this.now = options.now ?? (() => new Date());
+    this.maxRetries = options.maxRetries ?? 2;
 
     if (!this.bucket) throw new TypeError('S3 bucket is required');
     if (!this.region) throw new TypeError('S3 region is required');
@@ -161,13 +196,20 @@ export class S3Client {
   getObject(key: string, options: GetObjectOptions = {}): Promise<Response> {
     const headers = new Headers(options.headers);
     if (options.range !== undefined) headers.set('range', options.range);
-    return this.send('GET', this.requestUrl(key), { headers });
+    return this.send('GET', this.requestUrl(key), {
+      headers,
+      timeoutMs: DEFAULT_TRANSFER_TIMEOUT_MS,
+    });
   }
 
   putObject(key: string, body: BodyInit | null, options: PutObjectOptions = {}): Promise<Response> {
     const headers = new Headers(options.headers);
     if (options.contentType !== undefined) headers.set('content-type', options.contentType);
-    return this.send('PUT', this.requestUrl(key), { headers, body });
+    return this.send('PUT', this.requestUrl(key), {
+      headers,
+      body,
+      timeoutMs: DEFAULT_TRANSFER_TIMEOUT_MS,
+    });
   }
 
   async createMultipartUpload(key: string, contentType: string | null, marker: string): Promise<{ uploadId: string }> {
@@ -189,7 +231,11 @@ export class S3Client {
       throw new RangeError('S3 multipart part number must be a positive integer');
     }
     const url = `${this.requestUrl(key)}?partNumber=${encodeS3Component(String(partNumber))}&uploadId=${encodeS3Component(uploadId)}`;
-    const response = await this.send('PUT', url, { body, signal: options.signal });
+    const response = await this.send('PUT', url, {
+      body,
+      signal: options.signal,
+      timeoutMs: DEFAULT_TRANSFER_TIMEOUT_MS,
+    });
     const etag = response.headers.get('etag')?.trim();
     if (!etag) throw new Error('S3 upload part response is missing ETag');
     return { etag };
@@ -222,7 +268,7 @@ export class S3Client {
         error.message,
         error.resource,
         error.requestId,
-        parseRetryAfterSeconds(response.headers.get('retry-after')),
+        parseRetryAfterSecondsHeader(response.headers.get('retry-after')),
       );
     }
     return { etag: parsed.etag };
@@ -254,6 +300,40 @@ export class S3Client {
     return this.send('DELETE', this.requestUrl(key), { headers: options.headers });
   }
 
+  async deleteObjects(keys: string[]): Promise<void> {
+    if (keys.length === 0) return;
+    const encoder = new TextEncoder();
+
+    for (let offset = 0; offset < keys.length; offset += DELETE_OBJECTS_BATCH_SIZE) {
+      const chunk = keys.slice(offset, offset + DELETE_OBJECTS_BATCH_SIZE);
+      const body = `<Delete><Quiet>true</Quiet>${chunk.map((key) => `<Object><Key>${escapeXml(key)}</Key></Object>`).join('')}</Delete>`;
+      const md5 = await crypto.subtle.digest('MD5', encoder.encode(body));
+      const contentMd5 = bytesToBase64(new Uint8Array(md5));
+
+      try {
+        const response = await this.send('POST', `${this.requestUrl()}?delete`, {
+          headers: {
+            'content-type': 'application/xml',
+            'content-md5': contentMd5,
+          },
+          body,
+          idempotent: true,
+        });
+        const errors = parseDeleteObjectsResponseXml(await readS3Xml(response));
+        if (errors.length > 0) {
+          const first = errors[0]!;
+          throw new S3Error(502, first.code, first.message, first.resource, first.requestId);
+        }
+      } catch (error) {
+        if (error instanceof S3Error && (error.status === 501 || error.status === 405)) {
+          await mapWithConcurrency(chunk, 6, (key) => this.deleteObject(key));
+          continue;
+        }
+        throw error;
+      }
+    }
+  }
+
   private requestUrl(key?: string): string {
     const url = new URL(this.endpoint.toString());
     const basePath = url.pathname === '/' ? '' : url.pathname.replace(/\/+$/, '');
@@ -269,7 +349,7 @@ export class S3Client {
   private async send(
     method: string,
     url: string,
-    init: { headers?: HeadersInit; body?: BodyInit | null; signal?: AbortSignal } = {},
+    init: { headers?: HeadersInit; body?: BodyInit | null; signal?: AbortSignal; timeoutMs?: number; idempotent?: boolean } = {},
   ): Promise<Response> {
     const headers = await signS3Headers({
       url,
@@ -279,16 +359,23 @@ export class S3Client {
       credentials: this.credentials,
       now: this.now(),
     });
-    const response = await this.fetcher(url, { method, headers, body: init.body, signal: init.signal });
+    const response = await fetchWithRetry(this.fetcher, url, {
+      method,
+      headers,
+      body: init.body,
+      signal: init.signal,
+      redirect: 'manual',
+      timeoutMs: init.timeoutMs ?? DEFAULT_METADATA_TIMEOUT_MS,
+      maxRetries: this.maxRetries,
+      ...(init.idempotent === undefined ? {} : { idempotent: init.idempotent }),
+    });
+    if (response.status >= 300 && response.status < 400) {
+      void response.body?.cancel();
+      throw new S3Error(502, 'S3_REDIRECT_BLOCKED', 'S3 endpoint redirected unexpectedly');
+    }
     if (!response.ok) throw await S3Error.fromResponse(response);
     return response;
   }
-}
-
-function parseRetryAfterSeconds(value: string | null): number | null {
-  if (value === null || !/^\d+$/.test(value.trim())) return null;
-  const seconds = Number(value.trim());
-  return Number.isSafeInteger(seconds) ? seconds : null;
 }
 
 function escapeXml(value: string): string {
@@ -338,7 +425,7 @@ async function readS3Xml(response: Response): Promise<string> {
     bytes.set(chunk, offset);
     offset += chunk.byteLength;
   }
-  return new TextDecoder('utf-8', { fatal: true }).decode(bytes);
+  return new TextDecoder('utf-8', { fatal: true, ignoreBOM: false }).decode(bytes);
 }
 
 export type { S3ListedObject, S3ListObjectsResult } from './xml';

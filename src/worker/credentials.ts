@@ -1,4 +1,5 @@
 import { CREDENTIAL_ENVELOPE_VERSION, decryptCredential, encryptCredential } from './crypto';
+import { HttpError } from './http';
 import type { Env } from './types';
 
 export type StorageCredentials = Record<string, unknown>;
@@ -16,6 +17,7 @@ export interface MountSecrets extends StorageCredentials {
 
 interface StorageCredentialRow {
   ciphertext: string;
+  key_version: number;
 }
 
 function isStorageCredentials(value: unknown): value is StorageCredentials {
@@ -27,7 +29,9 @@ export async function preparePutCredentials(
   mountId: string,
   credentials: StorageCredentials,
 ): Promise<D1PreparedStatement> {
-  const ciphertext = await encryptCredential(credentials, env.CREDENTIAL_MASTER_KEY, mountId);
+  const ciphertext = await encryptCredential(credentials, env.CREDENTIAL_MASTER_KEY, mountId, {
+    domain: 'storage-credentials',
+  });
   const now = new Date().toISOString();
 
   return env.DB.prepare(
@@ -73,18 +77,66 @@ function mergeSecretRecord(
 }
 
 /**
- * Applies explicit patch semantics to an encrypted mount credential document.
- * Omitted/undefined fields are retained and null removes a field.
+ * Applies explicit patch semantics to an encrypted mount credential document
+ * using compare-and-set on the stored ciphertext so concurrent writers cannot
+ * clobber disjoint credential sections.
  */
 export async function patchCredentials(
   env: Env,
   mountId: string,
   patch: StorageCredentials,
 ): Promise<StorageCredentials> {
-  const next = mergeSecretRecord(await getCredentials(env, mountId) ?? {}, patch);
-  if (Object.keys(next).length === 0) await deleteCredentials(env, mountId);
-  else await putCredentials(env, mountId, next);
-  return next;
+  for (let attempt = 0; attempt < 3; attempt += 1) {
+    const row = await env.DB.prepare('SELECT ciphertext, key_version FROM storage_credentials WHERE mount_id = ?')
+      .bind(mountId)
+      .first<StorageCredentialRow>();
+
+    let current: StorageCredentials = {};
+    if (row) {
+      const decrypted = await decryptCredential(row.ciphertext, env.CREDENTIAL_MASTER_KEY, mountId, {
+        domain: 'storage-credentials',
+        expectedKeyVersion: row.key_version,
+      });
+      if (!isStorageCredentials(decrypted)) throw new Error('Stored credentials are invalid');
+      current = decrypted;
+    }
+
+    const next = mergeSecretRecord(current, patch);
+    if (Object.keys(next).length === 0) {
+      if (!row) return {};
+      const deleted = await env.DB.prepare('DELETE FROM storage_credentials WHERE mount_id = ? AND ciphertext = ?')
+        .bind(mountId, row.ciphertext)
+        .run();
+      if ((deleted.meta.changes ?? 0) === 1) return {};
+      continue;
+    }
+
+    const ciphertext = await encryptCredential(next, env.CREDENTIAL_MASTER_KEY, mountId, {
+      domain: 'storage-credentials',
+    });
+    const now = new Date().toISOString();
+    if (row) {
+      const updated = await env.DB.prepare(
+        `UPDATE storage_credentials
+         SET ciphertext = ?, key_version = ?, updated_at = ?
+         WHERE mount_id = ? AND ciphertext = ?`,
+      )
+        .bind(ciphertext, CREDENTIAL_ENVELOPE_VERSION, now, mountId, row.ciphertext)
+        .run();
+      if ((updated.meta.changes ?? 0) === 1) return next;
+      continue;
+    }
+
+    const inserted = await env.DB.prepare(
+      `INSERT OR IGNORE INTO storage_credentials (mount_id, ciphertext, key_version, created_at, updated_at)
+       VALUES (?, ?, ?, ?, ?)`,
+    )
+      .bind(mountId, ciphertext, CREDENTIAL_ENVELOPE_VERSION, now, now)
+      .run();
+    if ((inserted.meta.changes ?? 0) === 1) return next;
+  }
+
+  throw new HttpError(409, 'CREDENTIAL_UPDATE_CONFLICT', 'Storage credentials changed concurrently; please retry');
 }
 
 export function nestedSecrets(
@@ -124,10 +176,15 @@ export function providerSecrets(credentials: StorageCredentials | null): Storage
 }
 
 export async function getCredentials<T extends StorageCredentials = StorageCredentials>(env: Env, mountId: string): Promise<T | null> {
-  const row = await env.DB.prepare('SELECT ciphertext FROM storage_credentials WHERE mount_id = ?').bind(mountId).first<StorageCredentialRow>();
+  const row = await env.DB.prepare('SELECT ciphertext, key_version FROM storage_credentials WHERE mount_id = ?')
+    .bind(mountId)
+    .first<StorageCredentialRow>();
   if (!row) return null;
 
-  const credentials = await decryptCredential(row.ciphertext, env.CREDENTIAL_MASTER_KEY, mountId);
+  const credentials = await decryptCredential(row.ciphertext, env.CREDENTIAL_MASTER_KEY, mountId, {
+    domain: 'storage-credentials',
+    expectedKeyVersion: row.key_version,
+  });
   if (!isStorageCredentials(credentials)) throw new Error('Stored credentials are invalid');
   return credentials as T;
 }

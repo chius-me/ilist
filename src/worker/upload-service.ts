@@ -11,21 +11,25 @@ import {
 import { validateEntryName } from './entry-domain';
 import { externalEntry, resolveExternalEntry } from './external-entries';
 import { HttpError } from './http';
-import { getMount } from './mounts';
+import { getMount, listMounts, touchMountUpdatedAt } from './mounts';
 import {
   claimTerminalOperation,
   claimUploadPart,
   completeUploadSessionRecord,
   createUploadSessionRecord,
   getOwnedUploadSession,
+  listActiveUploadSessionsByMount,
+  listActiveUploadSessionsByOwner,
   listExpiredUploadSessions,
-  listOwnedActiveUploadSessions,
+  listOwnedActiveUploadSessionSummaries,
   markUploadSessionAborted,
+  recordParallelUploadPart,
   recordUploadPart,
   releaseTerminalOperationClaim,
   releaseUploadPartClaim,
   touchUploadSessionCleanupAttempt,
   type UploadSessionRecord,
+  type UploadSessionSummary,
 } from './upload-session-store';
 import { encodeExternalId } from './external-identity';
 import type { Env, Mount, MountEntry, UploadSessionStatus } from './types';
@@ -33,6 +37,8 @@ import type { Env, Mount, MountEntry, UploadSessionStatus } from './types';
 const PART_CLAIM_DURATION_MS = 5 * 60_000;
 const TERMINAL_CLAIM_DURATION_MS = 5 * 60_000;
 const DEFAULT_CLEANUP_LIMIT = 10;
+const MAX_UPLOAD_PARTS = 10_000;
+const MAX_UPLOAD_SIZE_BYTES = 100 * 1024 * 1024 * 1024;
 
 export interface CreateUploadSessionBody {
   parentId: string;
@@ -50,6 +56,7 @@ export interface UploadSessionView {
   id: string;
   kind: 'multipart';
   partSize: number;
+  maxPartConcurrency: number;
   size: number;
   uploadedParts: UploadPartView[];
   expiresAt: string;
@@ -211,11 +218,16 @@ function expirationIso(expiresAt: number): string {
   }
 }
 
-function toSessionView(record: UploadSessionRecord): UploadSessionView {
+function mountPartConcurrency(driverType?: Mount['driverType']): number {
+  return driverType === 's3' ? 3 : 1;
+}
+
+function toSessionView(record: UploadSessionSummary, maxPartConcurrency = 1): UploadSessionView {
   return {
     id: record.id,
     kind: 'multipart',
     partSize: record.partSize,
+    maxPartConcurrency,
     size: record.size,
     uploadedParts: record.parts.map(({ partNumber, size }) => ({ partNumber, size })),
     expiresAt: expirationIso(record.expiresAt),
@@ -265,6 +277,8 @@ function validateCreateInput(input: unknown): {
     || typeof input.size !== 'number'
     || !Number.isSafeInteger(input.size)
     || input.size < LARGE_UPLOAD_THRESHOLD_BYTES
+    || input.size > MAX_UPLOAD_SIZE_BYTES
+    || Math.ceil(input.size / UPLOAD_PART_SIZE_BYTES) > MAX_UPLOAD_PARTS
     || (input.contentType !== undefined && input.contentType !== null && typeof input.contentType !== 'string')
   ) {
     throw uploadPartInvalid('Upload session input is invalid');
@@ -302,12 +316,9 @@ export async function createResumableUpload(
   env: Env,
   ownerSessionId: string,
   input: CreateUploadSessionBody,
+  ctx?: ExecutionContext,
 ): Promise<UploadSessionView> {
-  try {
-    await cleanupExpiredUploads(env, DEFAULT_CLEANUP_LIMIT);
-  } catch {
-    // Cleanup is opportunistic and must not block a new upload.
-  }
+  ctx?.waitUntil(cleanupExpiredUploads(env, DEFAULT_CLEANUP_LIMIT).catch(() => undefined));
 
   const body = validateCreateInput(input);
   const external = await resolveExternalEntry(env, body.parentId, true);
@@ -351,7 +362,7 @@ export async function createResumableUpload(
       providerState: providerSession.state,
       expiresAt: providerSession.expiresAt,
     });
-    return toSessionView(record);
+    return toSessionView(record, external.driver.resumableUpload.maxPartConcurrency ?? 1);
   } catch (error) {
     await bestEffortAbort(external.driver, providerSession.state);
     throw uploadStatePersistFailed();
@@ -365,20 +376,22 @@ export async function getResumableUpload(
 ): Promise<UploadSessionView> {
   const record = await ownedSession(env, ownerSessionId, id);
   requireCurrent(record);
-  return toSessionView(record);
+  const mount = await getMount(env.DB, record.mountId);
+  return toSessionView(record, mountPartConcurrency(mount?.driverType));
 }
 
 export async function listResumableUploads(
   env: Env,
   ownerSessionId: string,
+  ctx?: ExecutionContext,
 ): Promise<UploadSessionView[]> {
-  try {
-    await cleanupExpiredUploads(env, DEFAULT_CLEANUP_LIMIT);
-  } catch {
-    // Listing should still work when opportunistic cleanup fails.
-  }
-  const records = await listOwnedActiveUploadSessions(env, ownerSessionId);
-  return records.map(toSessionView);
+  ctx?.waitUntil(cleanupExpiredUploads(env, DEFAULT_CLEANUP_LIMIT).catch(() => undefined));
+  const [records, mounts] = await Promise.all([
+    listOwnedActiveUploadSessionSummaries(env, ownerSessionId),
+    listMounts(env.DB),
+  ]);
+  const concurrencyByMount = new Map(mounts.map((mount) => [mount.id, mountPartConcurrency(mount.driverType)]));
+  return records.map((record) => toSessionView(record, concurrencyByMount.get(record.mountId) ?? 1));
 }
 
 function expectedPart(record: UploadSessionRecord, partNumber: number): { offset: number; size: number } {
@@ -441,6 +454,45 @@ export async function uploadResumablePart(
   if (initial.status !== 'active') throw uploadBusy();
 
   const { driver } = await sessionDriver(env, initial);
+  if ((driver.resumableUpload.maxPartConcurrency ?? 1) > 1) {
+    if (initial.terminalOperation !== null) throw uploadBusy();
+    let result: Awaited<ReturnType<NonNullable<StorageDriver['resumableUpload']>['uploadPart']>>;
+    try {
+      result = await driver.resumableUpload.uploadPart({
+        state: initial.providerState,
+        partNumber,
+        offset: expected.offset,
+        totalSize: initial.size,
+        body: request.body!,
+        size: expected.size,
+        signal: request.signal,
+      });
+    } catch (error) {
+      throw normalizeProviderError(error);
+    }
+    if (!validProviderPart(result, partNumber, expected.size)) {
+      throw new HttpError(502, 'UPLOAD_PROVIDER_INVALID', 'Storage provider returned an invalid upload part');
+    }
+    let updated: UploadSessionRecord | null;
+    try {
+      updated = await recordParallelUploadPart(env, ownerSessionId, id, result.part);
+    } catch {
+      throw uploadStatePersistFailed();
+    }
+    if (!updated) {
+      const current = await ownedSession(env, ownerSessionId, id);
+      if (current.status === 'aborted') throw uploadNotFound();
+      const existing = recordedPart(current, partNumber, expected.size);
+      if (existing && current.terminalOperation !== 'abort') return existing;
+      throw uploadBusy();
+    }
+    if (updated.status === 'aborted') throw uploadNotFound();
+    if (updated.terminalOperation === 'abort') throw uploadBusy();
+    const stored = recordedPart(updated, partNumber, expected.size);
+    if (!stored) throw uploadBusy();
+    return stored;
+  }
+
   const now = Date.now();
   const claimExpiresAt = now + PART_CLAIM_DURATION_MS;
   const claimed = await claimUploadPart(env, ownerSessionId, id, partNumber, claimExpiresAt, now);
@@ -617,7 +669,10 @@ export async function completeResumableUpload(
     await releaseClaim();
     throw uploadStatePersistFailed();
   }
-  if (completed) return { entry: externalEntry(item, mount, driver, true) };
+  if (completed) {
+    await touchMountUpdatedAt(env.DB, mount.id).catch(() => undefined);
+    return { entry: externalEntry(item, mount, driver, true) };
+  }
   const current = await ownedSession(env, ownerSessionId, id);
   if (current.status === 'completed') return completedEntry(env, current);
   throw uploadBusy();
@@ -768,4 +823,42 @@ export async function cleanupExpiredUploads(env: Env, limit = DEFAULT_CLEANUP_LI
     }
     await touchUploadSessionCleanupAttempt(env, record.id, Date.now()).catch(() => undefined);
   }
+}
+
+async function bestEffortAbortUploadRecords(env: Env, records: UploadSessionRecord[]): Promise<void> {
+  await Promise.allSettled(records.map(async (record) => {
+    const now = Date.now();
+    const terminalOwner = crypto.randomUUID();
+    const terminalExpiresAt = now + TERMINAL_CLAIM_DURATION_MS;
+    const claimed = await claimTerminalOperation(
+      env,
+      record.ownerSessionId,
+      record.id,
+      'abort',
+      terminalOwner,
+      terminalExpiresAt,
+      now,
+    ).catch(() => null);
+    const target = claimed ?? record;
+    try {
+      const { driver } = await sessionDriver(env, target);
+      await driver.resumableUpload.abort(target.providerState);
+    } catch {
+      // Provider failure or missing mount credentials must not block session/mount deletion.
+    }
+    if (claimed) {
+      await markUploadSessionAborted(env, claimed.ownerSessionId, claimed.id, terminalOwner, terminalExpiresAt)
+        .catch(() => undefined);
+    }
+  }));
+}
+
+export async function abortUploadsForSession(env: Env, ownerSessionId: string): Promise<void> {
+  const records = await listActiveUploadSessionsByOwner(env, ownerSessionId).catch(() => []);
+  if (records.length > 0) await bestEffortAbortUploadRecords(env, records);
+}
+
+export async function abortUploadsForMount(env: Env, mountId: string): Promise<void> {
+  const records = await listActiveUploadSessionsByMount(env, mountId).catch(() => []);
+  if (records.length > 0) await bestEffortAbortUploadRecords(env, records);
 }

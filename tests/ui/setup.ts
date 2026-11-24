@@ -1,6 +1,7 @@
 import '@testing-library/jest-dom/vitest';
 import { afterEach, beforeEach, vi } from 'vitest';
 import { cleanup } from '@testing-library/react';
+import { clearDirectoryCache } from '../../src/ui/hooks/useDirectory';
 
 class MemoryStorage implements Storage {
   private readonly values = new Map<string, string>();
@@ -57,6 +58,7 @@ Object.defineProperty(window, 'matchMedia', {
 
 beforeEach(() => {
   localStorage.clear();
+  clearDirectoryCache();
 });
 
 afterEach(() => {

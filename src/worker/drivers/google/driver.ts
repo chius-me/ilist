@@ -1,4 +1,6 @@
 import { HttpError } from '../../http';
+import { isRecord } from '../../shared/encoding';
+import { headMetadataResponse } from '../../shared/http-client';
 import type { Mount } from '../../types';
 import {
   UPLOAD_PART_SIZE_BYTES,
@@ -10,10 +12,12 @@ import {
 } from '../types';
 import type { GoogleFile, GoogleListResult, GoogleUploadPartResult, GoogleUploadSession } from './client';
 import { GoogleDriveClient } from './client';
-import { isGoogleNativeFile, mapGoogleFile } from './items';
+import { GOOGLE_FOLDER_MIME_TYPE, isGoogleNativeFile, mapGoogleFile } from './items';
 
 export interface GoogleDriveDriverClient {
-  list(parentId: string, cursor?: string): Promise<GoogleListResult>;
+  list(parentId: string, cursor?: string, limit?: number): Promise<GoogleListResult>;
+  findChildByName?(parentId: string, name: string, folderOnly?: boolean): Promise<GoogleFile | null>;
+  existsByName?(parentId: string, name: string): Promise<boolean>;
   stat(itemId: string): Promise<GoogleFile>;
   download(itemId: string, range?: string | null): Promise<Response>;
   exportFile(itemId: string, contentType: string): Promise<Response>;
@@ -43,10 +47,6 @@ interface GoogleUploadState {
   contentType: string | null;
 }
 
-function isRecord(value: unknown): value is Record<string, unknown> {
-  return typeof value === 'object' && value !== null && !Array.isArray(value);
-}
-
 function invalidUploadState(): HttpError {
   return new HttpError(400, 'INVALID_UPLOAD_STATE', 'Google upload session state is invalid');
 }
@@ -67,6 +67,9 @@ function validName(name: string): string {
 export class GoogleDriveDriver implements StorageDriver {
   readonly capabilities = new Set(['list', 'download', 'upload', 'multipartUpload', 'createFolder', 'rename', 'move', 'copy', 'delete'] as const);
   readonly rootId: string;
+  private canonicalRootId: string | null = null;
+  private readonly verifiedInScope = new Set<string>();
+
   readonly resumableUpload: ResumableUploadAdapter = {
     create: async (input) => {
       await this.assertInScope(input.parentId);
@@ -124,19 +127,67 @@ export class GoogleDriveDriver implements StorageDriver {
     },
   };
 
-  constructor(private readonly mount: Mount, private readonly client: GoogleDriveDriverClient) {
+  constructor(mount: Mount, private readonly client: GoogleDriveDriverClient) {
     this.rootId = mount.rootItemId ?? 'root';
   }
 
-  async list(parentId: string, cursor?: string): Promise<ListResult> {
+  async list(parentId: string, cursor?: string, limit?: number): Promise<ListResult> {
     await this.assertInScope(parentId);
-    const result = await this.client.list(parentId, cursor);
+    const result = limit === undefined
+      ? await this.client.list(parentId, cursor)
+      : await this.client.list(parentId, cursor, limit);
+    const items = result.items
+      .filter((item) => !item.trashed)
+      .map((item) => {
+        if (item.mimeType === GOOGLE_FOLDER_MIME_TYPE) this.verifiedInScope.add(item.id);
+        return { ...mapGoogleFile(item, parentId), parentId };
+      });
     return {
-      items: result.items
-        .filter((item) => !item.trashed)
-        .map((item) => ({ ...mapGoogleFile(item, parentId), parentId })),
+      items,
       nextCursor: result.nextCursor,
     };
+  }
+
+  async resolvePath(segments: string[]): Promise<StorageItem[]> {
+    const rootRaw = await this.client.stat(this.rootId);
+    this.canonicalRootId = rootRaw.id;
+    this.verifiedInScope.add(this.rootId);
+    this.verifiedInScope.add(rootRaw.id);
+    const rootItem = { ...mapGoogleFile(rootRaw, null), id: this.rootId, parentId: null };
+    const chain: StorageItem[] = [rootItem];
+    let current: StorageItem = rootItem;
+
+    for (let index = 0; index < segments.length; index += 1) {
+      const segment = segments[index]!;
+      if (!segment || segment === '.' || segment === '..' || /[\u0000-\u001f\u007f]/.test(segment)) {
+        throw new HttpError(404, 'ENTRY_NOT_FOUND', 'Entry not found');
+      }
+      const isLast = index === segments.length - 1;
+      let found: GoogleFile | null = null;
+      if (this.client.findChildByName) {
+        found = await this.client.findChildByName(current.id, segment, true);
+        if (!found && isLast) {
+          found = await this.client.findChildByName(current.id, segment, false);
+        }
+      } else {
+        const listed = (await this.client.list(current.id)).items;
+        found = listed.find(
+          (entry) => !entry.trashed && entry.name === segment && entry.mimeType === GOOGLE_FOLDER_MIME_TYPE,
+        ) ?? (isLast ? listed.find((entry) => !entry.trashed && entry.name === segment) ?? null : null);
+      }
+      if (!found || found.trashed) {
+        throw new HttpError(404, 'ENTRY_NOT_FOUND', 'Entry not found');
+      }
+      if (!isLast && found.mimeType !== GOOGLE_FOLDER_MIME_TYPE) {
+        throw new HttpError(404, 'ENTRY_NOT_FOUND', 'Entry not found');
+      }
+      this.verifiedInScope.add(found.id);
+      const mapped = { ...mapGoogleFile(found, current.id), parentId: current.id };
+      chain.push(mapped);
+      current = mapped;
+    }
+
+    return chain;
   }
 
   async stat(itemId: string): Promise<StorageItem> {
@@ -166,6 +217,9 @@ export class GoogleDriveDriver implements StorageDriver {
     if (requestedFormat || isGoogleNativeFile(item.mimeType)) {
       throw new HttpError(400, 'GOOGLE_EXPORT_UNSUPPORTED', 'Google Workspace export format is unsupported');
     }
+    if (request.method.toUpperCase() === 'HEAD') {
+      return { kind: 'stream', response: headMetadataResponse(mapped) };
+    }
     return { kind: 'stream', response: await this.client.download(itemId, request.headers.get('range')) };
   }
 
@@ -189,6 +243,7 @@ export class GoogleDriveDriver implements StorageDriver {
     this.assertMutable(itemId, 'moved');
     await this.assertInScope(itemId);
     await this.assertInScope(destinationId);
+    this.verifiedInScope.delete(itemId);
     return { ...mapGoogleFile(await this.client.move(itemId, destinationId), destinationId), parentId: destinationId };
   }
 
@@ -197,12 +252,13 @@ export class GoogleDriveDriver implements StorageDriver {
     await this.assertInScope(itemId);
     await this.assertInScope(destinationParentId);
     const source = await this.client.stat(itemId);
-    if (source.mimeType === 'application/vnd.google-apps.folder' || source.mimeType?.startsWith('application/vnd.google-apps.')) {
+    if (source.mimeType === GOOGLE_FOLDER_MIME_TYPE || source.mimeType?.startsWith('application/vnd.google-apps.')) {
       throw new HttpError(405, 'OPERATION_UNSUPPORTED', 'Google Drive folder or Workspace copy is not supported');
     }
-    // Preflight destination name conflict.
-    const existing = (await this.list(destinationParentId)).items.find((item) => item.name === source.name);
-    if (existing) throw new HttpError(409, 'ENTRY_NAME_CONFLICT', 'Current folder already contains that name');
+    const conflict = this.client.existsByName
+      ? await this.client.existsByName(destinationParentId, source.name)
+      : Boolean((await this.listAll(destinationParentId)).find((item) => item.name === source.name));
+    if (conflict) throw new HttpError(409, 'ENTRY_NAME_CONFLICT', 'Current folder already contains that name');
     return {
       ...mapGoogleFile(await this.client.copy(itemId, destinationParentId, source.name), destinationParentId),
       parentId: destinationParentId,
@@ -212,7 +268,22 @@ export class GoogleDriveDriver implements StorageDriver {
   async remove(itemId: string): Promise<void> {
     this.assertMutable(itemId, 'deleted');
     await this.assertInScope(itemId);
+    this.verifiedInScope.delete(itemId);
     await this.client.trash(itemId);
+  }
+
+  private async listAll(parentId: string): Promise<StorageItem[]> {
+    const items: StorageItem[] = [];
+    let cursor: string | undefined;
+    for (let page = 0; page < 100; page += 1) {
+      const result = await this.client.list(parentId, cursor);
+      for (const item of result.items) {
+        if (!item.trashed) items.push({ ...mapGoogleFile(item, parentId), parentId });
+      }
+      if (!result.nextCursor) return items;
+      cursor = result.nextCursor;
+    }
+    throw new HttpError(502, 'PROVIDER_PAGINATION_LIMIT', 'Storage provider returned too many pages');
   }
 
   private assertMutable(itemId: string, operation: string): void {
@@ -263,20 +334,37 @@ export class GoogleDriveDriver implements StorageDriver {
     return uploadState;
   }
 
+  private async resolveCanonicalRootId(knownItem?: GoogleFile): Promise<string> {
+    if (this.canonicalRootId) return this.canonicalRootId;
+    const ancestor = this.rootId && knownItem && this.rootId === knownItem.id
+      ? knownItem
+      : await this.client.stat(this.rootId);
+    this.canonicalRootId = ancestor.id;
+    return ancestor.id;
+  }
+
   private async assertInScope(itemId: string, knownItem?: GoogleFile): Promise<void> {
-    if (await this.isWithinAncestor(itemId, this.rootId, knownItem)) return;
+    if (this.verifiedInScope.has(itemId)) return;
+    if (await this.isWithinAncestor(itemId, this.rootId, knownItem)) {
+      this.verifiedInScope.add(itemId);
+      return;
+    }
     throw new HttpError(404, 'STORAGE_ITEM_NOT_FOUND', 'Google Drive item was not found');
   }
 
   private async isWithinAncestor(itemId: string, ancestorId: string, knownItem?: GoogleFile): Promise<boolean> {
-    let ancestor: GoogleFile;
+    let canonicalAncestorId: string;
     try {
-      ancestor = itemId === ancestorId && knownItem ? knownItem : await this.client.stat(ancestorId);
+      if (ancestorId === this.rootId) {
+        canonicalAncestorId = await this.resolveCanonicalRootId(itemId === ancestorId ? knownItem : undefined);
+      } else {
+        const ancestor = itemId === ancestorId && knownItem ? knownItem : await this.client.stat(ancestorId);
+        canonicalAncestorId = ancestor.id;
+      }
     } catch (error) {
       if (error instanceof HttpError && error.status === 404) return false;
       throw error;
     }
-    const canonicalAncestorId = ancestor.id;
     if (itemId === ancestorId || knownItem?.id === canonicalAncestorId) return true;
 
     let item: GoogleFile;
@@ -291,6 +379,7 @@ export class GoogleDriveDriver implements StorageDriver {
     for (let depth = 0; depth < 256; depth += 1) {
       const parentId = item.parents?.[0];
       if (parentId === canonicalAncestorId) return true;
+      if (ancestorId === this.rootId && parentId && this.verifiedInScope.has(parentId)) return true;
       if (!parentId || visited.has(parentId)) return false;
       visited.add(parentId);
       try {

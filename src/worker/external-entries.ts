@@ -1,12 +1,26 @@
 import { createDriver } from './drivers/registry';
 import { requireResumableUploadAdapter, type StorageDriver, type StorageItem } from './drivers/types';
-import { matchesNameFilter } from './entries';
-import { encodeExternalId, decodeExternalId, type ExternalIdentity } from './external-identity';
+import { matchesNameFilter } from './entry-domain';
+import { decodeExternalId, encodeExternalId, type ExternalIdentity } from './external-identity';
 import { HttpError } from './http';
 import { getMount } from './mounts';
 import type { Breadcrumb, Env, Mount, MountEntry, VirtualDirectoryResponse } from './types';
 
 const MAX_LIST_PAGES = 100;
+const DEFAULT_PAGE_LIMIT = 200;
+const MAX_PAGE_LIMIT = 1000;
+
+export interface ExternalDirectoryOptions {
+  cursor?: string | null;
+  limit?: number | null;
+}
+
+function normalizedLimit(limit: number | null | undefined): number {
+  if (typeof limit !== 'number' || !Number.isSafeInteger(limit) || limit < 1) {
+    return DEFAULT_PAGE_LIMIT;
+  }
+  return Math.min(limit, MAX_PAGE_LIMIT);
+}
 
 function canCopyItem(driver: StorageDriver, item: StorageItem, mount: Mount): boolean {
   if (!driver.capabilities.has('copy') || item.id === driver.rootId) return false;
@@ -73,23 +87,36 @@ function encodedMountPath(mount: Mount): string {
   return `/${encodeURIComponent(mount.mountPath.slice(1))}`;
 }
 
-export async function listExternalDirectory(
-  env: Env,
+async function resolveDirectoryChain(
+  driver: StorageDriver,
   mount: Mount,
-  relativePath: string,
-  admin: boolean,
-  nameFilter: string | null = null,
-): Promise<VirtualDirectoryResponse> {
-  const driver = await createDriver(env, mount);
-  const segments = relativePath === '/' ? [] : relativePath.slice(1).split('/');
-  let current = await driver.stat(driver.rootId);
+  segments: string[],
+): Promise<{ current: StorageItem; breadcrumbs: Breadcrumb[] }> {
   const mountPath = encodedMountPath(mount);
   const breadcrumbs: Breadcrumb[] = [
     { id: 'virtual-root', name: 'iList', path: '/' },
     { id: encodeExternalId(mount.id, driver.rootId), name: mount.name, path: mountPath },
   ];
-  const pathSegments: string[] = [];
 
+  if (segments.length > 0 && driver.resolvePath) {
+    const chain = await driver.resolvePath(segments);
+    const current = chain[chain.length - 1];
+    if (!current) throw new HttpError(404, 'ENTRY_NOT_FOUND', 'Entry not found');
+    const pathSegments: string[] = [];
+    for (let index = 1; index < chain.length; index += 1) {
+      const item = chain[index]!;
+      pathSegments.push(segments[index - 1] ?? item.name);
+      breadcrumbs.push({
+        id: encodeExternalId(mount.id, item.id),
+        name: item.name,
+        path: `${mountPath}/${pathSegments.map(encodeURIComponent).join('/')}`,
+      });
+    }
+    return { current, breadcrumbs };
+  }
+
+  let current = await driver.stat(driver.rootId);
+  const pathSegments: string[] = [];
   for (const segment of segments) {
     const child = (await listAll(driver, current.id)).find((entry) => entry.kind === 'folder' && entry.name === segment);
     if (!child) throw new HttpError(404, 'ENTRY_NOT_FOUND', 'Entry not found');
@@ -101,14 +128,44 @@ export async function listExternalDirectory(
       path: `${mountPath}/${pathSegments.map(encodeURIComponent).join('/')}`,
     });
   }
+  return { current, breadcrumbs };
+}
+
+export async function listExternalDirectory(
+  env: Env,
+  mount: Mount,
+  relativePath: string,
+  admin: boolean,
+  nameFilter: string | null = null,
+  options: ExternalDirectoryOptions = {},
+): Promise<VirtualDirectoryResponse> {
+  const driver = await createDriver(env, mount);
+  const segments = relativePath.split('/').filter(Boolean);
+  const { current, breadcrumbs } = await resolveDirectoryChain(driver, mount, segments);
 
   if (current.kind !== 'folder') throw new HttpError(400, 'NOT_A_FOLDER', 'Entry is not a folder');
+
+  if (nameFilter) {
+    return {
+      current: externalEntry(current, mount, driver, admin),
+      breadcrumbs,
+      items: (await listAll(driver, current.id))
+        .filter((entry) => matchesNameFilter(entry.name, nameFilter))
+        .map((entry) => externalEntry(entry, mount, driver, admin)),
+      nextCursor: null,
+    };
+  }
+
+  const page = await driver.list(
+    current.id,
+    options.cursor ?? undefined,
+    normalizedLimit(options.limit),
+  );
   return {
     current: externalEntry(current, mount, driver, admin),
     breadcrumbs,
-    items: (await listAll(driver, current.id))
-      .filter((entry) => matchesNameFilter(entry.name, nameFilter))
-      .map((entry) => externalEntry(entry, mount, driver, admin)),
+    items: page.items.map((entry) => externalEntry(entry, mount, driver, admin)),
+    nextCursor: page.nextCursor,
   };
 }
 

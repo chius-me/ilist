@@ -74,12 +74,12 @@ describe('ExplorerApp', () => {
 
   it('makes the file surface primary and follows folder/file click rules', async () => {
     render(<App />);
-    expect(await screen.findByRole('button', { name: /Docs/ })).toBeVisible();
+    expect(await screen.findByRole('link', { name: /Docs/ })).toBeVisible();
     expect(screen.queryByText('listed size')).not.toBeInTheDocument();
     fireEvent.click(screen.getByRole('button', { name: /README.txt/ }));
     expect(new URL(location.href).searchParams.get('preview')).toBe('readme-file');
-    fireEvent.click(screen.getByRole('button', { name: 'Close preview' }));
-    fireEvent.click(screen.getByRole('button', { name: /Docs/ }));
+    fireEvent.click(await screen.findByRole('button', { name: 'Close preview' }));
+    fireEvent.click(screen.getByRole('link', { name: /Docs/ }));
     await waitFor(() => expect(location.pathname).toBe('/Docs'));
   });
 
@@ -107,7 +107,7 @@ describe('ExplorerApp', () => {
     const path = await screen.findByRole('navigation', { name: 'Path' });
     const controls = screen.getByRole('region', { name: 'File controls' });
     const files = await screen.findByRole('list', { name: 'Files and folders' });
-    const home = within(path).getByRole('button', { name: 'Path home' });
+    const home = within(path).getByRole('link', { name: 'Path home' });
     const search = within(controls).getByRole('button', { name: 'Search this folder' });
     const sort = within(controls).getByRole('combobox', { name: 'Sort files' });
     const direction = within(controls).getByRole('button', { name: 'Sort ascending' });
@@ -148,7 +148,7 @@ describe('ExplorerApp', () => {
     render(<App />);
     const controls = await screen.findByRole('region', { name: 'File controls' });
     const path = await screen.findByRole('navigation', { name: 'Path' });
-    const home = await within(path).findByRole('button', { name: 'Path home' });
+    const home = await within(path).findByRole('link', { name: 'Path home' });
     const actions = controls.querySelector('.toolbarActions');
     expect(actions).not.toBeNull();
     fireEvent.click(within(controls).getByRole('button', { name: 'Search this folder' }));
@@ -244,9 +244,58 @@ describe('ExplorerApp', () => {
     }));
 
     render(<App />);
-    fireEvent.click(await screen.findByRole('button', { name: /Cold Storage/ }));
+    fireEvent.click(await screen.findByRole('link', { name: /Cold Storage/ }));
     await waitFor(() => expect(location.pathname).toBe('/archive'));
-    fireEvent.click(await screen.findByRole('button', { name: /Reports/ }));
+    fireEvent.click(await screen.findByRole('link', { name: /Reports/ }));
     await waitFor(() => expect(location.pathname).toBe('/archive/Reports'));
+  });
+
+  it('boots session and directory in parallel without guest upload polling, filters locally at 0ms, and paginates with nextCursor', async () => {
+    const pagedRoot = {
+      ok: true,
+      data: {
+        ...root.data,
+        items: [root.data.items[1]],
+        nextCursor: 'cursor-2',
+      },
+    };
+    const nextPage = {
+      ok: true,
+      data: {
+        ...root.data,
+        items: [{
+          ...root.data.items[1],
+          id: 'notes-file',
+          name: 'notes.md',
+        }],
+        nextCursor: null,
+      },
+    };
+    const requestedUrls: string[] = [];
+    vi.stubGlobal('fetch', vi.fn(async (input: RequestInfo | URL) => {
+      const url = String(input);
+      requestedUrls.push(url);
+      if (url.includes('/api/admin/me')) return new Response(JSON.stringify(guestError), { status: 401 });
+      if (url.includes('cursor=cursor-2')) return Response.json(nextPage);
+      if (url.includes('/api/fs/list')) return Response.json(pagedRoot);
+      throw new Error(`Unexpected fetch: ${url}`);
+    }));
+
+    render(<App />);
+    expect(await screen.findByText('README.txt')).toBeVisible();
+    expect(requestedUrls.some((url) => url.includes('/api/admin/uploads/sessions'))).toBe(false);
+    expect(requestedUrls.filter((url) => url.includes('/api/fs/list'))).toHaveLength(1);
+
+    const loadMore = screen.getByRole('button', { name: 'Load more' });
+    fireEvent.click(loadMore);
+    expect(await screen.findByText('notes.md')).toBeVisible();
+    expect(screen.queryByRole('button', { name: 'Load more' })).not.toBeInTheDocument();
+
+    fireEvent.click(screen.getByRole('button', { name: 'Search this folder' }));
+    const searchInput = screen.getByRole('textbox', { name: 'Search this folder' });
+    fireEvent.change(searchInput, { target: { value: 'notes' } });
+    expect(screen.queryByText('README.txt')).not.toBeInTheDocument();
+    expect(screen.getByText('notes.md')).toBeVisible();
+    expect(requestedUrls.some((url) => url.includes('q=notes'))).toBe(false);
   });
 });

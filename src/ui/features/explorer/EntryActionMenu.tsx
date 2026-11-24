@@ -23,6 +23,7 @@ export function entryActions(entry: Entry, handlers: {
   onOpen: (entry: Entry) => void;
   onPreview: (entry: Entry) => void;
   onAction: (action: EntryActionId, entry: Entry) => void;
+  onCopySuccess?: () => void;
   onCopyFailure?: () => void;
   canShare?: boolean;
   fileUrlFor?: (entry: Entry, download: boolean, exportFormat?: string) => string;
@@ -49,7 +50,7 @@ export function entryActions(entry: Entry, handlers: {
     actions.push({ id: 'copy', labelKey: 'action.copyLink', icon: Copy, onSelect: () => {
       const write = navigator.clipboard?.writeText(new URL(urlFor(entry, false, copyExport?.format), window.location.origin).toString());
       if (!write) handlers.onCopyFailure?.();
-      else void write.catch(() => handlers.onCopyFailure?.());
+      else void write.then(() => handlers.onCopySuccess?.(), () => handlers.onCopyFailure?.());
     } });
   }
   if (handlers.canShare) actions.push({ id: 'share', labelKey: 'action.share', icon: Share2, onSelect: () => handlers.onAction('share', entry) });

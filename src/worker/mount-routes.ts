@@ -23,8 +23,11 @@ import {
   type CreateMountInput,
   type UpdateMountInput,
 } from './mounts';
-import type { Env, Mount, MountDriverType } from './types';
 import { oauthApplicationSource, type OAuthDriverType } from './oauth-credentials';
+import { isRecord } from './shared/encoding';
+import { isPrivateOrReservedHost } from './shared/ip';
+import type { Env, Mount, MountDriverType } from './types';
+import { abortUploadsForMount } from './upload-service';
 
 interface MountRequestBody {
   name?: unknown;
@@ -52,8 +55,12 @@ interface S3Credentials extends StorageCredentials {
   secretAccessKey: string;
 }
 
-const MOUNT_DRIVER_TYPES = new Set<MountDriverType>(['s3', 'onedrive', 'google', 'dropbox', 'native-r2']);
+const MOUNT_DRIVER_TYPES = new Set<MountDriverType>(['s3', 'onedrive', 'google', 'dropbox']);
+const RETIRED_DRIVERS = new Set<MountDriverType>(['pikpak', 'native-r2']);
 const OAUTH_DRIVERS = new Set<MountDriverType>(['onedrive', 'google', 'dropbox']);
+const S3_REGION_PATTERN = /^[A-Za-z0-9_-]{1,64}$/;
+const S3_VIRTUAL_BUCKET_PATTERN = /^[a-z0-9](?:[a-z0-9.-]{1,61}[a-z0-9])$/;
+const S3_PATH_BUCKET_PATTERN = /^[^\s/\\\u0000-\u001f\u007f]{1,255}$/;
 
 function methodNotAllowed(): Response {
   return fail(405, 'Method not allowed');
@@ -61,10 +68,6 @@ function methodNotAllowed(): Response {
 
 function invalidRequest(code = 'INVALID_REQUEST', message = 'Invalid request body'): never {
   throw new HttpError(400, code, message);
-}
-
-function isRecord(value: unknown): value is Record<string, unknown> {
-  return typeof value === 'object' && value !== null && !Array.isArray(value);
 }
 
 function requiredString(value: unknown, code: string): string {
@@ -105,7 +108,16 @@ function assertOnlyKeys(value: Record<string, unknown>, allowed: readonly string
   if (Object.keys(value).some((key) => !allowed.includes(key))) invalidRequest(code);
 }
 
-function validateS3Endpoint(endpoint: string): void {
+function isLocalPublicOrigin(env: Env): boolean {
+  try {
+    const originUrl = new URL(env.PUBLIC_ORIGIN);
+    return originUrl.protocol === 'http:' && (originUrl.hostname === 'localhost' || originUrl.hostname === '127.0.0.1');
+  } catch {
+    return false;
+  }
+}
+
+function validateS3Endpoint(endpoint: string, env: Env): void {
   let url: URL;
   try {
     url = new URL(endpoint);
@@ -113,31 +125,51 @@ function validateS3Endpoint(endpoint: string): void {
     invalidRequest('INVALID_MOUNT_CONFIG', 'S3 endpoint is invalid');
   }
 
-  const localHost = url.hostname === 'localhost'
-    || url.hostname === '127.0.0.1'
-    || url.hostname === '::1'
-    || url.hostname === '[::1]';
-  if ((url.protocol !== 'https:' && !(url.protocol === 'http:' && localHost)) || url.username || url.password || url.search || url.hash) {
+  if (url.username || url.password || url.search || url.hash) {
+    invalidRequest('INVALID_MOUNT_CONFIG', 'S3 endpoint is invalid');
+  }
+
+  const hostname = url.hostname.toLowerCase();
+  const isLoopback = hostname === 'localhost' || hostname === '127.0.0.1' || hostname === '::1' || hostname === '[::1]';
+  const allowLocalDev = isLocalPublicOrigin(env) && isLoopback;
+
+  if (url.protocol === 'http:') {
+    if (!allowLocalDev) invalidRequest('INVALID_MOUNT_CONFIG', 'S3 endpoint must use HTTPS');
+    return;
+  }
+  if (url.protocol !== 'https:') {
     invalidRequest('INVALID_MOUNT_CONFIG', 'S3 endpoint must use HTTPS');
+  }
+  if (!allowLocalDev && isPrivateOrReservedHost(hostname)) {
+    invalidRequest('INVALID_MOUNT_CONFIG', 'S3 endpoint host is not allowed');
   }
 }
 
-function validateS3Config(value: unknown): S3Config {
+function validateS3Config(value: unknown, env: Env): S3Config {
   if (!isRecord(value)) invalidRequest('INVALID_MOUNT_CONFIG', 'S3 configuration is invalid');
   assertOnlyKeys(value, ['endpoint', 'region', 'bucket', 'rootPrefix', 'addressingMode'], 'INVALID_MOUNT_CONFIG');
   const endpoint = requiredString(value.endpoint, 'INVALID_MOUNT_CONFIG');
-  validateS3Endpoint(endpoint);
+  validateS3Endpoint(endpoint, env);
   const region = requiredString(value.region, 'INVALID_MOUNT_CONFIG');
-  const bucket = requiredString(value.bucket, 'INVALID_MOUNT_CONFIG');
-  const rootPrefix = optionalString(value.rootPrefix, 'INVALID_MOUNT_CONFIG');
+  if (!S3_REGION_PATTERN.test(region)) {
+    invalidRequest('INVALID_MOUNT_CONFIG', 'S3 region is invalid');
+  }
   if (value.addressingMode !== 'path' && value.addressingMode !== 'virtual-hosted') {
     invalidRequest('INVALID_MOUNT_CONFIG', 'S3 addressing mode is invalid');
   }
+  const bucket = requiredString(value.bucket, 'INVALID_MOUNT_CONFIG');
+  const validBucket = value.addressingMode === 'virtual-hosted'
+    ? S3_VIRTUAL_BUCKET_PATTERN.test(bucket) && !bucket.includes('..')
+    : S3_PATH_BUCKET_PATTERN.test(bucket) && bucket !== '.' && bucket !== '..';
+  if (!validBucket) {
+    invalidRequest('INVALID_MOUNT_CONFIG', 'S3 bucket name is invalid');
+  }
+  const rootPrefix = optionalString(value.rootPrefix, 'INVALID_MOUNT_CONFIG');
   return { endpoint, region, bucket, ...(rootPrefix === undefined ? {} : { rootPrefix }), addressingMode: value.addressingMode };
 }
 
-function validateConfig(driver: MountDriverType, value: unknown): Record<string, unknown> {
-  if (driver === 's3') return validateS3Config(value);
+function validateConfig(driver: MountDriverType, value: unknown, env: Env): Record<string, unknown> {
+  if (driver === 's3') return validateS3Config(value, env);
   if (!isRecord(value) || Object.keys(value).length !== 0) {
     invalidRequest('INVALID_MOUNT_CONFIG', 'Mount configuration is invalid');
   }
@@ -162,8 +194,9 @@ interface CredentialStatus {
 }
 
 async function credentialStatus(env: Env, mount: Mount): Promise<CredentialStatus> {
-  if (mount.driverType === 'native-r2') return { appConfigured: true, connected: true, source: 'mount', fields: {} };
-  if (mount.driverType === 'pikpak') return { appConfigured: false, connected: false, source: 'none', fields: {} };
+  if (RETIRED_DRIVERS.has(mount.driverType)) {
+    return { appConfigured: false, connected: false, source: 'none', fields: {} };
+  }
   const credentials = await getCredentials(env, mount.id);
   if (OAUTH_DRIVERS.has(mount.driverType)) {
     const app = oauthApplicationCredentials(credentials);
@@ -243,7 +276,7 @@ function mergeOAuthCredentials(value: unknown, existing: StorageCredentials | nu
 }
 
 async function credentialsForUpdate(
-  env: Env,
+  _env: Env,
   driver: MountDriverType,
   rawCredentials: unknown,
   existing: StorageCredentials | null,
@@ -263,7 +296,7 @@ async function credentialsForUpdate(
   invalidRequest('INVALID_MOUNT_CREDENTIALS', 'Credentials are not supported by this provider');
 }
 
-function createInput(body: MountRequestBody): CreateMountInput {
+function createInput(body: MountRequestBody, env: Env): CreateMountInput {
   const selectedDriver = driverType(body.driverType);
   return {
     name: requiredString(body.name, 'INVALID_MOUNT_NAME'),
@@ -274,11 +307,14 @@ function createInput(body: MountRequestBody): CreateMountInput {
     ...(optionalBoolean(body.isPublic) === undefined ? {} : { isPublic: optionalBoolean(body.isPublic) }),
     ...(optionalNumber(body.sortOrder) === undefined ? {} : { sortOrder: optionalNumber(body.sortOrder) }),
     ...(optionalRootItemId(body.rootItemId) === undefined ? {} : { rootItemId: optionalRootItemId(body.rootItemId) }),
-    config: validateConfig(selectedDriver, body.config),
+    config: validateConfig(selectedDriver, body.config, env),
   };
 }
 
-function updateInput(body: MountRequestBody, current: Mount): UpdateMountInput {
+function updateInput(body: MountRequestBody, current: Mount, env: Env): UpdateMountInput {
+  if (RETIRED_DRIVERS.has(current.driverType)) {
+    invalidRequest('DRIVER_RETIRED', 'Retired storage driver cannot be modified');
+  }
   const selectedDriver = body.driverType === undefined ? current.driverType : driverType(body.driverType);
   const config = body.config === undefined ? current.config : body.config;
   return {
@@ -290,7 +326,7 @@ function updateInput(body: MountRequestBody, current: Mount): UpdateMountInput {
     ...(optionalBoolean(body.isPublic) === undefined ? {} : { isPublic: optionalBoolean(body.isPublic) }),
     ...(optionalNumber(body.sortOrder) === undefined ? {} : { sortOrder: optionalNumber(body.sortOrder) }),
     ...(optionalRootItemId(body.rootItemId) === undefined ? {} : { rootItemId: optionalRootItemId(body.rootItemId) }),
-    config: validateConfig(selectedDriver, config),
+    config: validateConfig(selectedDriver, config, env),
   };
 }
 
@@ -307,7 +343,7 @@ function mountIdFromPath(pathname: string, suffix = ''): string | null {
   const match = new RegExp(`^/api/admin/mounts/([^/]+)${suffix}$`).exec(pathname);
   if (!match) return null;
   try {
-    return decodeURIComponent(match[1]);
+    return decodeURIComponent(match[1]!);
   } catch {
     invalidRequest();
   }
@@ -327,7 +363,7 @@ export async function handleMountRoutes(request: Request, env: Env, url: URL): P
     if (request.method !== 'POST') return methodNotAllowed();
 
     const body = requestBody(await readJson<unknown>(request));
-    const input = createInput(body);
+    const input = createInput(body, env);
     const credentials = await credentialsForUpdate(env, input.driverType, body.credentials, null, false);
     const mount = await createMount(env.DB, input);
     try {
@@ -365,6 +401,7 @@ export async function handleMountRoutes(request: Request, env: Env, url: URL): P
   if (id === null) return null;
   if (request.method === 'DELETE') {
     const mount = await requireMount(env, id);
+    await abortUploadsForMount(env, mount.id);
     await env.DB.batch([
       prepareDeleteCredentials(env.DB, mount.id),
       prepareMountDelete(env.DB, mount.id),
@@ -375,7 +412,7 @@ export async function handleMountRoutes(request: Request, env: Env, url: URL): P
 
   const current = await requireMount(env, id);
   const body = requestBody(await readJson<unknown>(request));
-  const input = updateInput(body, current);
+  const input = updateInput(body, current, env);
   const selectedDriver = input.driverType ?? current.driverType;
   const credentials = await credentialsForUpdate(
     env,

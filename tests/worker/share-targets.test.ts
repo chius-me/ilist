@@ -4,7 +4,7 @@ import type { DriverRegistry, StorageDriver, StorageItem } from '../../src/worke
 import { encodeExternalId } from '../../src/worker/external-identity';
 import { HttpError } from '../../src/worker/http';
 import { createMount } from '../../src/worker/mounts';
-import { openShareItem, sealShareItem } from '../../src/worker/share-crypto';
+import { sealShareItem } from '../../src/worker/share-crypto';
 import {
   downloadSharedFile,
   listSharedFolder,
@@ -50,29 +50,11 @@ function shareFor(mountId: string, providerItemId: string, targetKind: 'file' | 
     allowDownload: false,
     enabled: true,
     downloadCount: 0,
-  maxDownloads: null,
-  accessCount: 0,
-  createdAt: '2026-07-18T00:00:00.000Z',
+    maxDownloads: null,
+    accessCount: 0,
+    createdAt: '2026-07-18T00:00:00.000Z',
     updatedAt: '2026-07-18T00:00:00.000Z',
   };
-}
-
-async function insertNativeTree(): Promise<void> {
-  const db = workerEnv().DB;
-  const now = '2026-07-18T00:00:00.000Z';
-  await db.prepare("DELETE FROM entries WHERE id = 'private-child'").run();
-  await db.prepare("DELETE FROM entries WHERE id = 'private-folder'").run();
-  await db.prepare(`INSERT INTO entries (
-    id, parent_id, name, kind, storage_key, size, content_type, etag, status,
-    lifecycle_owner, is_public, sort_order, description, created_at, updated_at
-  ) VALUES (?, 'root', ?, 'folder', NULL, 0, NULL, NULL, 'ready', NULL, 0, 0, '', ?, ?)`)
-    .bind('private-folder', 'Private folder', now, now).run();
-  await db.prepare(`INSERT INTO entries (
-    id, parent_id, name, kind, storage_key, size, content_type, etag, status,
-    lifecycle_owner, is_public, sort_order, description, created_at, updated_at
-  ) VALUES (?, 'private-folder', ?, 'file', ?, 12, 'text/plain', 'etag', 'ready', NULL, 0, 0, '', ?, ?)`)
-    .bind('private-child', 'private.txt', 'share/private.txt', now, now).run();
-  await workerEnv().R2_BUCKET.put('share/private.txt', 'private-data', { httpMetadata: { contentType: 'text/plain' } });
 }
 
 function fakeDriver(): StorageDriver {
@@ -116,90 +98,54 @@ function fakeDriver(): StorageDriver {
       }),
     })),
     createFolder: vi.fn(), upload: vi.fn(), rename: vi.fn(), move: vi.fn(), remove: vi.fn(),
-  copy: vi.fn(async () => { throw new Error('not implemented'); }),
+    copy: vi.fn(async () => { throw new Error('not implemented'); }),
   };
 }
 
 describe('shared storage targets', () => {
-  it('resolves a private native R2 target and lists children with sealed read-only IDs', async () => {
-    await insertNativeTree();
-    await expect(resolveShareCreationTarget(workerEnv(), 'private-folder')).resolves.toEqual({
-      mountId: 'native-r2',
-      providerItemId: 'private-folder',
-      targetKind: 'folder',
-      name: 'Private folder',
+  it('applies live ancestry checks to legacy v1 handles on external mounts', async () => {
+    const mount = await createMount(workerEnv().DB, {
+      name: 'Legacy V1 External', mountPath: `/legacy-v1-${crypto.randomUUID()}`, driverType: 's3', provider: 'custom', config: {},
+    });
+    const driver = fakeDriver();
+    const registry: DriverRegistry = { s3: () => driver };
+    const share = shareFor(mount.id, 'provider-folder', 'folder', 'External folder');
+    const handle = await legacyV1Handle(share.id, 'provider-file-secret');
+
+    await expect(resolveSharedItem(workerEnv(), share, handle, registry)).resolves.toMatchObject({
+      item: { id: 'provider-file-secret' },
     });
 
-    const share = shareFor('native-r2', 'private-folder', 'folder', 'Private folder');
-    const directory = await listSharedFolder(workerEnv(), share, null);
-    expect(directory.current).toMatchObject({ name: 'Private folder', kind: 'folder' });
-    expect(directory.items).toHaveLength(1);
-    expect(directory.items[0]).toMatchObject({
-      name: 'private.txt',
-      capabilities: { open: false, preview: true, download: false, upload: false, rename: false, delete: false },
-    });
-    expect(JSON.stringify(directory)).not.toContain('private-child');
-    await expect(openShareItem(workerEnv(), share.id, directory.items[0].id)).resolves.toEqual({
-      rootItemId: 'private-folder',
-      itemId: 'private-child',
-    });
-  });
-
-  it('invalidates native handles when an item leaves the live root and restores them when it returns', async () => {
-    await insertNativeTree();
-    const share = shareFor('native-r2', 'private-folder', 'folder', 'Private folder');
-    const handle = (await listSharedFolder(workerEnv(), share, null)).items[0]!.id;
-
-    await workerEnv().DB.prepare("UPDATE entries SET parent_id = 'root' WHERE id = 'private-child'").run();
-    await expect(resolveSharedItem(workerEnv(), share, handle)).rejects.toMatchObject({
-      status: 404,
-      code: 'SHARE_TARGET_MISSING',
-    });
-
-    await workerEnv().DB.prepare("UPDATE entries SET parent_id = 'private-folder' WHERE id = 'private-child'").run();
-    await expect(resolveSharedItem(workerEnv(), share, handle)).resolves.toMatchObject({ item: { id: 'private-child' } });
-  });
-
-  it('applies the same live ancestry proof to legacy v1 handles', async () => {
-    await insertNativeTree();
-    const share = shareFor('native-r2', 'private-folder', 'folder', 'Private folder');
-    const handle = await legacyV1Handle(share.id, 'private-child');
-
-    await expect(resolveSharedItem(workerEnv(), share, handle)).resolves.toMatchObject({ item: { id: 'private-child' } });
-    await workerEnv().DB.prepare("UPDATE entries SET parent_id = 'root' WHERE id = 'private-child'").run();
-    await expect(resolveSharedItem(workerEnv(), share, handle)).rejects.toMatchObject({
+    driver.isWithin = vi.fn(async () => false);
+    await expect(resolveSharedItem(workerEnv(), share, handle, registry)).rejects.toMatchObject({
       status: 404,
       code: 'SHARE_TARGET_MISSING',
     });
   });
 
-  it('invalidates native handles when the shared root is deleted', async () => {
-    await insertNativeTree();
-    const share = shareFor('native-r2', 'private-folder', 'folder', 'Private folder');
+  it('reports capabilities.download as false when maxDownloads is exhausted', async () => {
+    const mount = await createMount(workerEnv().DB, {
+      name: 'Exhausted Quota', mountPath: `/exhausted-${crypto.randomUUID()}`, driverType: 's3', provider: 'custom', config: {},
+    });
+    const registry: DriverRegistry = { s3: () => fakeDriver() };
+    const share: Share = {
+      ...shareFor(mount.id, 'provider-folder', 'folder', 'External folder'),
+      allowDownload: true,
+      maxDownloads: 2,
+      downloadCount: 2,
+    };
 
-    await workerEnv().DB.prepare("DELETE FROM entries WHERE id = 'private-child'").run();
-    await workerEnv().DB.prepare("DELETE FROM entries WHERE id = 'private-folder'").run();
+    const directory = await listSharedFolder(workerEnv(), share, null, registry);
+    expect(directory.items[0]?.capabilities.download).toBe(false);
+    expect(directory.items[0]?.capabilities.preview).toBe(true);
+  });
+
+  it('rejects retired native-r2 share mounts as unavailable', async () => {
+    const share = shareFor('native-r2', 'provider-folder', 'folder', 'Retired folder');
     await expect(resolveSharedItem(workerEnv(), share, null)).rejects.toMatchObject({
-      status: 404,
-      code: 'SHARE_TARGET_MISSING',
+      status: 503,
+      code: 'SHARE_PROVIDER_UNAVAILABLE',
     });
-  });
-
-  it('streams private native R2 files with Range support through a sealed handle', async () => {
-    await insertNativeTree();
-    const share = shareFor('native-r2', 'private-folder', 'folder', 'Private folder');
-    const directory = await listSharedFolder(workerEnv(), share, null);
-    const response = await downloadSharedFile(
-      workerEnv(),
-      share,
-      directory.items[0].id,
-      new Request('https://ilist.example/s/token/file/handle/private.txt', { headers: { range: 'bytes=0-6' } }),
-      false,
-    );
-
-    expect(response.status).toBe(206);
-    expect(response.headers.get('cache-control')).toBe('private, no-store');
-    await expect(response.text()).resolves.toBe('private');
   });
 
   it('resolves and browses external targets without exposing provider item IDs', async () => {

@@ -15,6 +15,7 @@ export interface UploadSessionView {
   id: string;
   kind: 'multipart';
   partSize: number;
+  maxPartConcurrency?: number;
   size: number;
   uploadedParts: UploadSessionPart[];
   expiresAt: string;
@@ -38,7 +39,7 @@ export interface ResumableUploadControl {
   paused?: boolean;
   shouldPause?(): boolean;
   onSession?(session: UploadSessionView): void;
-  onPartConfirmed?(part: UploadSessionPart): void;
+  onPartConfirmed?(part: UploadSessionPart, committedBytes?: number): void;
   onCompleting?(): void;
 }
 
@@ -107,6 +108,9 @@ function parseUploadSession(value: unknown): UploadSessionView {
     id: value.id,
     kind: 'multipart',
     partSize: value.partSize,
+    ...(isSafeNonNegativeInteger(value.maxPartConcurrency) && value.maxPartConcurrency >= 1 && value.maxPartConcurrency <= 6
+      ? { maxPartConcurrency: value.maxPartConcurrency }
+      : {}),
     size: value.size,
     uploadedParts: value.uploadedParts.map(parseSessionPart),
     expiresAt: value.expiresAt,
@@ -331,25 +335,94 @@ async function uploadMultipartFile(input: UploadFileInput): Promise<void> {
     let committedBytes = [...parts.values()].reduce((total, part) => total + part.size, 0);
     input.onProgress(committedBytes, input.file.size);
 
+    const pendingParts: number[] = [];
     for (let partNumber = 1; partNumber <= partCount; partNumber += 1) {
-      if (parts.has(partNumber)) continue;
-      if (shouldPause(input.control)) throw new UploadPausedError();
-      const start = (partNumber - 1) * session.partSize;
-      const body = input.file.slice(start, Math.min(start + session.partSize, input.file.size), input.file.type);
-      const part = await uploadSessionPart({
-        sessionId: session.id,
-        partNumber,
-        body,
-        contentType: contentType(input.file),
-        signal: input.signal,
-        onProgress: (loadedBytes) => input.onProgress(committedBytes + loadedBytes, input.file.size),
-      });
-      if (part.partNumber !== partNumber || part.size !== body.size) throw uploadResponseInvalid();
-      parts.set(partNumber, part);
-      committedBytes += part.size;
-      rememberSession(input.control, session, parts);
-      input.control?.onPartConfirmed?.(part);
-      input.onProgress(committedBytes, input.file.size);
+      if (!parts.has(partNumber)) pendingParts.push(partNumber);
+    }
+
+    const concurrency = Math.max(1, Math.min(session.maxPartConcurrency ?? 1, pendingParts.length || 1));
+    if (concurrency === 1) {
+      for (const partNumber of pendingParts) {
+        if (shouldPause(input.control)) throw new UploadPausedError();
+        if (input.signal.aborted) throw abortError();
+        const start = (partNumber - 1) * session.partSize;
+        const body = input.file.slice(start, Math.min(start + session.partSize, input.file.size), input.file.type);
+        const part = await uploadSessionPart({
+          sessionId: session.id,
+          partNumber,
+          body,
+          contentType: contentType(input.file),
+          signal: input.signal,
+          onProgress: (loadedBytes) => input.onProgress(committedBytes + loadedBytes, input.file.size),
+        });
+        if (part.partNumber !== partNumber || part.size !== body.size) throw uploadResponseInvalid();
+        parts.set(partNumber, part);
+        committedBytes += part.size;
+        rememberSession(input.control, session, parts);
+        input.control?.onPartConfirmed?.(part, committedBytes);
+        input.onProgress(committedBytes, input.file.size);
+      }
+    } else {
+      const partController = new AbortController();
+      const onCallerAbort = () => partController.abort();
+      input.signal.addEventListener('abort', onCallerAbort, { once: true });
+      const inFlightBytes = new Map<number, number>();
+      let cursor = 0;
+      let highestReported = committedBytes;
+      const reportProgress = () => {
+        let active = 0;
+        for (const loaded of inFlightBytes.values()) active += loaded;
+        const totalLoaded = Math.max(highestReported, Math.min(committedBytes + active, input.file.size));
+        highestReported = totalLoaded;
+        input.onProgress(totalLoaded, input.file.size);
+      };
+
+      const worker = async () => {
+        while (cursor < pendingParts.length) {
+          if (shouldPause(input.control)) {
+            partController.abort();
+            throw new UploadPausedError();
+          }
+          if (input.signal.aborted || partController.signal.aborted) {
+            throw shouldPause(input.control) ? new UploadPausedError() : abortError();
+          }
+          const partNumber = pendingParts[cursor]!;
+          cursor += 1;
+          const start = (partNumber - 1) * session.partSize;
+          const body = input.file.slice(start, Math.min(start + session.partSize, input.file.size), input.file.type);
+          inFlightBytes.set(partNumber, 0);
+          try {
+            const part = await uploadSessionPart({
+              sessionId: session.id,
+              partNumber,
+              body,
+              contentType: contentType(input.file),
+              signal: partController.signal,
+              onProgress: (loadedBytes) => {
+                inFlightBytes.set(partNumber, Math.min(loadedBytes, body.size));
+                reportProgress();
+              },
+            });
+            inFlightBytes.delete(partNumber);
+            if (part.partNumber !== partNumber || part.size !== body.size) throw uploadResponseInvalid();
+            parts.set(partNumber, part);
+            committedBytes += part.size;
+            rememberSession(input.control, session, parts);
+            input.control?.onPartConfirmed?.(part, committedBytes);
+            reportProgress();
+          } catch (error) {
+            inFlightBytes.delete(partNumber);
+            partController.abort();
+            throw error;
+          }
+        }
+      };
+
+      try {
+        await Promise.all(Array.from({ length: concurrency }, () => worker()));
+      } finally {
+        input.signal.removeEventListener('abort', onCallerAbort);
+      }
     }
 
     if (parts.size !== partCount) throw uploadResponseInvalid();

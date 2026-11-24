@@ -3,7 +3,8 @@ import { useI18n } from '../i18n/I18nProvider';
 import { usePreferences } from '../preferences/PreferencesProvider';
 import { FolderMark } from './FolderMark';
 
-const CONTACT_EMAIL = 'contact@chius.cc';
+const DEFAULT_REPO_URL = 'https://github.com/chius-me/ilist';
+const DEFAULT_CONTACT_EMAIL = 'contact@chius.cc';
 
 interface AppHeaderProps {
   admin: boolean;
@@ -16,6 +17,8 @@ interface AppHeaderProps {
 }
 
 export function AppHeader({ admin, username, onHome, onStorage, onSignIn, onSignOut, showSessionActions = true }: AppHeaderProps) {
+  const repoUrl = import.meta.env.VITE_REPO_URL || DEFAULT_REPO_URL;
+  const contactEmail = import.meta.env.VITE_CONTACT_EMAIL || DEFAULT_CONTACT_EMAIL;
   const { resolvedTheme, updatePreferences } = usePreferences();
   const { locale, t } = useI18n();
   const dark = resolvedTheme === 'dark';
@@ -44,10 +47,10 @@ export function AppHeader({ admin, username, onHome, onStorage, onSignIn, onSign
           <span>iList</span>
         </button>
         <div className="headerControls">
-          <a className="headerControl" href="https://github.com/chius-me/ilist" target="_blank" rel="noreferrer" aria-label={t('shell.openGitHub')} title={t('shell.openGitHub')}>
+          <a className="headerControl" href={repoUrl} target="_blank" rel="noreferrer" aria-label={t('shell.openGitHub')} title={t('shell.openGitHub')}>
             <Github aria-hidden="true" size={17} />
           </a>
-          <a className="headerControl" href={`mailto:${CONTACT_EMAIL}`} aria-label={t('shell.contactEmail', { email: CONTACT_EMAIL })} title={t('shell.contactEmail', { email: CONTACT_EMAIL })}>
+          <a className="headerControl" href={`mailto:${contactEmail}`} aria-label={t('shell.contactEmail', { email: contactEmail })} title={t('shell.contactEmail', { email: contactEmail })}>
             <Mail aria-hidden="true" size={17} />
           </a>
           <button className="headerControl languageControl" type="button" onClick={changeLanguage} aria-label={t('shell.changeLanguage')} title={t('shell.changeLanguage')}>

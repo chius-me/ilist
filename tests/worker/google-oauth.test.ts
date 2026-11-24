@@ -28,10 +28,18 @@ async function createGoogleMount(): Promise<string> {
 
 async function start(mountId: string): Promise<Response> {
   const cookie = await login();
-  return SELF.fetch(`${origin}/api/admin/oauth/google/start?mountId=${encodeURIComponent(mountId)}`, {
-    headers: { cookie },
-    redirect: 'manual',
+  return SELF.fetch(`${origin}/api/admin/oauth/google/start`, {
+    method: 'POST',
+    headers: { cookie, origin, 'content-type': 'application/json' },
+    body: JSON.stringify({ mountId }),
   });
+}
+
+async function startUrl(mountId: string): Promise<URL> {
+  const response = await start(mountId);
+  expect(response.status).toBe(200);
+  const payload = await response.json() as { data: { url: string } };
+  return new URL(payload.data.url);
 }
 
 describe('Google Drive OAuth routes', () => {
@@ -40,10 +48,7 @@ describe('Google Drive OAuth routes', () => {
   it('builds an offline PKCE authorization URL with the Drive scope and fixed callback origin', async () => {
     const mountId = await createGoogleMount();
     await putCredentials(workerEnv(), mountId, { app: { clientId: 'per-mount-google-id', clientSecret: 'per-mount-google-secret' } });
-    const response = await start(mountId);
-
-    expect(response.status).toBe(302);
-    const authorization = new URL(response.headers.get('location')!);
+    const authorization = await startUrl(mountId);
     expect(`${authorization.origin}${authorization.pathname}`).toBe('https://accounts.google.com/o/oauth2/v2/auth');
     expect(authorization.searchParams.get('scope')).toBe('https://www.googleapis.com/auth/drive');
     expect(authorization.searchParams.get('redirect_uri')).toBe(`${origin}/api/admin/oauth/google/callback`);
@@ -64,7 +69,7 @@ describe('Google Drive OAuth routes', () => {
   it('consumes state once, stores encrypted tokens, and redirects to storage settings', async () => {
     const mountId = await createGoogleMount();
     await putCredentials(workerEnv(), mountId, { app: { clientId: 'callback-google-id', clientSecret: 'callback-google-secret' } });
-    const authorization = new URL((await start(mountId)).headers.get('location')!);
+    const authorization = await startUrl(mountId);
     const state = authorization.searchParams.get('state')!;
     const tokenFetch = vi.fn(async (_input: RequestInfo | URL, _init?: RequestInit) => Response.json({
       token_type: 'Bearer', access_token: 'google-access', refresh_token: 'google-refresh', expires_in: 3600,
@@ -97,7 +102,7 @@ describe('Google Drive OAuth routes', () => {
 
   it('consumes denied authorization state and returns a sanitized error status', async () => {
     const mountId = await createGoogleMount();
-    const authorization = new URL((await start(mountId)).headers.get('location')!);
+    const authorization = await startUrl(mountId);
     const cookie = await login();
     const response = await SELF.fetch(`${origin}/api/admin/oauth/google/callback?error=access_denied&state=${authorization.searchParams.get('state')}`, {
       headers: { cookie }, redirect: 'manual',

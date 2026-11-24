@@ -190,4 +190,30 @@ describe('Google Drive storage driver', () => {
     await expect(driver.remove('root')).rejects.toMatchObject({ code: 'INVALID_STORAGE_OPERATION' });
     await expect(driver.createFolder('root', '../bad')).rejects.toMatchObject({ code: 'INVALID_ENTRY_NAME' });
   });
+
+  it('prefers folders in resolvePath and uses existsByName during copy conflict checks', async () => {
+    const findChildByName = vi.fn(async (_parentId: string, name: string, folderOnly?: boolean) => {
+      if (name === 'reports' && folderOnly) {
+        return file({ id: 'folder-reports', name: 'reports', mimeType: GOOGLE_FOLDER_MIME_TYPE, parents: ['root'] });
+      }
+      return null;
+    });
+    const existsByName = vi.fn(async () => true);
+    const stat = vi.fn(async (id: string) => {
+      if (id === 'root') return file({ id: 'root', name: 'Drive', mimeType: GOOGLE_FOLDER_MIME_TYPE, size: undefined, parents: [] });
+      if (id === 'dest') return file({ id: 'dest', name: 'Dest', mimeType: GOOGLE_FOLDER_MIME_TYPE, size: undefined, parents: ['root'] });
+      return file({ id, name: 'doc.txt', parents: ['root'] });
+    });
+    const api = client({ stat, findChildByName, existsByName });
+    const driver = new GoogleDriveDriver(mount, api);
+
+    const chain = await driver.resolvePath(['reports']);
+    expect(chain.map((item) => item.id)).toEqual(['root', 'folder-reports']);
+
+    await expect(driver.copy('file-1', 'dest')).rejects.toMatchObject({ code: 'ENTRY_NAME_CONFLICT' });
+    expect(existsByName).toHaveBeenCalledWith('dest', 'doc.txt');
+    expect(api.copy).not.toHaveBeenCalled();
+
+    await expect(driver.resolvePath(['..'])).rejects.toMatchObject({ code: 'ENTRY_NOT_FOUND' });
+  });
 });

@@ -56,7 +56,7 @@ describe('explorer operations', () => {
     render(<App />);
     fireEvent.click(await screen.findByRole('button', { name: 'Actions for report.pdf' }));
     fireEvent.click(screen.getByRole('menuitem', { name: 'Delete' }));
-    expect(screen.getByRole('dialog', { name: 'Delete report.pdf' })).toBeVisible();
+    expect(await screen.findByRole('dialog', { name: 'Delete report.pdf' })).toBeVisible();
     expect(confirmSpy).not.toHaveBeenCalled();
   });
 
@@ -64,18 +64,19 @@ describe('explorer operations', () => {
     render(<App />);
     fireEvent.click(await screen.findByRole('button', { name: 'Actions for report.pdf' }));
     fireEvent.click(screen.getByRole('menuitem', { name: 'Rename' }));
-    fireEvent.change(screen.getByLabelText('Name'), { target: { value: 'renamed.pdf' } });
+    fireEvent.change(await screen.findByLabelText('Name'), { target: { value: 'renamed.pdf' } });
     fireEvent.click(screen.getByRole('button', { name: 'Save' }));
     expect(await screen.findByText('Renamed successfully.')).toBeVisible();
     // Wait until the modal releases inert so explorer controls are accessible again.
     fireEvent.click(await screen.findByRole('button', { name: 'Create folder' }));
-    fireEvent.change(screen.getByLabelText('Name'), { target: { value: 'New folder' } });
+    fireEvent.change(await screen.findByLabelText('Name'), { target: { value: 'New folder' } });
     fireEvent.click(screen.getByRole('button', { name: 'Save' }));
     expect(await screen.findByText('Folder created.')).toBeVisible();
 
     fireEvent.click(await screen.findByRole('button', { name: 'Actions for report.pdf' }));
     fireEvent.click(await screen.findByRole('menuitem', { name: 'Properties' }));
-    fireEvent.click(screen.getByRole('button', { name: 'Save' }));
+    const dialog = await screen.findByRole('dialog', { name: 'Properties for report.pdf' });
+    fireEvent.click(dialog.querySelector('button[type="submit"]') ?? screen.getByRole('button', { name: 'Save' }));
     expect(await screen.findByText('Properties saved.')).toBeVisible();
   });
 

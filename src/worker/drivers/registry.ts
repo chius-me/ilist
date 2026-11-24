@@ -47,6 +47,8 @@ export async function createDriver(env: Env, mount: Mount, registry: DriverRegis
     throw new HttpError(503, 'DRIVER_UNAVAILABLE', 'Storage driver is unavailable');
   }
 
-  const credentials = await getCredentials(env, mount.id);
+  const credentials = mount.driverType === 's3' || registry !== driverRegistry
+    ? await getCredentials(env, mount.id)
+    : null;
   return factory(env, mount, credentials);
 }

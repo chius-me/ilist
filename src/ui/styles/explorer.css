@@ -29,7 +29,7 @@
   min-width: 0;
 }
 
-.breadcrumbs button {
+.breadcrumbs a {
   display: inline-flex;
   align-items: center;
   gap: 5px;
@@ -40,12 +40,14 @@
   border-radius: var(--space-1);
   background: transparent;
   padding: 4px 5px;
+  color: inherit;
+  text-decoration: none;
   text-overflow: ellipsis;
   white-space: nowrap;
 }
 
-.breadcrumbs button span { overflow: hidden; text-overflow: ellipsis; }
-.breadcrumbs button:hover { background: var(--color-hover); color: var(--text); }
+.breadcrumbs a span { overflow: hidden; text-overflow: ellipsis; }
+.breadcrumbs a:hover { background: var(--color-hover); color: var(--text); }
 .breadcrumbItem > svg { flex: 0 0 auto; margin: 0 1px; }
 .breadcrumbPlaceholder { height: 42px; border-bottom: 1px solid var(--line); }
 .explorerToolbarSlot { min-height: 54px; }
@@ -158,6 +160,9 @@
 
 .fileListHeader span { padding: 0 8px; }
 .fileListHeader span:last-child { text-align: right; }
+.fileListSortBtn { display: inline-flex; align-items: center; gap: 4px; border: 0; background: transparent; padding: 2px 0; color: inherit; font: inherit; font-weight: inherit; cursor: pointer; }
+.fileListSortBtn.isActive { color: var(--text); }
+.virtualSpacer { display: block; list-style: none; border: 0; padding: 0; margin: 0; }
 
 .entryRow {
   min-width: 600px;
@@ -185,14 +190,18 @@
   border: 0;
   background: transparent;
   padding: 0 8px;
+  color: inherit;
   text-align: left;
+  text-decoration: none;
+  cursor: pointer;
 }
 
 .entryIcon { display: grid; width: 28px; height: 28px; place-items: center; border-radius: var(--space-1); }
 .entryIcon.folder, .gridIcon.folder { color: var(--color-folder-icon); background: var(--color-folder-icon-surface); }
 .entryIcon.file, .gridIcon.file { color: var(--color-file-icon); background: var(--color-file-icon-surface); }
-.entryName { display: block; min-width: 0; overflow: hidden; color: var(--text); font-size: 13px; font-weight: 650; text-overflow: ellipsis; white-space: nowrap; }
-.entryName strong { display: block; overflow: hidden; font-weight: inherit; text-overflow: ellipsis; white-space: nowrap; }
+.entryName { display: inline-flex; align-items: center; gap: 6px; min-width: 0; overflow: hidden; color: var(--text); font-size: 13px; font-weight: 650; text-overflow: ellipsis; white-space: nowrap; }
+.entryName strong { display: block; min-width: 0; overflow: hidden; font-weight: inherit; text-overflow: ellipsis; white-space: nowrap; }
+.privateBadge { display: inline-flex; flex: 0 0 auto; align-items: center; color: var(--muted); }
 .entrySize, .entryDate { min-width: 0; overflow: hidden; color: var(--muted); padding: 0 8px; font-size: 12px; font-variant-numeric: tabular-nums; text-overflow: ellipsis; white-space: nowrap; }
 .entryActions { display: flex; align-items: center; justify-content: flex-end; gap: 2px; padding-right: 6px; }
 .entryActions .iconButton { width: 30px; height: 30px; flex-basis: 30px; border-color: transparent; background: transparent; }
@@ -208,10 +217,12 @@
 .fileCard:hover { border-color: var(--color-border-strong); background: var(--color-hover); }
 .fileCard.isSelected { border-color: var(--accent); background: var(--accent-soft); }
 .fileCard.isFocused { box-shadow: 0 0 0 2px var(--accent); }
-.gridPrimary { display: block; width: 100%; border: 0; background: transparent; padding: 0; text-align: left; }
-.gridMedia { display: grid; width: 100%; aspect-ratio: 4 / 3; place-items: center; border-bottom: 1px solid var(--line); background: var(--color-surface-muted); }
+.gridPrimary { display: block; width: 100%; border: 0; background: transparent; padding: 0; color: inherit; text-align: left; text-decoration: none; cursor: pointer; }
+.gridMedia { display: grid; width: 100%; aspect-ratio: 4 / 3; place-items: center; overflow: hidden; border-bottom: 1px solid var(--line); background: var(--color-surface-muted); }
+.gridThumb { display: block; width: 100%; height: 100%; object-fit: cover; }
 .gridIcon { display: grid; width: 48px; height: 48px; place-items: center; border-radius: var(--radius-panel); }
 .gridFooter { display: grid; min-height: 54px; align-content: center; gap: 3px; padding: 8px 38px 8px 10px; }
+.gridTitleRow { display: flex; align-items: center; gap: 5px; min-width: 0; }
 .gridFooter strong, .gridFooter small { width: 100%; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .gridFooter strong { color: var(--text); font-size: 13px; }
 .gridFooter small { color: var(--muted); font-size: 11px; font-variant-numeric: tabular-nums; }
@@ -219,6 +230,7 @@
 .gridMenu { position: absolute; right: 6px; bottom: 10px; width: 30px; height: 30px; flex-basis: 30px; border-color: transparent; background: transparent; }
 
 .emptyState, .errorState { display: grid; min-height: 240px; place-content: center; justify-items: center; gap: 8px; color: var(--muted); padding: 28px; text-align: center; }
+.explorerFooter { display: flex; justify-content: center; border-top: 1px solid var(--line); padding: 12px; }
 .emptyState strong, .errorState strong { color: var(--text); font-size: 15px; }
 .emptyState span, .errorState span { max-width: 360px; font-size: 13px; line-height: 1.45; }
 .errorState { color: var(--danger); }
@@ -264,7 +276,7 @@
   /* Keep home + parent + current so nested paths remain navigable on small screens. */
   .toolbarPath .breadcrumbItem:not(:first-child):not(:nth-last-child(-n+2)) { display: none; }
   .toolbarPath .breadcrumbItem { min-width: 0; }
-  .toolbarPath .breadcrumbItem button { max-width: 100%; }
+  .toolbarPath .breadcrumbItem a { max-width: 100%; }
   .explorerToolbar .iconButton, .mobileViewToggle button { width: 48px; height: 48px; flex-basis: 48px; }
   .searchCluster { width: 48px; height: 48px; flex-basis: 48px; }
   .searchControl { --search-width: 80px; height: 48px; }
@@ -305,6 +317,11 @@
 .shareViewControl { display: inline-flex; flex: 0 0 auto; border: 1px solid var(--color-border); border-radius: var(--radius-control); padding: 2px; }
 .shareViewControl button { display: grid; width: 32px; height: 30px; place-items: center; border: 0; border-radius: calc(var(--radius-control) - 2px); background: transparent; color: var(--color-muted); }
 .shareViewControl button.isActive { background: var(--color-selected); color: var(--color-accent-foreground-strong); }
+.shareToolbarRow { display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: 8px; border-bottom: 1px solid var(--color-border); padding: 4px 8px; }
+.shareToolbarRow .shareBreadcrumbs { border-bottom: 0; padding: 0; min-height: 36px; flex: 1 1 auto; min-width: 0; }
+.shareFilterControls { display: inline-flex; flex: 0 0 auto; align-items: center; gap: 4px; }
+.shareSearchControl { --search-width: 140px; height: 32px; }
+.shareSearchControl input { height: 30px; }
 .shareBreadcrumbs { display: flex; min-height: 38px; align-items: center; gap: 4px; overflow-x: auto; border-bottom: 1px solid var(--color-border); padding: 4px 8px; white-space: nowrap; }
 .shareBreadcrumbs span { display: inline-flex; align-items: center; gap: 4px; }
 .shareBreadcrumbs button { max-width: 220px; overflow: hidden; border: 0; border-radius: var(--radius-control); background: transparent; padding: 5px 7px; color: var(--color-accent-foreground-strong); font-size: 12px; font-weight: 650; text-overflow: ellipsis; white-space: nowrap; }

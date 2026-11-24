@@ -71,7 +71,7 @@ describe('explorer collection interactions', () => {
     const user = userEvent.setup();
     render(<App />);
 
-    await user.click(await screen.findByRole('button', { name: 'Open Archive' }));
+    await user.click(await screen.findByRole('link', { name: 'Open Archive' }));
 
     expect(location.pathname).toBe('/Archive');
     expect(screen.queryByText(/selected/)).not.toBeInTheDocument();
@@ -136,17 +136,19 @@ describe('explorer collection interactions', () => {
     render(<App />);
     const collection = await screen.findByRole('list', { name: 'Files and folders' });
     const rows = [...collection.querySelectorAll<HTMLElement>('[data-entry-id]')];
-    rows.forEach((row, index) => vi.spyOn(row, 'getBoundingClientRect').mockReturnValue({
-      x: 0,
-      y: index * 40,
-      left: 0,
-      top: index * 40,
-      right: 200,
-      bottom: (index + 1) * 40,
-      width: 200,
-      height: 40,
-      toJSON: () => ({}),
-    }));
+    rows.forEach((row, index) => {
+      vi.spyOn(row, 'getBoundingClientRect').mockReturnValue({
+        x: 0,
+        y: index * 40,
+        left: 0,
+        top: index * 40,
+        right: 200,
+        bottom: (index + 1) * 40,
+        width: 200,
+        height: 40,
+        toJSON: () => ({}),
+      });
+    });
 
     fireEvent.pointerDown(collection, { button: 0, isPrimary: true, pointerId: 1, clientX: 220, clientY: 45 });
     fireEvent.pointerMove(collection, { pointerId: 1, clientX: 100, clientY: 115 });

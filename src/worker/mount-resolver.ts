@@ -19,8 +19,11 @@ export function resolveVirtualPath(virtualPath: string, mounts: readonly Mount[]
     throw new HttpError(404, 'MOUNT_NOT_FOUND', 'Mount was not found');
   }
 
-  const segments = virtualPath.slice(1).split('/');
-  const mountSegment = decodeSegment(segments[0]);
+  const segments = virtualPath.slice(1).split('/').filter(Boolean);
+  if (segments.length === 0) {
+    throw new HttpError(404, 'MOUNT_NOT_FOUND', 'Mount was not found');
+  }
+  const mountSegment = decodeSegment(segments[0]!);
   const mount = mounts.find((candidate) => candidate.mountPath.slice(1) === mountSegment);
   if (!mount) {
     throw new HttpError(404, 'MOUNT_NOT_FOUND', 'Mount was not found');

@@ -16,7 +16,7 @@ function file(overrides: Partial<DropboxMetadata> = {}): DropboxMetadata {
 
 describe('Dropbox API client', () => {
   it('lists folders and continues with an opaque cursor', async () => {
-    const fetcher = vi.fn(async (_input: RequestInfo | URL, init?: RequestInit) => Response.json({
+    const fetcher = vi.fn(async (_input: RequestInfo | URL, _init?: RequestInit) => Response.json({
       entries: [file()], cursor: 'next-cursor', has_more: true,
     }));
     const client = new DropboxClient(workerEnv(), 'mount-dropbox', fetcher, async () => 'access');

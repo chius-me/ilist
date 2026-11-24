@@ -1,8 +1,8 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { env } from 'cloudflare:test';
-import { putCredentials, getCredentials } from '../../src/worker/credentials';
+import { getCredentials, patchCredentials, putCredentials } from '../../src/worker/credentials';
 import { createMount } from '../../src/worker/mounts';
-import { getOneDriveAccessToken } from '../../src/worker/drivers/onedrive/tokens';
+import { getOneDriveAccessToken, refreshOneDriveAccessToken } from '../../src/worker/drivers/onedrive/tokens';
 import type { Env } from '../../src/worker/types';
 
 const workerEnv = () => env as unknown as Env;
@@ -66,5 +66,27 @@ describe('OneDrive token lifecycle', () => {
     const error = await getOneDriveAccessToken(workerEnv(), mountId).catch((cause: unknown) => cause);
     expect(error).toMatchObject({ code: 'ONEDRIVE_TOKEN_EXCHANGE_FAILED' });
     expect(String(error)).not.toContain('sensitive-refresh-token');
+  });
+
+  it('waits on rejectedAccessToken 401 coalescing until lease holder writes a new access token', async () => {
+    const mountId = await mountWithTokens(Date.now() + 3_600_000);
+    await workerEnv().DB.prepare(
+      'INSERT INTO oauth_refresh_leases (mount_id, owner, expires_at) VALUES (?, ?, ?)',
+    ).bind(mountId, 'other-worker', Date.now() + 30_000).run();
+
+    setTimeout(() => {
+      void patchCredentials(workerEnv(), mountId, {
+        auth: {
+          accessToken: 'coalesced-fresh-access',
+          refreshToken: 'refresh-1',
+          tokenType: 'Bearer',
+          expiresAt: Date.now() + 3_600_000,
+          scope: 'Files.ReadWrite.All offline_access',
+        },
+      });
+    }, 20);
+
+    const refreshed = await refreshOneDriveAccessToken(workerEnv(), mountId, 'expired-access');
+    expect(refreshed).toBe('coalesced-fresh-access');
   });
 });

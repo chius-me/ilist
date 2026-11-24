@@ -1,8 +1,13 @@
 import { SELF, env } from 'cloudflare:test';
-import { describe, expect, it } from 'vitest';
+import { afterEach, describe, expect, it, vi } from 'vitest';
+import { driverRegistry } from '../../src/worker/drivers/registry';
+import type { StorageDriver, StorageItem } from '../../src/worker/drivers/types';
+import { encodeExternalId } from '../../src/worker/external-identity';
+import { createMount } from '../../src/worker/mounts';
 import type { Env } from '../../src/worker/types';
 
 const origin = 'https://ilist.example';
+const originalS3Factory = driverRegistry.s3;
 
 function workerEnv(): Env {
   return env as unknown as Env;
@@ -18,17 +23,53 @@ async function login(): Promise<string> {
   return response.headers.get('set-cookie')!.split(';')[0];
 }
 
-async function privateFile(id = crypto.randomUUID()): Promise<string> {
-  const now = new Date().toISOString();
+function fakePrivateDriver(itemId: string): StorageDriver {
+  const item: StorageItem = {
+    id: itemId,
+    parentId: 'root',
+    name: 'secret.txt',
+    kind: 'file',
+    size: 6,
+    contentType: 'text/plain',
+    modifiedAt: null,
+    etag: 'etag',
+  };
+  return {
+    rootId: 'root',
+    capabilities: new Set(['list', 'download']),
+    isWithin: vi.fn(async (candidateId, ancestorId) => candidateId === ancestorId || candidateId === itemId),
+    list: vi.fn(async () => ({ items: [item], nextCursor: null })),
+    stat: vi.fn(async (id: string) => {
+      if (id === 'root') {
+        return { id: 'root', parentId: null, name: 'Root', kind: 'folder' as const, size: null, contentType: null, modifiedAt: null, etag: null };
+      }
+      if (id === itemId) return item;
+      throw new Error('missing');
+    }),
+    getDownload: vi.fn(async () => ({ kind: 'stream' as const, response: new Response('secret', { headers: { 'content-type': 'text/plain' } }) })),
+    createFolder: vi.fn(),
+    upload: vi.fn(),
+    rename: vi.fn(),
+    move: vi.fn(),
+    remove: vi.fn(),
+    copy: vi.fn(async () => {
+      throw new Error('not implemented');
+    }),
+  };
+}
+
+async function privateFile(itemId = `secret-${crypto.randomUUID()}.txt`): Promise<string> {
   await workerEnv().DB.prepare('DELETE FROM shares').run();
-  await workerEnv().DB.prepare("DELETE FROM entries WHERE parent_id = 'root' AND name = 'secret.txt'").run();
-  await workerEnv().DB.prepare(`INSERT INTO entries (
-    id, parent_id, name, kind, storage_key, size, content_type, etag, status,
-    lifecycle_owner, is_public, sort_order, description, created_at, updated_at
-  ) VALUES (?, 'root', 'secret.txt', 'file', ?, 6, 'text/plain', 'etag', 'ready', NULL, 0, 0, '', ?, ?)`)
-    .bind(id, `shares/${id}.txt`, now, now).run();
-  await workerEnv().R2_BUCKET.put(`shares/${id}.txt`, 'secret');
-  return id;
+  await workerEnv().DB.prepare('DELETE FROM mounts').run();
+  const mount = await createMount(workerEnv().DB, {
+    name: 'Private Cloud',
+    mountPath: `/private-cloud-${crypto.randomUUID().slice(0, 8)}`,
+    driverType: 's3',
+    provider: 'custom',
+    isPublic: false,
+  });
+  driverRegistry.s3 = () => fakePrivateDriver(itemId);
+  return encodeExternalId(mount.id, itemId);
 }
 
 async function createShare(cookie: string, entryId: string, overrides: Record<string, unknown> = {}) {
@@ -40,6 +81,10 @@ async function createShare(cookie: string, entryId: string, overrides: Record<st
 }
 
 describe('share administration routes', () => {
+  afterEach(() => {
+    driverRegistry.s3 = originalS3Factory;
+  });
+
   it('requires authentication and same-origin mutations', async () => {
     const entryId = await privateFile();
     const unauthenticated = await createShare('', entryId);
@@ -66,10 +111,10 @@ describe('share administration routes', () => {
     const created = await response.json() as { data: { url: string; share: Record<string, unknown> } };
     expect(created.data.url).toMatch(/^https:\/\/ilist\.example\/s\/[A-Za-z0-9_-]{43}$/);
     expect(created.data.share).toMatchObject({
-      name: 'secret.txt', targetKind: 'file', mountName: 'R2',
+      name: 'secret.txt', targetKind: 'file', mountName: 'Private Cloud',
       protected: true, expiresAt: '2099-01-01T00:00:00.000Z', allowDownload: false, enabled: true,
     });
-    expect(JSON.stringify(created.data.share)).not.toMatch(/tokenHash|passwordHash|providerItemId|secret\.txt.*shares\//);
+    expect(JSON.stringify(created.data.share)).not.toMatch(/tokenHash|passwordHash|providerItemId|secret-/);
 
     const listed = await SELF.fetch(`${origin}/api/admin/shares`, { headers: { cookie } });
     const text = await listed.text();

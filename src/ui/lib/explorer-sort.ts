@@ -13,6 +13,7 @@ export function compareEntries(left: Entry, right: Entry, sort: ExplorerSort): n
   if (left.kind !== right.kind) return left.kind === 'folder' ? -1 : 1;
   const direction = sort.order === 'asc' ? 1 : -1;
   let result = 0;
+  if (sort.field === 'name') result = left.sortOrder - right.sortOrder;
   if (sort.field === 'size') result = left.size - right.size;
   if (sort.field === 'updated') result = new Date(left.updatedAt).getTime() - new Date(right.updatedAt).getTime();
   return (result || left.name.localeCompare(right.name, undefined, { numeric: true, sensitivity: 'base' })) * direction;

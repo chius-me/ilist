@@ -43,6 +43,13 @@ body::before {
   filter: invert(1);
 }
 
+@media (prefers-color-scheme: dark) {
+  :root:not([data-theme='light']) body::before {
+    opacity: 0.025;
+    filter: invert(1);
+  }
+}
+
 ::selection {
   background: var(--color-primary);
   color: var(--color-primary-text);

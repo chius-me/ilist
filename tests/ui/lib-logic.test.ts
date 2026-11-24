@@ -1,4 +1,4 @@
-import { describe, expect, it, vi } from 'vitest';
+import { describe, expect, it } from 'vitest';
 import { directoryErrorHint, directoryErrorTitle } from '../../src/ui/lib/directory-errors';
 import {
   DIRECTORY_QUERY_DEBOUNCE_MS,
@@ -59,6 +59,16 @@ describe('explorer-sort (shipped)', () => {
     const sorted = sortEntries(items, sort);
     expect(sorted.map((item) => item.id)).toEqual(['a', 'c', 'b']);
     expect(compareEntries(items[0], items[2], sort)).toBeGreaterThan(0);
+  });
+
+  it('orders entries by sortOrder before name when sorting by name', () => {
+    const items = [
+      entry({ id: 'a', name: 'aaa.txt', kind: 'file', sortOrder: 20 }),
+      entry({ id: 'b', name: 'zzz.txt', kind: 'file', sortOrder: 10 }),
+      entry({ id: 'c', name: 'mmm.txt', kind: 'file', sortOrder: 10 }),
+    ];
+    expect(sortEntries(items, { field: 'name', order: 'asc' }).map((item) => item.id)).toEqual(['c', 'b', 'a']);
+    expect(sortEntries(items, { field: 'name', order: 'desc' }).map((item) => item.id)).toEqual(['a', 'b', 'c']);
   });
 });
 

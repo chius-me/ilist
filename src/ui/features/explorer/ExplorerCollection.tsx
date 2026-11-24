@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useMemo, useRef, useState, type CSSProperties, type HTMLAttributes, type KeyboardEvent, type PointerEvent } from 'react';
 import { isEntryMutable, type Entry } from '../../types/entries';
-import type { ExplorerView } from './ExplorerToolbar';
+import type { ExplorerSort, ExplorerView } from './ExplorerToolbar';
 import { FileGrid } from './FileGrid';
 import { FileList } from './FileList';
 import type { EntryHandlers } from './EntryRow';
@@ -25,6 +25,11 @@ export interface ExplorerCollectionProps {
   onReplaceSelection(ids: string[]): void;
   onClearSelection(): void;
   fileUrlFor?: (entry: Entry, download: boolean, exportFormat?: string) => string;
+  sort?: ExplorerSort;
+  onSort?: (sort: ExplorerSort) => void;
+  allSelected?: boolean;
+  someSelected?: boolean;
+  onToggleSelectAll?: (checked: boolean) => void;
 }
 
 function intersects(first: MarqueeRect, second: DOMRect): boolean {
@@ -55,6 +60,11 @@ export function ExplorerCollection({
   onReplaceSelection,
   onClearSelection,
   fileUrlFor,
+  sort,
+  onSort,
+  allSelected,
+  someSelected,
+  onToggleSelectAll,
 }: ExplorerCollectionProps) {
   const [focusedId, setFocusedId] = useState<string | null>(null);
   const [marquee, setMarquee] = useState<MarqueeRect | null>(null);
@@ -109,7 +119,10 @@ export function ExplorerCollection({
       setFocusedId(nextId);
       if (nextId) {
         requestAnimationFrame(() => {
-          document.getElementById(`explorer-entry-${nextId}`)?.scrollIntoView({ block: 'nearest' });
+          const element = document.getElementById(`explorer-entry-${nextId}`);
+          if (element && typeof element.scrollIntoView === 'function') {
+            element.scrollIntoView({ block: 'nearest' });
+          }
         });
       }
       return;
@@ -172,7 +185,7 @@ export function ExplorerCollection({
   return (
     <>
       {view === 'list'
-        ? <FileList entries={entries} selectedIds={selectedIds} admin={admin} handlers={handlers} interactionProps={interactionProps} focusedId={focusedId} fileUrlFor={fileUrlFor} />
+        ? <FileList entries={entries} selectedIds={selectedIds} admin={admin} handlers={handlers} interactionProps={interactionProps} focusedId={focusedId} fileUrlFor={fileUrlFor} sort={sort} onSort={onSort} allSelected={allSelected} someSelected={someSelected} onToggleSelectAll={onToggleSelectAll} />
         : <FileGrid entries={entries} selectedIds={selectedIds} admin={admin} handlers={handlers} interactionProps={interactionProps} focusedId={focusedId} fileUrlFor={fileUrlFor} />}
       {marquee ? <div className="selectionMarquee" aria-hidden="true" style={marqueeStyle(marquee)} /> : null}
     </>

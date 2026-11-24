@@ -46,10 +46,11 @@ function toShare(row: ShareRow): Share {
 export async function createShareRecord(db: D1Database, input: CreateShareRecordInput): Promise<Share> {
   const id = crypto.randomUUID();
   const now = new Date().toISOString();
-  await db.prepare(`INSERT INTO shares (
+  const row = await db.prepare(`INSERT INTO shares (
     id, token_hash, mount_id, provider_item_id, target_kind, name,
     password_hash, expires_at, allow_download, enabled, download_count, max_downloads, access_count, created_at, updated_at
-  ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 0, ?, 0, ?, ?)`).bind(
+  ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 0, ?, 0, ?, ?)
+  RETURNING *`).bind(
     id,
     input.tokenHash,
     input.mountId,
@@ -63,10 +64,9 @@ export async function createShareRecord(db: D1Database, input: CreateShareRecord
     input.maxDownloads ?? null,
     now,
     now,
-  ).run();
-  const share = await getShareById(db, id);
-  if (!share) throw new Error('Share write failed');
-  return share;
+  ).first<ShareRow>();
+  if (!row) throw new Error('Share write failed');
+  return toShare(row);
 }
 
 export async function getShareById(db: D1Database, id: string): Promise<Share | null> {
@@ -79,8 +79,11 @@ export async function getShareByTokenHash(db: D1Database, tokenHash: string): Pr
   return row ? toShare(row) : null;
 }
 
-export async function listShares(db: D1Database): Promise<Share[]> {
-  const result = await db.prepare('SELECT * FROM shares ORDER BY created_at DESC, id DESC').all<ShareRow>();
+export async function listShares(db: D1Database, limit = 200): Promise<Share[]> {
+  const boundedLimit = Math.max(1, Math.min(500, Math.floor(limit)));
+  const result = await db.prepare('SELECT * FROM shares ORDER BY created_at DESC, id DESC LIMIT ?')
+    .bind(boundedLimit)
+    .all<ShareRow>();
   return (result.results ?? []).map(toShare);
 }
 
@@ -92,7 +95,7 @@ export async function updateShareRecord(
   const current = await getShareById(db, id);
   if (!current) return null;
   const passwordChanging = input.passwordHash !== undefined;
-  await db.prepare(`UPDATE shares
+  const row = await db.prepare(`UPDATE shares
     SET password_hash = ?,
         auth_revision = auth_revision + ?,
         expires_at = ?,
@@ -101,7 +104,8 @@ export async function updateShareRecord(
         max_downloads = ?,
         token_hash = ?,
         updated_at = ?
-    WHERE id = ?`).bind(
+    WHERE id = ?
+    RETURNING *`).bind(
     passwordChanging ? input.passwordHash : current.passwordHash,
     passwordChanging ? 1 : 0,
     input.expiresAt === undefined ? current.expiresAt : input.expiresAt,
@@ -111,13 +115,13 @@ export async function updateShareRecord(
     input.tokenHash === undefined ? current.tokenHash : input.tokenHash,
     new Date().toISOString(),
     id,
-  ).run();
-  return getShareById(db, id);
+  ).first<ShareRow>();
+  return row ? toShare(row) : null;
 }
 
 export async function incrementShareAccessCount(db: D1Database, id: string): Promise<void> {
-  await db.prepare('UPDATE shares SET access_count = access_count + 1, updated_at = ? WHERE id = ?')
-    .bind(new Date().toISOString(), id)
+  await db.prepare('UPDATE shares SET access_count = access_count + 1 WHERE id = ?')
+    .bind(id)
     .run();
 }
 
@@ -136,6 +140,16 @@ export async function tryConsumeShareDownload(db: D1Database, id: string): Promi
     id,
   ).run();
   return (result.meta.changes ?? 0) === 1;
+}
+
+export async function refundShareDownload(db: D1Database, id: string): Promise<void> {
+  await db.prepare(`UPDATE shares
+    SET download_count = MAX(0, download_count - 1),
+        updated_at = ?
+    WHERE id = ?`).bind(
+    new Date().toISOString(),
+    id,
+  ).run();
 }
 
 export async function upgradeSharePasswordHash(

@@ -105,4 +105,98 @@ describe('storage credentials', () => {
 
     await expect(getCredentials(workerEnv(), mountId)).rejects.toThrow();
   });
+
+  it('retries CAS conflicts in patchCredentials and fails with 409 on persistent contention', async () => {
+    const { getCredentials, patchCredentials, putCredentials } = await import('../../src/worker/credentials');
+    const mountId = await createTestMount();
+    await putCredentials(workerEnv(), mountId, {
+      app: { clientId: 'cid', clientSecret: 'csec' },
+      auth: { accessToken: 'v0', refreshToken: 'r0' },
+    });
+
+    let racedOnce = false;
+    const oneRaceDb = new Proxy(workerEnv().DB, {
+      get(target, prop) {
+        if (prop === 'prepare') {
+          return (sql: string) => {
+            const stmt = target.prepare(sql);
+            if (!sql.includes('AND ciphertext = ?')) return stmt;
+            return new Proxy(stmt, {
+              get(stTarget, stProp) {
+                if (stProp === 'bind') {
+                  return (...vals: unknown[]) => {
+                    const bound = stTarget.bind(...vals);
+                    return new Proxy(bound, {
+                      get(bTarget, bProp) {
+                        if (bProp === 'run') {
+                          return async () => {
+                            if (!racedOnce) {
+                              racedOnce = true;
+                              await putCredentials(workerEnv(), mountId, {
+                                app: { clientId: 'cid', clientSecret: 'csec' },
+                                auth: { accessToken: 'concurrent', refreshToken: 'r1' },
+                              });
+                            }
+                            return bTarget.run();
+                          };
+                        }
+                        const v = Reflect.get(bTarget, bProp, bTarget);
+                        return typeof v === 'function' ? v.bind(bTarget) : v;
+                      },
+                    });
+                  };
+                }
+                const v = Reflect.get(stTarget, stProp, stTarget);
+                return typeof v === 'function' ? v.bind(stTarget) : v;
+              },
+            });
+          };
+        }
+        const v = Reflect.get(target, prop, target);
+        return typeof v === 'function' ? v.bind(target) : v;
+      },
+    }) as D1Database;
+
+    await patchCredentials({ ...workerEnv(), DB: oneRaceDb }, mountId, { app: { clientSecret: 'updated' } });
+    await expect(getCredentials(workerEnv(), mountId)).resolves.toEqual({
+      app: { clientId: 'cid', clientSecret: 'updated' },
+      auth: { accessToken: 'concurrent', refreshToken: 'r1' },
+    });
+
+    const alwaysRaceDb = new Proxy(workerEnv().DB, {
+      get(target, prop) {
+        if (prop === 'prepare') {
+          return (sql: string) => {
+            const stmt = target.prepare(sql);
+            if (!sql.includes('AND ciphertext = ?')) return stmt;
+            return new Proxy(stmt, {
+              get(stTarget, stProp) {
+                if (stProp === 'bind') {
+                  return (...vals: unknown[]) => {
+                    const bound = stTarget.bind(...vals);
+                    return new Proxy(bound, {
+                      get(bTarget, bProp) {
+                        if (bProp === 'run') {
+                          return async () => ({ success: true, results: [], meta: { changes: 0 } });
+                        }
+                        const v = Reflect.get(bTarget, bProp, bTarget);
+                        return typeof v === 'function' ? v.bind(bTarget) : v;
+                      },
+                    });
+                  };
+                }
+                const v = Reflect.get(stTarget, stProp, stTarget);
+                return typeof v === 'function' ? v.bind(stTarget) : v;
+              },
+            });
+          };
+        }
+        const v = Reflect.get(target, prop, target);
+        return typeof v === 'function' ? v.bind(target) : v;
+      },
+    }) as D1Database;
+
+    await expect(patchCredentials({ ...workerEnv(), DB: alwaysRaceDb }, mountId, { app: { clientSecret: 'fail' } }))
+      .rejects.toMatchObject({ status: 409, code: 'CREDENTIAL_UPDATE_CONFLICT' });
+  });
 });

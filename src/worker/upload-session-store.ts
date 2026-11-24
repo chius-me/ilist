@@ -2,7 +2,7 @@ import { decryptCredential, encryptCredential } from './crypto';
 import type { CompletedUploadPart, StorageItem } from './drivers/types';
 import type { Env, UploadSessionRow, UploadSessionStatus, UploadTerminalOperation } from './types';
 
-export interface UploadSessionRecord {
+export interface UploadSessionSummary {
   id: string;
   ownerSessionId: string;
   mountId: string;
@@ -11,7 +11,6 @@ export interface UploadSessionRecord {
   size: number;
   contentType: string | null;
   partSize: number;
-  providerState: Record<string, unknown>;
   parts: CompletedUploadPart[];
   completedItem: StorageItem | null;
   status: UploadSessionStatus;
@@ -24,6 +23,10 @@ export interface UploadSessionRecord {
   expiresAt: number;
   createdAt: string;
   updatedAt: string;
+}
+
+export interface UploadSessionRecord extends UploadSessionSummary {
+  providerState: Record<string, unknown>;
 }
 
 export interface CreateUploadSessionRecordInput {
@@ -43,6 +46,14 @@ export interface RecordUploadPartInput {
   providerState: Record<string, unknown>;
   completedItem?: StorageItem;
 }
+
+type UploadSessionSummaryRow = Omit<UploadSessionRow, 'provider_state_ciphertext'>;
+
+const SUMMARY_COLUMNS = `id, owner_session_id, mount_id, parent_item_id, name, size, content_type, part_size,
+  parts_json, completed_item_json, status, active_part_number, active_part_expires_at,
+  terminal_operation, terminal_owner, terminal_expires_at, cleanup_attempted_at, expires_at, created_at, updated_at`;
+
+const MAX_PARALLEL_PART_CAS_RETRIES = 6;
 
 function isObject(value: unknown): value is Record<string, unknown> {
   return typeof value === 'object' && value !== null && !Array.isArray(value);
@@ -114,7 +125,7 @@ function parseCompletedItem(value: string | null): StorageItem | null {
   return parsed;
 }
 
-function assertStoredRow(row: UploadSessionRow): void {
+function assertStoredSummaryRow(row: UploadSessionSummaryRow): void {
   const validStatus = row.status === 'active' || row.status === 'completing' || row.status === 'completed' || row.status === 'aborted';
   const validActiveClaim =
     (row.active_part_number === null && row.active_part_expires_at === null) ||
@@ -144,7 +155,6 @@ function assertStoredRow(row: UploadSessionRow): void {
     !isSafeInteger(row.size, 0) ||
     !isNullableString(row.content_type) ||
     !isSafeInteger(row.part_size, 1) ||
-    typeof row.provider_state_ciphertext !== 'string' ||
     typeof row.parts_json !== 'string' ||
     !isNullableString(row.completed_item_json) ||
     !validStatus ||
@@ -159,6 +169,13 @@ function assertStoredRow(row: UploadSessionRow): void {
   ) {
     throw new Error('Stored upload session row is invalid');
   }
+}
+
+function assertStoredRow(row: UploadSessionRow): void {
+  if (typeof row.provider_state_ciphertext !== 'string') {
+    throw new Error('Stored upload session row is invalid');
+  }
+  assertStoredSummaryRow(row);
 }
 
 function assertProviderState(value: unknown, stored = false): asserts value is Record<string, unknown> {
@@ -183,15 +200,8 @@ function assertCreateInput(ownerSessionId: string, input: CreateUploadSessionRec
   assertProviderState(input.providerState);
 }
 
-async function rowToRecord(env: Env, row: UploadSessionRow): Promise<UploadSessionRecord> {
-  assertStoredRow(row);
-  const providerState = await decryptCredential(
-    row.provider_state_ciphertext,
-    env.CREDENTIAL_MASTER_KEY,
-    `upload-session:${row.id}`,
-  );
-  assertProviderState(providerState, true);
-
+function rowToSummary(row: UploadSessionSummaryRow): UploadSessionSummary {
+  assertStoredSummaryRow(row);
   return {
     id: row.id,
     ownerSessionId: row.owner_session_id,
@@ -201,7 +211,6 @@ async function rowToRecord(env: Env, row: UploadSessionRow): Promise<UploadSessi
     size: row.size,
     contentType: row.content_type,
     partSize: row.part_size,
-    providerState,
     parts: parseParts(row.parts_json),
     completedItem: parseCompletedItem(row.completed_item_json),
     status: row.status,
@@ -214,6 +223,21 @@ async function rowToRecord(env: Env, row: UploadSessionRow): Promise<UploadSessi
     expiresAt: row.expires_at,
     createdAt: row.created_at,
     updatedAt: row.updated_at,
+  };
+}
+
+async function rowToRecord(env: Env, row: UploadSessionRow): Promise<UploadSessionRecord> {
+  assertStoredRow(row);
+  const providerState = await decryptCredential(
+    row.provider_state_ciphertext,
+    env.CREDENTIAL_MASTER_KEY,
+    `upload-session:${row.id}`,
+  );
+  assertProviderState(providerState, true);
+
+  return {
+    ...rowToSummary(row),
+    providerState,
   };
 }
 
@@ -245,13 +269,14 @@ export async function createUploadSessionRecord(
     `upload-session:${id}`,
   );
 
-  await env.DB.prepare(
+  const row = await env.DB.prepare(
     `INSERT INTO upload_sessions (
        id, owner_session_id, mount_id, parent_item_id, name, size, content_type, part_size,
        provider_state_ciphertext, parts_json, completed_item_json, status,
        active_part_number, active_part_expires_at, terminal_operation, terminal_owner,
        terminal_expires_at, cleanup_attempted_at, expires_at, created_at, updated_at
-     ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, '[]', NULL, 'active', NULL, NULL, NULL, NULL, NULL, 0, ?, ?, ?)`,
+     ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, '[]', NULL, 'active', NULL, NULL, NULL, NULL, NULL, 0, ?, ?, ?)
+     RETURNING *`,
   )
     .bind(
       id,
@@ -267,11 +292,10 @@ export async function createUploadSessionRecord(
       now,
       now,
     )
-    .run();
+    .first<UploadSessionRow>();
 
-  const record = await getOwnedUploadSession(env, ownerSessionId, id);
-  if (!record) throw new Error('Created upload session was not found');
-  return record;
+  if (!row) throw new Error('Created upload session was not found');
+  return rowToRecord(env, row);
 }
 
 export async function getOwnedUploadSession(
@@ -315,6 +339,39 @@ export async function listOwnedActiveUploadSessions(
   return records;
 }
 
+/** Lightweight session listing without decrypting provider state ciphertexts. */
+export async function listOwnedActiveUploadSessionSummaries(
+  env: Env,
+  ownerSessionId: string,
+  now = Date.now(),
+  limit = 50,
+): Promise<UploadSessionSummary[]> {
+  if (!ownerSessionId || !isSafeInteger(now, 0) || !isSafeInteger(limit, 1)) {
+    throw new Error('Upload session list query is invalid');
+  }
+  const result = await env.DB.prepare(
+    `SELECT ${SUMMARY_COLUMNS}
+     FROM upload_sessions
+     WHERE owner_session_id = ?
+       AND status IN ('active', 'completing')
+       AND expires_at > ?
+     ORDER BY updated_at DESC, created_at DESC, id DESC
+     LIMIT ?`,
+  )
+    .bind(ownerSessionId, now, limit)
+    .all<UploadSessionSummaryRow>();
+
+  const summaries: UploadSessionSummary[] = [];
+  for (const row of result.results ?? []) {
+    try {
+      summaries.push(rowToSummary(row));
+    } catch {
+      // Skip malformed rows.
+    }
+  }
+  return summaries;
+}
+
 export async function claimUploadPart(
   env: Env,
   ownerSessionId: string,
@@ -327,7 +384,7 @@ export async function claimUploadPart(
     throw new Error('Upload part claim is invalid');
   }
 
-  const result = await env.DB.prepare(
+  const row = await env.DB.prepare(
     `UPDATE upload_sessions
      SET active_part_number = ?,
          active_part_expires_at = ?,
@@ -355,12 +412,12 @@ export async function claimUploadPart(
            AND active_part_expires_at IS NOT NULL
            AND active_part_expires_at <= ?
          )
-       )`,
+       )
+     RETURNING *`,
   )
     .bind(partNumber, claimExpiresAt, new Date(now).toISOString(), id, ownerSessionId, now, now, now)
-    .run();
-  if (result.meta.changes !== 1) return null;
-  return getOwnedUploadSession(env, ownerSessionId, id);
+    .first<UploadSessionRow>();
+  return row ? rowToRecord(env, row) : null;
 }
 
 export async function recordUploadPart(
@@ -400,7 +457,7 @@ export async function recordUploadPart(
   const completedItemJson = input.completedItem === undefined
     ? row.completed_item_json
     : JSON.stringify(input.completedItem);
-  const result = await env.DB.prepare(
+  const updatedRow = await env.DB.prepare(
     `UPDATE upload_sessions
      SET provider_state_ciphertext = ?,
          parts_json = ?,
@@ -418,7 +475,8 @@ export async function recordUploadPart(
        AND active_part_expires_at = ?
        AND parts_json = ?
        AND provider_state_ciphertext = ?
-       AND completed_item_json IS ?`,
+       AND completed_item_json IS ?
+     RETURNING *`,
   )
     .bind(
       ciphertext,
@@ -433,14 +491,57 @@ export async function recordUploadPart(
       row.provider_state_ciphertext,
       row.completed_item_json,
     )
-    .run();
-  if (result.meta.changes === 1) return getOwnedUploadSession(env, ownerSessionId, id);
+    .first<UploadSessionRow>();
+  if (updatedRow) return rowToRecord(env, updatedRow);
 
   const current = await getOwnedUploadSession(env, ownerSessionId, id);
   if (current?.status === 'aborted' || current?.terminalOperation === 'abort') return null;
   const recorded = current?.parts.find((part) => part.partNumber === input.part.partNumber);
   if (recorded && !samePart(recorded, input.part)) throw new Error('Recorded upload part does not match');
   return recorded ? current : null;
+}
+
+/**
+ * Lock-free CAS part recording for providers whose resumable parts upload concurrently (e.g. S3).
+ */
+export async function recordParallelUploadPart(
+  env: Env,
+  ownerSessionId: string,
+  id: string,
+  part: CompletedUploadPart,
+): Promise<UploadSessionRecord | null> {
+  assertCompletedUploadPart(part);
+
+  for (let attempt = 0; attempt < MAX_PARALLEL_PART_CAS_RETRIES; attempt += 1) {
+    const row = await getOwnedUploadSessionRow(env, ownerSessionId, id);
+    if (!row) return null;
+    const record = await rowToRecord(env, row);
+    if (record.status === 'aborted' || record.terminalOperation === 'abort') return null;
+    if (record.status !== 'active' || record.terminalOperation !== null) return null;
+
+    const existing = record.parts.find((candidate) => candidate.partNumber === part.partNumber);
+    if (existing) {
+      if (!samePart(existing, part)) throw new Error('Recorded upload part does not match');
+      return record;
+    }
+
+    const nextParts = [...record.parts, part].sort((left, right) => left.partNumber - right.partNumber);
+    const updated = await env.DB.prepare(
+      `UPDATE upload_sessions
+       SET parts_json = ?, updated_at = ?
+       WHERE id = ?
+         AND owner_session_id = ?
+         AND status = 'active'
+         AND terminal_operation IS NULL
+         AND parts_json = ?
+       RETURNING *`,
+    )
+      .bind(JSON.stringify(nextParts), new Date().toISOString(), id, ownerSessionId, row.parts_json)
+      .first<UploadSessionRow>();
+    if (updated) return rowToRecord(env, updated);
+  }
+
+  return null;
 }
 
 export async function releaseUploadPartClaim(
@@ -488,7 +589,7 @@ export async function claimTerminalOperation(
     throw new Error('Upload terminal operation claim is invalid');
   }
   const claimedStatus: UploadSessionStatus = operation === 'complete' ? 'completing' : 'active';
-  const result = await env.DB.prepare(
+  const row = await env.DB.prepare(
     `UPDATE upload_sessions
      SET status = ?,
          active_part_number = NULL,
@@ -518,7 +619,8 @@ export async function claimTerminalOperation(
            AND terminal_expires_at IS NOT NULL
            AND terminal_expires_at <= ?
          )
-       )`,
+       )
+     RETURNING *`,
   )
     .bind(
       claimedStatus,
@@ -534,9 +636,8 @@ export async function claimTerminalOperation(
       now,
       now,
     )
-    .run();
-  if (result.meta.changes !== 1) return null;
-  return getOwnedUploadSession(env, ownerSessionId, id);
+    .first<UploadSessionRow>();
+  return row ? rowToRecord(env, row) : null;
 }
 
 export async function completeUploadSessionRecord(
@@ -551,7 +652,7 @@ export async function completeUploadSessionRecord(
     throw new Error('Upload terminal operation claim is invalid');
   }
   assertStorageItem(item);
-  const result = await env.DB.prepare(
+  const row = await env.DB.prepare(
     `UPDATE upload_sessions
      SET status = 'completed',
          completed_item_json = ?,
@@ -564,12 +665,12 @@ export async function completeUploadSessionRecord(
        AND status = 'completing'
        AND terminal_operation = 'complete'
        AND terminal_owner = ?
-       AND terminal_expires_at = ?`,
+       AND terminal_expires_at = ?
+     RETURNING *`,
   )
     .bind(JSON.stringify(item), new Date().toISOString(), id, ownerSessionId, terminalOwner, terminalExpiresAt)
-    .run();
-  if (result.meta.changes !== 1) return null;
-  return getOwnedUploadSession(env, ownerSessionId, id);
+    .first<UploadSessionRow>();
+  return row ? rowToRecord(env, row) : null;
 }
 
 export async function releaseTerminalOperationClaim(
@@ -617,7 +718,7 @@ export async function markUploadSessionAborted(
     throw new Error('Upload terminal operation claim is invalid');
   }
 
-  const result = await env.DB.prepare(
+  const row = await env.DB.prepare(
     `UPDATE upload_sessions
      SET status = 'aborted',
          active_part_number = NULL,
@@ -632,12 +733,12 @@ export async function markUploadSessionAborted(
        AND terminal_operation = 'abort'
        AND terminal_owner = ?
        AND terminal_expires_at = ?
-       AND completed_item_json IS NULL`,
+       AND completed_item_json IS NULL
+     RETURNING *`,
   )
     .bind(new Date().toISOString(), id, ownerSessionId, terminalOwner, terminalExpiresAt)
-    .run();
-  if (result.meta.changes === 1) return getOwnedUploadSession(env, ownerSessionId, id);
-  return null;
+    .first<UploadSessionRow>();
+  return row ? rowToRecord(env, row) : null;
 }
 
 export async function touchUploadSessionCleanupAttempt(
@@ -694,4 +795,53 @@ export async function listExpiredUploadSessions(
     }
   }
   return records;
+}
+
+async function listActiveUploadSessionsByQuery(
+  env: Env,
+  sql: string,
+  bindings: unknown[],
+): Promise<UploadSessionRecord[]> {
+  const result = await env.DB.prepare(sql).bind(...bindings).all<UploadSessionRow>();
+  const records: UploadSessionRecord[] = [];
+  for (const row of result.results ?? []) {
+    try {
+      records.push(await rowToRecord(env, row));
+    } catch {
+      // Skip corrupted rows during best-effort teardown.
+    }
+  }
+  return records;
+}
+
+export function listActiveUploadSessionsByOwner(
+  env: Env,
+  ownerSessionId: string,
+  limit = 50,
+): Promise<UploadSessionRecord[]> {
+  return listActiveUploadSessionsByQuery(
+    env,
+    `SELECT * FROM upload_sessions
+     WHERE owner_session_id = ?
+       AND status IN ('active', 'completing')
+       AND completed_item_json IS NULL
+     LIMIT ?`,
+    [ownerSessionId, limit],
+  );
+}
+
+export function listActiveUploadSessionsByMount(
+  env: Env,
+  mountId: string,
+  limit = 50,
+): Promise<UploadSessionRecord[]> {
+  return listActiveUploadSessionsByQuery(
+    env,
+    `SELECT * FROM upload_sessions
+     WHERE mount_id = ?
+       AND status IN ('active', 'completing')
+       AND completed_item_json IS NULL
+     LIMIT ?`,
+    [mountId, limit],
+  );
 }
