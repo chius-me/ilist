@@ -3,7 +3,7 @@ import { useI18n } from '../i18n/I18nProvider';
 import { usePreferences } from '../preferences/PreferencesProvider';
 import { FolderMark } from './FolderMark';
 
-const DEFAULT_REPO_URL = 'https://github.com/chius-me/ilist';
+const DEFAULT_REPO_URL = 'https://github.com/chius-n/ilist';
 const DEFAULT_CONTACT_EMAIL = 'contact@chius.cc';
 
 interface AppHeaderProps {
