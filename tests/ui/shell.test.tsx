@@ -58,7 +58,7 @@ it('renders stable language, theme, and account controls', async () => {
   expect(await screen.findByRole('banner')).toBeVisible();
   expect(screen.getByRole('button', { name: 'Open iList root' })).toBeVisible();
   expect(screen.getByText('iList')).toBeVisible();
-  expect(screen.getByRole('link', { name: 'Open iList on GitHub' })).toHaveAttribute('href', 'https://github.com/chius-n/ilist');
+  expect(screen.getByRole('link', { name: 'Open iList on GitHub' })).toHaveAttribute('href', 'https://github.com/chius-cc/ilist');
   expect(screen.getByRole('link', { name: 'Open iList on GitHub' })).toHaveAttribute('target', '_blank');
   expect(screen.getByRole('link', { name: 'Email contact@chius.cc' })).toHaveAttribute('href', 'mailto:contact@chius.cc');
   expect(screen.getByRole('button', { name: 'Change language' })).toBeVisible();

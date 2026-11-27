@@ -8,14 +8,14 @@
 
 Self-hosted file index and manager for Cloudflare Workers.
 
-[![Release](https://img.shields.io/badge/release-v0.2.1-2ea44f?logo=github)](https://github.com/chius-n/ilist/releases)
+[![Release](https://img.shields.io/badge/release-v0.2.1-2ea44f?logo=github)](https://github.com/chius-cc/ilist/releases)
 [![License](https://img.shields.io/badge/license-MIT-blue.svg)](LICENSE)
-[![CI](https://github.com/chius-n/ilist/actions/workflows/ci.yml/badge.svg)](https://github.com/chius-n/ilist/actions)
+[![CI](https://github.com/chius-cc/ilist/actions/workflows/ci.yml/badge.svg)](https://github.com/chius-cc/ilist/actions)
 ![Cloudflare Workers](https://img.shields.io/badge/Cloudflare-Workers-f38020?logo=cloudflare&logoColor=white)
 ![TypeScript](https://img.shields.io/badge/TypeScript-5.8-3178c6?logo=typescript&logoColor=white)
 ![Tests](https://img.shields.io/badge/tests-Vitest-6e9f18)
 
-[Releases](https://github.com/chius-n/ilist/releases) · [Issues](https://github.com/chius-n/ilist/issues) · [Docs](./docs/)
+[Releases](https://github.com/chius-cc/ilist/releases) · [Issues](https://github.com/chius-cc/ilist/issues) · [Docs](./docs/)
 
 </div>
 
@@ -77,7 +77,7 @@ The Worker acts as the control plane and streams or redirects file data where po
 2. **Clone and install.**
 
    ```bash
-   git clone https://github.com/chius-n/ilist.git
+   git clone https://github.com/chius-cc/ilist.git
    cd ilist
    npm install
    ```
